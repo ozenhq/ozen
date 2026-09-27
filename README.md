@@ -83,7 +83,7 @@ on first use.
 | `target/release/ozen health` | One line per problem the menu bar warns about: recording blocked, silent mic, transcriber down or behind |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
-| `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
+| `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
