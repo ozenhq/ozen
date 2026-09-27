@@ -242,7 +242,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
-    var review: [String] = []  // line ids train.py is least sure about, most uncertain first
+    var reviewQueue: [String] = []  // line ids train.py is least sure about, most uncertain first
+    var review: [String] = []  // the queue minus lines too old to remember who said them
+    let reviewMaxAge: Double = 600  // seconds
     var shown: [String: (spk: String, t: Double, run: Int?)] = [:]  // line id -> speaker as shown in the transcript
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
@@ -357,7 +359,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             self?.location.stopUpdatingLocation()
             self?.watchLocation()
         }
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload(); self?.refreshState() }
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload(); self?.refreshReview(); self?.refreshState() }
         refreshState()
         if CommandLine.arguments.contains("--open") { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.clicked() } }
     }
@@ -943,15 +945,23 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         if let first = s["accuracy_first"] as? Double, let now = s["accuracy"] as? Double, first != now {
             acc += " (was \(pct(first)))"
         }
-        review = (s["review"] as? [String] ?? []).filter { (tags[$0] ?? "").isEmpty && headerRanges[$0] != nil }
-        reviewButton.title = review.isEmpty ? "Review" : "Review \(review.count)"
-        reviewButton.isEnabled = !review.isEmpty
+        reviewQueue = (s["review"] as? [String] ?? []).filter { (tags[$0] ?? "").isEmpty && headerRanges[$0] != nil }
+        refreshReview()
         let ignoredLines = (s["ignored"] as? Int ?? 0) > 0 ? " · \(s["ignored"]!) ignored" : ""
         footer.stringValue = "  \(acc) · \(tagged) tagged\(ignoredLines) · orange ? = unsure, tag it to teach ozen · click text to fix it"
     }
 
+    // Only ask about recent lines: after 10 minutes nobody remembers who said what.
+    func refreshReview() {
+        let cutoff = Date().timeIntervalSince1970 - reviewMaxAge
+        review = reviewQueue.filter { (shown[$0]?.t ?? 0) >= cutoff }
+        reviewButton.title = review.isEmpty ? "Review" : "Review \(review.count)"
+        reviewButton.isEnabled = !review.isEmpty
+    }
+
     // Jump to the line ozen is least sure about and ask who said it.
     @objc func reviewNext() {
+        refreshReview()
         guard let id = review.first, let range = headerRanges[id],
               let lm = text.layoutManager, let tc = text.textContainer else { return }
         text.scrollRangeToVisible(range)

@@ -37,7 +37,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
      different-person similarities), which the live transcriber picks up immediately;
   2. scores every untagged line and queues the ones it's least sure about (near the threshold, or nearly tied
      between two people). They show an orange **?**, and **Review N** jumps to the most uncertain one and asks
-     who said it;
+     who said it. Review only asks about the last 10 minutes: past that, nobody remembers who said what;
   3. logs leave-one-out accuracy to the registry's `history.jsonl`; the footer shows it with the starting value.
 
   Answering Review is the fastest way to improve it: in a simulation with four similar voices, 12 tags picked by
@@ -121,6 +121,7 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
+| `./check-review.sh` | Check that Review only asks about lines from the last 10 minutes (builds the bar app's code, no window) |
 | `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
 
 ## Tuning how fixes teach
