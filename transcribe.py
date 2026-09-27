@@ -70,6 +70,9 @@ REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebu
 RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks, local only
 KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
+IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); train.py writes their prints
+IGNORES = HERE / "ignore.json"
+ignored = np.zeros((0, 192), dtype=np.float32)
 
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
 # ponytail: online nearest-centroid clustering, no re-clustering; a voice split early stays split.
@@ -85,7 +88,7 @@ def anon(label: str) -> bool:
 
 def load_registry() -> None:
     """(Re)load named voiceprints; train.py rewrites them after every tag, so pick up changes live."""
-    global registry_mtime, SAME_SPEAKER, last_pull
+    global registry_mtime, SAME_SPEAKER, last_pull, ignored
     if time.time() - last_pull > PULL_EVERY:
         last_pull = time.time()
         try:  # ponytail: offline or diverged just keeps the local prints; train.py reconciles on its next push
@@ -94,13 +97,18 @@ def load_registry() -> None:
             pass
     files = sorted(REGISTRY.glob("voices/*.json"))
     config = REGISTRY / "config.json"
-    mtime = max((f.stat().st_mtime for f in [*files, config] if f.exists()), default=0.0)
+    mtime = max((f.stat().st_mtime for f in [*files, config, IGNORES] if f.exists()), default=0.0)
     if mtime == registry_mtime:
         return
     registry_mtime = mtime
     try:
         SAME_SPEAKER = float(json.loads(config.read_text())["same_speaker"])
     except (OSError, ValueError, KeyError):
+        pass
+    try:
+        ignored = np.array(json.loads(IGNORES.read_text()), dtype=np.float32).reshape(-1, 192)
+        ignored /= np.linalg.norm(ignored, axis=1, keepdims=True)
+    except (OSError, ValueError):
         pass
     named = {s[0]: s for s in speakers if not anon(s[0])}
     for f in files:
@@ -113,7 +121,8 @@ def load_registry() -> None:
             named[v["name"]][1:] = [e, v.get("count", 1)]
         else:
             speakers.append([v["name"], e, v.get("count", 1)])
-    print(f"known voices: {[s[0] for s in speakers if not anon(s[0])]}, threshold {SAME_SPEAKER}", flush=True)
+    print(f"known voices: {[s[0] for s in speakers if not anon(s[0])]}, {len(ignored)} ignored lines, "
+          f"threshold {SAME_SPEAKER}", flush=True)
 
 
 load_registry()
@@ -123,6 +132,10 @@ unknown = 0
 def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
     e = encoder.encode_batch(torch.from_numpy(clip)[None]).squeeze().numpy()
     e /= np.linalg.norm(e)
+    # ponytail: nearest ignored line, O(ignored lines) per utterance; fine for thousands
+    near = float((ignored @ e).max()) if len(ignored) else -1.0
+    if near >= SAME_SPEAKER and near > max((float(s[1] @ e) for s in speakers if not anon(s[0])), default=-1.0):
+        return IGNORE, e  # closer to a voice you ignored than to anyone you know
     if clip.size < MIN_EMBED_SEC * SR:
         # A short clip's print is too noisy to found or reshape a voice: label it only on a strong match.
         best = max(speakers, key=lambda s: float(s[1] @ e), default=None)
@@ -263,6 +276,9 @@ while True:
                     if not text:
                         continue
                     spk, e = who(clip)
+                    if spk == IGNORE:
+                        print(f"ignored voice dropped {t1 - t0:.1f}s", flush=True)
+                        continue
                     if spk == "?" and prev is not None:
                         spk = prev  # short clip mid-turn: most likely the same person continuing
                     w = len(clip) / SR if len(clip) >= MIN_EMBED_SEC * SR else 0.01  # short clips barely count

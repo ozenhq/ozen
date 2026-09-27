@@ -26,6 +26,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Each tag runs `train.py`: every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
   prints, and the live transcriber reloads them.
+- **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
+  name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
+  Those lines, and earlier ones that sound like them, turn grey and leave the timeline, and the transcriber stops
+  writing that voice from then on. Ignored prints stay on this Mac (`ignore.json`), never in the registry. To undo,
+  tag the line as a person or **Clear tag**.
 - **Improves itself: the loop.** Every retrain also
   1. calibrates the same-voice threshold from your tags (the cutoff that best separates same-person from
      different-person similarities), which the live transcriber picks up immediately;
@@ -101,6 +106,7 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
+| `uv run train.py ignore <line-id>...` | Tag lines as a voice to ignore (what **Ignore** in the panel does). Retrains |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
 | `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
