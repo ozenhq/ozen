@@ -10,7 +10,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | meetings | gather | app | bar
+ozen control: start | pause | resume | stop | status | health | look | fix | meetings | gather | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
