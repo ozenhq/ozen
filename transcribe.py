@@ -155,17 +155,17 @@ def learned() -> dict:
         return {}
 
 
-def hint(tag: str) -> str:
-    """Prompt with the vocabulary + known people's names + words from your fixes + the previous line,
-    so Whisper spells them."""
+def hint_words() -> list[str]:
+    """The vocabulary + known people's names + words from your fixes, given to Whisper so it spells them."""
     words = [w.strip() for w in re.split(r"[,\n]", VOCAB.read_text()) if w.strip()] if VOCAB.exists() else []
     words += [s[0] for s in speakers if not anon(s[0])]
-    words += learned().get("vocab", [])
-    return asr.prompt(words, last_text.get(tag, ""))
+    return words + learned().get("vocab", [])
 
 
 def transcribe(clip: np.ndarray, tag: str) -> str:
-    text, last_lang[tag] = asr.recognize(clip, hint(tag), last_lang.get(tag, asr.LANGS[0]))
+    words = hint_words()  # the prompt adds the previous line as context
+    text, last_lang[tag] = asr.recognize(clip, asr.prompt(words, last_text.get(tag, "")),
+                                         last_lang.get(tag, asr.LANGS[0]), words)
     if text:
         last_text[tag] = text
     return text

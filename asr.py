@@ -54,14 +54,26 @@ NOISE = {  # what Whisper invents on noise, per language
 FILLER = {w for phrases in NOISE.values() for p in phrases for w in p.split()}
 
 
+def words_of(text: str) -> list[str]:
+    return re.sub(r"[^\w\s]", " ", text.lower()).split()
+
+
 def noise(text: str) -> bool:
     """"תודה. תודה רבה." on silence: every word is known filler. Checked across languages, because a clip
     detected as English can still come out in Hebrew (the hint carries Hebrew names and context)."""
-    words = re.sub(r"[^\w\s]", " ", text.lower()).split()
+    words = words_of(text)
     return not words or set(words) <= FILLER
 
 
-def recognize(clip: np.ndarray, prompt: str, lang: str) -> tuple[str, str]:
+def hint_echo(text: str, hint: list[str]) -> bool:
+    """"אורן דן. אורן דן. אורן דן." on noise: Whisper repeats names and terms from its own prompt. A line made
+    only of hint words (and filler) that repeats itself is that echo. A single "אורן דן." can be real speech
+    (someone addressed by name), so it stays."""
+    words = words_of(text)
+    return len(words) > len(set(words)) and set(words) <= {w for h in hint for w in words_of(h)} | FILLER
+
+
+def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = ()) -> tuple[str, str]:
     """(text, language). `lang` is used for clips under ~1.5s, where detection is unreliable ("שלום" came out
     as "Shalom"); longer clips pick between the languages actually spoken, since open detection on short
     noisy audio picks random languages and invents words."""
@@ -78,7 +90,7 @@ def recognize(clip: np.ndarray, prompt: str, lang: str) -> tuple[str, str]:
         for s in r["segments"]
         if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
     ).strip()
-    return ("" if noise(text) else text), lang
+    return ("" if noise(text) or hint_echo(text, hint) else text), lang
 
 
 def prompt(words: list[str], previous: str = "") -> str:
@@ -104,6 +116,7 @@ if __name__ == "__main__":
         s = int(q.get("start", 0) * SR)
         clip = audio[s: s + int(q["duration"] * SR)] if q.get("duration") else audio[s:]
         mx.random.seed(0)  # temperature fallback samples; seeded, the same request always gives the same text
-        heard, lang = recognize(clip, prompt(q.get("words", [])), q.get("lang", LANGS[0]))
+        words = q.get("words", [])
+        heard, lang = recognize(clip, prompt(words), q.get("lang", LANGS[0]), words)
         print(json.dumps({"heard": heard, "text": corrected(heard, q.get("replace", {})), "lang": lang},
                          ensure_ascii=False), flush=True)
