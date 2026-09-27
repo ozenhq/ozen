@@ -5,6 +5,8 @@
 // said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
 // Places: labeled locations that override the mode while you're there (auto record, or auto off).
+// Meetings view: pick past meetings (⌘/⇧-click for several), optionally let Kev add related ones, and start
+// Claude Code or Hermes in a folder holding their transcripts (`ozen gather`).
 // Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
 import AppKit
 import CoreAudio
@@ -217,7 +219,7 @@ final class TimelineView: NSView, NSViewToolTipOwner {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, WKNavigationDelegate {
+final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, WKNavigationDelegate, NSTableViewDataSource {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let popover = NSPopover()
     let scroll = NSTextView.scrollableTextView()
@@ -242,7 +244,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var lastWanted: Bool?  // act only when "should be recording" flips, so manual Pause/Stop stick until then
     let timeline = TimelineView()
     let timelineScroll = NSScrollView()
-    let viewControl = NSSegmentedControl(labels: ["Transcript", "Timeline"], trackingMode: .selectOne, target: nil, action: nil)
+    let viewControl = NSSegmentedControl(labels: ["Transcript", "Timeline", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     let zoomOut = NSButton(title: "−", target: nil, action: nil)
     let zoomIn = NSButton(title: "+", target: nil, action: nil)
     let placesButton = NSButton(title: "Places…", target: nil, action: nil)
@@ -254,6 +256,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let placesStack = NSStackView()
     let placesMap = WKWebView()
     let placesNote = NSTextField(wrappingLabelWithString: "")
+    let meetingsTable = NSTableView()
+    let meetingsScroll = NSScrollView()
+    var meetings: [[String]] = []  // `ozen meetings` rows: id, start, minutes, lines, first words
+    let gatherButton = NSButton(title: "Open", target: nil, action: nil)
+    let kevButton = NSButton(title: "Auto add with Kev", target: nil, action: nil)
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -288,7 +295,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         viewControl.action = #selector(switchView)
         viewControl.controlSize = .small
         viewControl.selectedSegment = UserDefaults.standard.integer(forKey: "view")
-        for (b, sel) in [(zoomOut, #selector(zoom(_:))), (zoomIn, #selector(zoom(_:)))] {
+        for (b, sel) in [(zoomOut, #selector(zoom(_:))), (zoomIn, #selector(zoom(_:))), (gatherButton, #selector(gather(_:))), (kevButton, #selector(gather(_:)))] {
             b.target = self
             b.action = sel
             b.bezelStyle = .rounded
@@ -303,11 +310,26 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         timelineScroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: timelineScroll.contentView,
                                                queue: .main) { [weak self] _ in self?.timeline.needsDisplay = true }  // repin names
-        let viewRow = NSStackView(views: [viewControl, NSView(), zoomOut, zoomIn])
+        gatherButton.toolTip = "Put the selected meetings' transcripts in a folder and start Claude Code or Hermes there"
+        kevButton.toolTip = "Same, plus every other meeting Kev (localhost:8009) judges related"
+        for (title, width) in [("When", 120), ("Min", 40), ("Lines", 44), ("Starts with", 380)] {
+            let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(title))
+            col.title = title
+            col.width = CGFloat(width)
+            meetingsTable.addTableColumn(col)
+        }
+        meetingsTable.allowsMultipleSelection = true
+        meetingsTable.usesAlternatingRowBackgroundColors = true
+        meetingsTable.dataSource = self
+        meetingsTable.doubleAction = #selector(gather(_:))
+        meetingsTable.target = self
+        meetingsScroll.documentView = meetingsTable
+        meetingsScroll.hasVerticalScroller = true
+        let viewRow = NSStackView(views: [viewControl, NSView(), zoomOut, zoomIn, kevButton, gatherButton])
         viewRow.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         let warningRow = NSStackView(views: [warning])
         warningRow.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
-        let stack = NSStackView(views: [controls, warningRow, viewRow, scroll, timelineScroll, footer])
+        let stack = NSStackView(views: [controls, warningRow, viewRow, scroll, timelineScroll, meetingsScroll, footer])
         stack.orientation = .vertical
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
         stack.frame = NSRect(x: 0, y: 0, width: 640, height: 680)
@@ -371,16 +393,25 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     // MARK: capture control (the ozen CLI owns the processes; this only asks it)
 
     func ozen(_ args: String..., done: ((String) -> Void)? = nil) {
+        run(args) { out, _, _ in done?(out) }
+    }
+
+    /// Runs the CLI off the main thread; calls back on it with stdout, stderr and the exit code.
+    func run(_ args: [String], done: @escaping (String, String, Int32) -> Void) {
         DispatchQueue.global().async {
             let p = Process()
-            let pipe = Pipe()
+            let (pipe, errPipe) = (Pipe(), Pipe())
             p.executableURL = dir.appendingPathComponent("target/release/ozen")
             p.arguments = args
             p.standardOutput = pipe
-            try? p.run()
-            p.waitUntilExit()
+            p.standardError = errPipe
+            guard (try? p.run()) != nil else { return DispatchQueue.main.async { done("", "can't run \(p.executableURL!.path)", -1) } }
+            // stderr is a few lines at most, so reading stdout first can't block on a full stderr pipe
             let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            DispatchQueue.main.async { done?(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            p.waitUntilExit()
+            let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+            DispatchQueue.main.async { done(trim(out), trim(err), p.terminationStatus) }
         }
     }
 
@@ -643,12 +674,67 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     func applyView() {
-        let showTimeline = viewControl.selectedSegment == 1
-        scroll.isHidden = showTimeline
+        let showTimeline = viewControl.selectedSegment == 1, showMeetings = viewControl.selectedSegment == 2
+        scroll.isHidden = showTimeline || showMeetings
         timelineScroll.isHidden = !showTimeline
+        meetingsScroll.isHidden = !showMeetings
         zoomIn.isHidden = !showTimeline
         zoomOut.isHidden = !showTimeline
+        gatherButton.isHidden = !showMeetings
+        kevButton.isHidden = !showMeetings
         if showTimeline { scrollTimelineToEnd() }
+        if showMeetings { loadMeetings() }
+    }
+
+    // MARK: meetings -> context folder for Claude Code / Hermes
+
+    func loadMeetings() {
+        ozen("meetings") { out in
+            let picked = Set(self.meetingsTable.selectedRowIndexes.map { self.meetings[$0][0] })
+            self.meetings = out.split(separator: "\n").map { $0.split(separator: "\t", omittingEmptySubsequences: false).map(String.init) }
+                .filter { $0.count == 5 }
+            self.meetingsTable.reloadData()
+            self.meetingsTable.selectRowIndexes(IndexSet(self.meetings.indices.filter { picked.contains(self.meetings[$0][0]) }),
+                                                byExtendingSelection: false)
+        }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { meetings.count }
+
+    func tableView(_ tableView: NSTableView, objectValueFor col: NSTableColumn?, row: Int) -> Any? {
+        let i = ["When": 1, "Min": 2, "Lines": 3][col?.identifier.rawValue ?? ""] ?? 4
+        return meetings[row][i]
+    }
+
+    @objc func gather(_ sender: Any?) {
+        let ids = meetingsTable.selectedRowIndexes.map { meetings[$0][0] }
+        guard !ids.isEmpty else { return }
+        let kev = (sender as? NSButton) == kevButton
+        kevButton.isEnabled = false
+        gatherButton.isEnabled = false
+        if kev { kevButton.title = "Asking Kev…" }
+        run((kev ? ["gather", "--kev"] : ["gather"]) + ids) { out, err, code in
+            self.kevButton.isEnabled = true
+            self.gatherButton.isEnabled = true
+            self.kevButton.title = "Auto add with Kev"
+            let alert = NSAlert()
+            NSApp.activate()
+            guard code == 0, let folder = out.split(separator: "\n").last.map(String.init) else {
+                alert.messageText = "Couldn't gather the transcripts"
+                alert.informativeText = err
+                alert.runModal()
+                return
+            }
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: folder).filter { $0.hasPrefix("2") }.sorted()) ?? []
+            alert.messageText = "\(files.count) transcript\(files.count == 1 ? "" : "s") ready"
+            alert.informativeText = files.joined(separator: "\n") + (kev ? "\n\nKev's scores:\n" + err : "") + "\n\n" + folder
+            for b in ["Claude Code", "Hermes", "Show in Finder"] { alert.addButton(withTitle: b) }
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: NSWorkspace.shared.open(URL(fileURLWithPath: folder + "/claude.command"))
+            case .alertSecondButtonReturn: NSWorkspace.shared.open(URL(fileURLWithPath: folder + "/hermes.command"))
+            default: NSWorkspace.shared.open(URL(fileURLWithPath: folder))
+            }
+        }
     }
 
     @objc func zoom(_ sender: NSButton) {

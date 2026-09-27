@@ -56,6 +56,12 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
     the microphone, and stops 20s after it releases it. Detected through Core Audio's per-process state, so it
     works for any call in those apps. Pausing or stopping by hand holds until the next meeting starts or ends.
 
+- **Hands meetings to an agent.** Switch the panel to **Meetings** for every past meeting (a silence of 10+ minutes
+  starts a new one). Select one or more (⌘/⇧-click) and press **Open** to put their transcripts in a fresh folder
+  under `context/`, then start Claude Code or Hermes there in a new Terminal window; the folder's `AGENTS.md` (and
+  `CLAUDE.md`) tells the agent what it holds, and its `claude.command` / `hermes.command` reopen it with a double-click. **Auto add with Kev** also adds every other meeting that local [Kev](https://github.com/jaredpalmer/kev)
+  (`localhost:8009`) judges part of the same project or topic; its scores show before you pick the agent.
+
 Output is `transcript.txt`:
 
 ```
@@ -89,6 +95,8 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen status` | `recording`, `paused`, `stopping` or `stopped` |
 | `target/release/ozen health` | One line per problem the menu bar warns about: recording blocked, silent mic, transcriber down or behind |
 | `target/release/ozen fix <line-id> "right text"` | Correct a line's text (what the panel does); empty clears. Relearns hint words and corrections |
+| `target/release/ozen meetings` | Past meetings, newest first: id, start, minutes, lines, first words |
+| `target/release/ozen gather [--kev] ID...` | Write those meetings into `context/<now>/` and print the folder; `--kev` adds the ones Kev judges related |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
