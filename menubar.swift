@@ -1,4 +1,5 @@
-// Menu bar ear icon: left-click shows the live transcript, right-click offers Quit.
+// Menu bar ear icon: left-click shows the live transcript with start/pause/stop controls,
+// right-click offers the same controls plus Quit. Controls call ozen.sh.
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag.
 // Usage: ozen-bar [dir] [--open]
@@ -22,6 +23,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var text: NSTextView { scroll.documentView as! NSTextView }
     var signature = ""
     var pending: [String: String] = [:]  // tags shown right away while train.py runs
+    var state = "stopped"  // from `ozen.sh status`: recording | paused | stopping | stopped
+    let status = NSTextField(labelWithString: "")
+    let startButton = NSButton(title: "Start", target: nil, action: nil)
+    let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
+    let stopButton = NSButton(title: "Stop", target: nil, action: nil)
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -36,7 +42,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         text.linkTextAttributes = [.foregroundColor: NSColor.secondaryLabelColor, .cursor: NSCursor.pointingHand]
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [scroll, footer])
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture))] {
+            b.target = self
+            b.action = cmd
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+        }
+        status.font = .boldSystemFont(ofSize: 12)
+        let controls = NSStackView(views: [status, NSView(), startButton, pauseButton, stopButton])
+        controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
+        let stack = NSStackView(views: [controls, scroll, footer])
         stack.orientation = .vertical
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
         stack.frame = NSRect(x: 0, y: 0, width: 560, height: 660)
@@ -45,13 +60,24 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         popover.contentViewController = vc
         popover.behavior = .transient
 
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload() }
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload(); self?.refreshState() }
+        refreshState()
         if CommandLine.arguments.contains("--open") { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.clicked() } }
     }
 
     @objc func clicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
+            menu.addItem(withTitle: "ozen: \(state)", action: nil, keyEquivalent: "")
+            menu.addItem(.separator())
+            for (title, sel, on) in [(state == "paused" ? "Resume" : "Start", #selector(startCapture), state == "stopped" || state == "paused"),
+                                     ("Pause", #selector(pauseCapture), state == "recording"),
+                                     ("Stop", #selector(stopCapture), state == "recording" || state == "paused")] where on {
+                let mi = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+                mi.target = self
+                menu.addItem(mi)
+            }
+            menu.addItem(.separator())
             menu.addItem(withTitle: "Quit ozen bar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             item.menu = menu
             item.button?.performClick(nil)  // shows the menu
@@ -68,6 +94,48 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             text.scrollToEndOfDocument(nil)
         }
     }
+
+    // MARK: capture control (ozen.sh owns the processes; this only asks it)
+
+    func ozen(_ cmd: String, done: ((String) -> Void)? = nil) {
+        DispatchQueue.global().async {
+            let p = Process()
+            let pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-lc", "cd \"$OZEN_DIR\" && ./ozen.sh \"$OZEN_CMD\""]  // login shell: uv/swiftc on PATH
+            p.environment = ProcessInfo.processInfo.environment.merging(["OZEN_DIR": dir.path, "OZEN_CMD": cmd]) { $1 }
+            p.standardOutput = pipe
+            try? p.run()
+            p.waitUntilExit()
+            let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            DispatchQueue.main.async { done?(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+    }
+
+    func refreshState() {
+        ozen("status") { self.show(state: $0) }
+    }
+
+    func show(state s: String) {
+        state = s
+        let icon = ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass"][s] ?? "ear"
+        item.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
+        status.stringValue = ["recording": "● Recording", "paused": "Paused", "stopping": "Finishing transcription…"][s] ?? "Stopped"
+        status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
+        startButton.title = s == "paused" ? "Resume" : "Start"
+        startButton.isEnabled = s == "stopped" || s == "paused"
+        pauseButton.isEnabled = s == "recording"
+        stopButton.isEnabled = s == "recording" || s == "paused"
+    }
+
+    func control(_ cmd: String, optimistic: String) {
+        show(state: optimistic)
+        ozen(cmd) { _ in DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refreshState() } }
+    }
+
+    @objc func startCapture() { control(state == "paused" ? "resume" : "start", optimistic: "recording") }
+    @objc func pauseCapture() { control("pause", optimistic: "paused") }
+    @objc func stopCapture() { control("stop", optimistic: "stopping") }
 
     func lines() -> [Line] {
         guard let raw = try? String(contentsOf: dir.appendingPathComponent("lines.jsonl"), encoding: .utf8) else { return [] }
@@ -96,7 +164,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         let labels = json("labels.json") as? [String: String] ?? [:]
         let out = NSMutableAttributedString()
         let all = lines()
-        if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Start capture with ./start.sh")) }
+        if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Press Start.", attributes: [.foregroundColor: NSColor.secondaryLabelColor])) }
         for l in all {
             let tagged = !(tags[l.id] ?? "").isEmpty
             let speaker = tagged ? tags[l.id]! : (labels[l.id] ?? l.spk)

@@ -25,8 +25,9 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   prints, and the live transcriber reloads them. The panel footer shows leave-one-out accuracy over your
   tags, so you can watch it improve.
 
-- **Shows the transcript in the menu bar.** `ozen-bar` puts an ear icon in the top menu bar; click it for the live
-  transcript (updates every 2s, Hebrew lines right-to-left). Right-click to quit. `start.sh` launches it.
+- **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript
+  (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
+  the same controls. The icon shows the state: ear (stopped), filled ear (recording), pause (paused).
 
 Output is `transcript.txt`:
 
@@ -42,25 +43,24 @@ Requires macOS 15+ on Apple Silicon, Xcode command line tools (`swiftc`), [`uv`]
 ```sh
 git clone https://github.com/tupe12334/ozen ~/ozen
 git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
-~/ozen/start.sh
+~/ozen/ozen.sh bar     # ear icon appears in the menu bar; press Start there
 ```
 
 On first run macOS asks your terminal for **Screen & System Audio Recording** and **Microphone** access;
-grant both (System Settings > Privacy & Security), then run it again. The Whisper and ECAPA models download
+grant both (System Settings > Privacy & Security), then press Start again. The Whisper and ECAPA models download
 on first use.
 
 ## Use
 
 | Command | What it does |
 |---|---|
-| `./start.sh` | Start recording and transcribing (Ctrl-C stops). Run detached: `nohup ./start.sh > start.log 2>&1 &` |
-| `./ozen-bar [dir] [--open]` | Menu bar transcript viewer (started by `start.sh`); `--open` shows the panel at launch |
+| `./ozen.sh start` / `pause` / `resume` / `stop` | Same as the menu bar buttons. Pause keeps the transcriber loaded; stop finishes transcribing queued audio first |
+| `./ozen.sh status` | `recording`, `paused`, `stopping` or `stopped` |
+| `./ozen.sh bar` | Launch the menu bar app |
 | `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
 | `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
-
-Stop a detached run: `pkill -f "rec chunks"; pkill -f transcribe.py`.
 
 ## Limits
 
