@@ -1,9 +1,9 @@
 // Menu bar ear icon: left-click shows the live transcript with start/pause/stop controls,
-// right-click offers the same controls plus Quit. Controls call ozen.sh.
+// right-click offers the same controls plus Quit. Controls call the ozen CLI (src/main.rs).
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag.
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
-// Built into ~/Applications/Ozen.app by `ozen.sh app`. Direct use: Ozen [dir] [--open]
+// Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
 import AppKit
 import CoreAudio
 
@@ -191,8 +191,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var text: NSTextView { scroll.documentView as! NSTextView }
     var signature = ""
     var pending: [String: String] = [:]  // tags shown right away while train.py runs
-    var state = "stopped"  // from `ozen.sh status`: recording | paused | stopping | stopped
-    var problems: [String] = []  // from `ozen.sh health`: why recording isn't turning into transcript
+    var state = "stopped"  // from `ozen status`: recording | paused | stopping | stopped
+    var problems: [String] = []  // from `ozen health`: why recording isn't turning into transcript
     let warning = NSTextField(wrappingLabelWithString: "")
     let status = NSTextField(labelWithString: "")
     let startButton = NSButton(title: "Start", target: nil, action: nil)
@@ -317,15 +317,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         }
     }
 
-    // MARK: capture control (ozen.sh owns the processes; this only asks it)
+    // MARK: capture control (the ozen CLI owns the processes; this only asks it)
 
     func ozen(_ cmd: String, done: ((String) -> Void)? = nil) {
         DispatchQueue.global().async {
             let p = Process()
             let pipe = Pipe()
-            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            p.arguments = ["-lc", "cd \"$OZEN_DIR\" && ./ozen.sh \"$OZEN_CMD\""]  // login shell: uv/swiftc on PATH
-            p.environment = ProcessInfo.processInfo.environment.merging(["OZEN_DIR": dir.path, "OZEN_CMD": cmd]) { $1 }
+            p.executableURL = dir.appendingPathComponent("target/release/ozen")
+            p.arguments = [cmd]
             p.standardOutput = pipe
             try? p.run()
             p.waitUntilExit()

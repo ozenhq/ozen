@@ -19,3 +19,6 @@ stats.json
 
 # voiceprints live in their own private repo (tupe12334/voices-embedding-registry)
 voices/
+
+# ozen control CLI (cargo build --release)
+target/
