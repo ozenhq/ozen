@@ -33,10 +33,11 @@ struct Place: Codable {
     var label: String
     var lat: Double?
     var lon: Double?
-    var action: String  // "record" | "off"
+    var action: String  // "record" | "meetings" | "off"
+    var radius: Double?  // meters; nil = defaultRadius
 }
-let placeRadius: CLLocationDistance = 150  // meters; ponytail: one radius for every place, make it per-place if needed
-let placeActions = [("record", "Auto record"), ("off", "Auto off")]
+let defaultRadius: CLLocationDistance = 150
+let placeActions = [("record", "Auto record"), ("meetings", "Record meetings only"), ("off", "Auto off")]
 
 // places.json in the ozen dir: plain JSON any platform or tool can read, not macOS-only preferences.
 let placesFile = dir.appendingPathComponent("places.json")
@@ -219,7 +220,8 @@ final class TimelineView: NSView, NSViewToolTipOwner {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, WKNavigationDelegate, NSTableViewDataSource {
+final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, WKNavigationDelegate, NSTableViewDataSource,
+                 WKScriptMessageHandler {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let popover = NSPopover()
     let scroll = NSTextView.scrollableTextView()
@@ -252,6 +254,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var here: CLLocation?
     var placeLabel: String?  // label of the place we're in; a change re-applies auto control
     var settingPlace: Int?  // row waiting for a location fix after "Use current location"
+    var pickingPlace: Int?  // row waiting for a map click after "Pick on map"
+    var rebuilding = false  // removing a focused field fires its action; ignore those echoes
     var placesWindow: NSWindow?
     let placesStack = NSStackView()
     let placesMap = WKWebView()
@@ -444,7 +448,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             placeLabel = place?.label
             lastWanted = nil  // arriving at or leaving a place applies right away
         }
-        let wanted = place.map { $0.action == "record" } ?? (mode == "always" || inMeeting)
+        let wanted = place.map { $0.action == "record" || $0.action == "meetings" && inMeeting } ?? (mode == "always" || inMeeting)
         defer { lastWanted = wanted; show(state: state) }
         guard wanted != lastWanted else { return }
         if wanted, state == "stopped" || state == "paused" {
@@ -463,9 +467,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         item.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
         let place = currentPlace()
-        let meeting = place.map { " · \($0.label)" } ?? (mode == "meetings" && inMeeting ? " · \(meetingName ?? "meeting")" : "")
+        let meetingsOnly = place.map { $0.action == "meetings" } ?? (mode == "meetings")
+        let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + (place.map { " · \($0.label)" } ?? "")
         status.stringValue = ["recording": "● Recording\(meeting)", "paused": "Paused", "stopping": "Finishing transcription…"][s]
-            ?? (place.map { "Off · \($0.label)" } ?? (mode == "meetings" ? "Waiting for a meeting" : "Stopped"))
+            ?? (meetingsOnly ? "Waiting for a meeting" : place == nil ? "Stopped" : "Off") + (place.map { " · \($0.label)" } ?? "")
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
         startButton.title = s == "paused" ? "Resume" : "Start"
         startButton.isEnabled = s == "stopped" || s == "paused"
@@ -488,7 +493,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         guard let here, Date().timeIntervalSince(here.timestamp) < 30 * 60 else { return nil }  // stale fix: don't guess
         return loadPlaces().first { p in
             guard let lat = p.lat, let lon = p.lon else { return false }
-            return here.distance(from: CLLocation(latitude: lat, longitude: lon)) <= placeRadius
+            return here.distance(from: CLLocation(latitude: lat, longitude: lon)) <= p.radius ?? defaultRadius
         }
     }
 
@@ -546,6 +551,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             placesNote.textColor = .secondaryLabelColor
             w.contentView = placesStack
             placesMap.navigationDelegate = self
+            placesMap.configuration.userContentController.add(self, name: "ozen")  // map.html → pin drags and map clicks
             placesMap.customUserAgent = "Ozen (https://github.com/tupe12334/ozen)"  // OSM tile policy: identify the app
             placesMap.heightAnchor.constraint(equalToConstant: 280).isActive = true
             // Bundled by `ozen app`; a checkout run (Ozen [dir]) falls back to the repo copy.
@@ -560,10 +566,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     /// One row per place: label, action, where it is, and buttons; the row index rides in each control's tag.
-    func buildPlaces() {
+    func buildPlaces(fit: Bool = true) {
+        rebuilding = true
         placesStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let intro = NSTextField(wrappingLabelWithString: "While you're within \(Int(placeRadius)) m of a place, its setting replaces "
-            + "Always/Meetings. Set a place to where you are now with “Use current location”.")
+        rebuilding = false
+        let intro = NSTextField(wrappingLabelWithString: "While you're within a place's radius, its setting replaces Always/Meetings. "
+            + "Type coordinates, use where you are now, pick a spot on the map, or drag a pin.")
         intro.font = .systemFont(ofSize: 12)
         placesStack.addArrangedSubview(intro)
         placesStack.addArrangedSubview(placesMap)
@@ -574,25 +582,33 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             name.target = self
             name.action = #selector(renamePlace(_:))
             name.cell?.sendsActionOnEndEditing = true  // clicking away saves too, not only Return
-            name.widthAnchor.constraint(equalToConstant: 120).isActive = true
+            name.widthAnchor.constraint(equalToConstant: 160).isActive = true
             let action = NSPopUpButton(frame: .zero, pullsDown: false)
             action.addItems(withTitles: placeActions.map(\.1))
             action.selectItem(at: placeActions.firstIndex { $0.0 == p.action } ?? 0)
             action.tag = i
             action.target = self
             action.action = #selector(placeActionChanged(_:))
-            let whereText = p.lat.flatMap { lat in p.lon.map { String(format: "%.4f, %.4f", lat, $0) } } ?? "Not set"
-            let whereLabel = NSTextField(labelWithString: settingPlace == i ? "Locating…" : whereText)
-            whereLabel.textColor = p.lat == nil ? .secondaryLabelColor : .labelColor
-            whereLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
-            let row = NSStackView(views: [name, action, whereLabel])
-            for (title, sel) in [("Use current location", #selector(setPlaceHere(_:))), ("Remove", #selector(removePlace(_:)))] {
-                let b = NSButton(title: title, target: self, action: sel)
-                b.tag = i
-                b.bezelStyle = .rounded
-                b.controlSize = .small
-                row.addArrangedSubview(b)
+            let remove = smallButton("Remove", #selector(removePlace(_:)), i)
+            placesStack.addArrangedSubview(NSStackView(views: [name, action, NSView(), remove]))
+            // Every value is editable by hand; empty latitude or longitude means "not set".
+            let fields = [("lat", "Latitude", p.lat), ("lon", "Longitude", p.lon), ("radius", "\(Int(defaultRadius))", p.radius)].map { key, hint, v in
+                let f = NSTextField(string: v.map { key == "radius" ? String(Int($0)) : String(format: "%.6f", $0) } ?? "")
+                f.placeholderString = hint
+                f.identifier = NSUserInterfaceItemIdentifier(key)
+                f.tag = i
+                f.target = self
+                f.action = #selector(placeValueChanged(_:))
+                f.cell?.sendsActionOnEndEditing = true
+                f.widthAnchor.constraint(equalToConstant: key == "radius" ? 56 : 104).isActive = true
+                return f
             }
+            let status = settingPlace == i ? "Locating…" : pickingPlace == i ? "Click the map…" : ""
+            let row = NSStackView(views: [NSTextField(labelWithString: "Lat"), fields[0], NSTextField(labelWithString: "Lon"), fields[1],
+                                          NSTextField(labelWithString: "Radius"), fields[2], NSTextField(labelWithString: "m"),
+                                          smallButton("Use current location", #selector(setPlaceHere(_:)), i),
+                                          smallButton("Pick on map", #selector(pickOnMap(_:)), i), NSTextField(labelWithString: status)])
+            row.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 6, right: 0)
             placesStack.addArrangedSubview(row)
         }
         let add = NSButton(title: "Add place", target: self, action: #selector(addPlace))
@@ -602,37 +618,93 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let rowWidth = placesStack.arrangedSubviews.dropFirst(2).map(\.fittingSize.width).max() ?? 536
         placesMap.constraints.filter { $0.firstAttribute == .width }.forEach { placesMap.removeConstraint($0) }
         placesMap.widthAnchor.constraint(equalToConstant: rowWidth).isActive = true
-        showPlacesOnMap()
+        showPlacesOnMap(fit: fit)
         intro.preferredMaxLayoutWidth = rowWidth  // wrap the intro to the rows, so it never squeezes them
         placesWindow?.setContentSize(placesStack.fittingSize)
     }
 
     /// Hand the places to map.html, which draws each located one with its radius; red records, gray turns it off.
-    func showPlacesOnMap() {
+    func showPlacesOnMap(fit: Bool = true) {
         struct Here: Encodable { let lat: Double, lon: Double }
         let enc = JSONEncoder()
         guard let places = try? enc.encode(loadPlaces()), let places = String(data: places, encoding: .utf8) else { return }
         let here = self.here.flatMap { try? enc.encode(Here(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude)) }
             .flatMap { String(data: $0, encoding: .utf8) } ?? "null"
-        placesMap.evaluateJavaScript("show(\(places), \(placeRadius), \(here))")  // before the page loads this is a no-op
+        placesMap.evaluateJavaScript("show(\(places), \(defaultRadius), \(here), \(fit))")  // before the page loads this is a no-op
+    }
+
+    /// From map.html: {type: "move", index, lat, lon} when a pin is dragged, {type: "click", lat, lon} for a map click.
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let m = message.body as? [String: Any], let lat = m["lat"] as? Double, let lon = m["lon"] as? Double else { return }
+        let i = m["type"] as? String == "move" ? m["index"] as? Int : pickingPlace
+        guard let i else { return }
+        commitEdits()
+        pickingPlace = nil
+        placesMap.evaluateJavaScript("picking(false)")
+        editPlaces({ if $0.indices.contains(i) { $0[i].lat = lat; $0[i].lon = lon } }, fit: false)  // the map stays where you put it
+        buildPlaces(fit: false)
+    }
+
+    func smallButton(_ title: String, _ sel: Selector, _ tag: Int) -> NSButton {
+        let b = NSButton(title: title, target: self, action: sel)
+        b.tag = tag
+        b.bezelStyle = .rounded
+        b.controlSize = .small
+        return b
+    }
+
+    @objc func pickOnMap(_ sender: NSButton) {
+        commitEdits()
+        placesNote.stringValue = ""
+        pickingPlace = sender.tag
+        placesMap.evaluateJavaScript("picking(true)")
+        buildPlaces(fit: false)
+    }
+
+    /// A typed latitude, longitude or radius; anything out of range is refused and the row shows the saved value again.
+    @objc func placeValueChanged(_ sender: NSTextField) {
+        guard !rebuilding else { return }
+        let text = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        let key = sender.identifier?.rawValue ?? ""
+        let v = Double(text)
+        let valid = text.isEmpty || v.map { key == "lat" ? abs($0) <= 90 : key == "lon" ? abs($0) <= 180 : $0 > 0 } == true
+        guard valid else {
+            placesNote.stringValue = "\(text) isn't a valid \(["lat": "latitude (−90…90)", "lon": "longitude (−180…180)"][key] ?? "radius in meters")."
+            buildPlaces(fit: false)
+            return
+        }
+        placesNote.stringValue = ""
+        let i = sender.tag
+        let old = loadPlaces()
+        guard old.indices.contains(i) else { return }
+        let current = key == "lat" ? old[i].lat : key == "lon" ? old[i].lon : old[i].radius
+        guard v != current else { return }  // end-editing fires on every focus change: skip saves that change nothing
+        editPlaces({
+            switch key {
+            case "lat": $0[i].lat = v
+            case "lon": $0[i].lon = v
+            default: $0[i].radius = v
+            }
+        }, fit: key != "radius")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { showPlacesOnMap() }
 
-    func editPlaces(_ change: (inout [Place]) -> Void) {
+    func editPlaces(_ change: (inout [Place]) -> Void, fit: Bool = true) {
         var places = loadPlaces()
         change(&places)
         savePlaces(places)
         watchLocation()
         lastWanted = nil  // a changed place applies right away
         autoControl()
-        showPlacesOnMap()
+        showPlacesOnMap(fit: fit)
     }
 
     /// Save a label still being typed while row indexes are valid; a field removed mid-edit would rename the wrong row.
     func commitEdits() { placesWindow?.makeFirstResponder(nil) }
 
     @objc func renamePlace(_ sender: NSTextField) {
+        guard !rebuilding else { return }
         let label = sender.stringValue.trimmingCharacters(in: .whitespaces)
         editPlaces { if $0.indices.contains(sender.tag), !label.isEmpty { $0[sender.tag].label = label } }
     }
