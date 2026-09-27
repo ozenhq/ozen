@@ -1,0 +1,23 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    # macOS 15 SDK: the recorder uses ScreenCaptureKit mic capture (screencapturekit's macos_15_0 feature)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+      - name: Swift menu bar and icon type-check
+        run: swiftc -typecheck menubar.swift && swiftc -typecheck icon.swift
+      - name: Python scripts compile
+        run: python3 -m py_compile transcribe.py train.py eval.py
