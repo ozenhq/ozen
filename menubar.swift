@@ -1,7 +1,8 @@
 // Menu bar ear icon: left-click shows the live transcript with start/pause/stop controls,
 // right-click offers the same controls plus Quit. Controls call the ozen CLI (src/main.rs).
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
-// the voiceprints (train.py), so labels improve the more you tag.
+// the voiceprints (train.py), so labels improve the more you tag. Click a line's text to fix what was
+// said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
 // Places: labeled locations that override the mode while you're there (auto record, or auto off).
 // Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
@@ -214,6 +215,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var text: NSTextView { scroll.documentView as! NSTextView }
     var signature = ""
     var pending: [String: String] = [:]  // tags shown right away while train.py runs
+    var pendingFixes: [String: String] = [:]  // same for text fixes
     var state = "stopped"  // from `ozen status`: recording | paused | stopping | stopped
     var problems: [String] = []  // from `ozen health`: why recording isn't turning into transcript
     let warning = NSTextField(wrappingLabelWithString: "")
@@ -253,7 +255,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         text.isEditable = false
         text.delegate = self
         text.textContainerInset = NSSize(width: 10, height: 10)
-        text.linkTextAttributes = [.foregroundColor: NSColor.secondaryLabelColor, .cursor: NSCursor.pointingHand]
+        text.linkTextAttributes = [.cursor: NSCursor.pointingHand]  // links keep their own colors: names, unsure, text
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
         for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces))] {
@@ -358,12 +360,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     // MARK: capture control (the ozen CLI owns the processes; this only asks it)
 
-    func ozen(_ cmd: String, done: ((String) -> Void)? = nil) {
+    func ozen(_ args: String..., done: ((String) -> Void)? = nil) {
         DispatchQueue.global().async {
             let p = Process()
             let pipe = Pipe()
             p.executableURL = dir.appendingPathComponent("target/release/ozen")
-            p.arguments = [cmd]
+            p.arguments = args
             p.standardOutput = pipe
             try? p.run()
             p.waitUntilExit()
@@ -705,17 +707,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     func reload() {
         guard popover.isShown else { return }
-        let files = ["lines.jsonl", "tags.json", "labels.json", "stats.json"]
+        let files = ["lines.jsonl", "tags.json", "labels.json", "stats.json", "fixes.json"]
         let sig = files.map { f -> String in
             let a = try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(f).path)
             return "\(a?[.size] ?? 0)-\((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
-        }.joined(separator: "|") + "\(pending)"
+        }.joined(separator: "|") + "\(pending)\(pendingFixes)"
         guard sig != signature else { return }
         signature = sig
         let atBottom = scroll.verticalScroller.map { $0.floatValue > 0.98 } ?? true
 
         let tags = (json("tags.json") as? [String: String] ?? [:]).merging(pending) { $1 }
         let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
+        let fixes = (json("fixes.json") as? [String: String] ?? [:]).merging(pendingFixes) { $1 }
         let out = NSMutableAttributedString()
         headerRanges = [:]
         let history = lines(limit: 5000)  // timeline spans more than the transcript shows
@@ -734,9 +737,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let guess = labels[l.id]
             let unsure = !tagged && (guess?["unsure"] as? Bool ?? false)
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
+            let said = fixes[l.id].flatMap { $0.isEmpty ? nil : $0 } ?? l.text
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
-            if l.text.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
+            if said.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
                 para.baseWritingDirection = .rightToLeft
                 para.alignment = .right
             }
@@ -754,7 +758,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             out.append(NSAttributedString(string: " (\(l.src)): ", attributes: base.merging([
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor,
             ]) { $1 }))
-            out.append(NSAttributedString(string: l.text + "\n", attributes: base.merging([.font: NSFont.systemFont(ofSize: 13)]) { $1 }))
+            out.append(NSAttributedString(string: said, attributes: base.merging([
+                .font: NSFont.systemFont(ofSize: 13), .link: URL(string: "ozen://fix/\(l.id)")!,
+                .toolTip: said == l.text ? "Click to fix the text" : "Fixed. Heard: \(l.text)",
+            ]) { $1 }))
+            out.append(NSAttributedString(string: "\n", attributes: base))
         }
         text.textStorage?.setAttributedString(out)
         if atBottom { text.scrollToEndOfDocument(nil) }
@@ -769,7 +777,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         review = (s["review"] as? [String] ?? []).filter { (tags[$0] ?? "").isEmpty && headerRanges[$0] != nil }
         reviewButton.title = review.isEmpty ? "Review" : "Review \(review.count)"
         reviewButton.isEnabled = !review.isEmpty
-        footer.stringValue = "  \(acc) · \(tagged) tagged · orange ? = unsure, tag it to teach ozen"
+        footer.stringValue = "  \(acc) · \(tagged) tagged · orange ? = unsure, tag it to teach ozen · click text to fix it"
     }
 
     // Jump to the line ozen is least sure about and ask who said it.
@@ -787,7 +795,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     // Clicking a speaker name: pick who really said the line.
     func textView(_ view: NSTextView, clickedOnLink link: Any, at index: Int) -> Bool {
-        guard let url = link as? URL, url.host == "tag" else { return false }
+        guard let url = link as? URL else { return false }
+        if url.host == "fix" { fixText(url.lastPathComponent); return true }
+        guard url.host == "tag" else { return false }
         if let event = NSApp.currentEvent { NSMenu.popUpContextMenu(tagMenu(for: url.lastPathComponent), with: event, for: view) }
         return true
     }
@@ -860,6 +870,42 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         }
         try? p.run()
     }
+
+    // Clicking a line's text: correct what was said. Empty restores what ozen heard.
+    func fixText(_ id: String) {
+        guard let line = lines(limit: 5000).first(where: { $0.id == id }) else { return }
+        let current = pendingFixes[id] ?? (json("fixes.json") as? [String: String])?[id] ?? line.text
+        let alert = NSAlert()
+        alert.messageText = "What was really said?"
+        alert.informativeText = "Heard: \(line.text)\nozen learns the words you add, and applies a correction you make twice."
+        alert.addButton(withTitle: "Fix")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 90))
+        field.string = current
+        field.font = .systemFont(ofSize: 13)
+        field.isRichText = false
+        if current.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
+            field.baseWritingDirection = .rightToLeft
+            field.alignment = .right
+        }
+        let box = NSScrollView(frame: field.frame)
+        box.documentView = field
+        box.hasVerticalScroller = true
+        box.borderType = .bezelBorder
+        alert.accessoryView = box
+        alert.window.initialFirstResponder = field
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let fixed = field.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingFixes[id] = fixed
+        reload()
+        ozen("fix", id, fixed) { _ in
+            self.pendingFixes[id] = nil
+            self.signature = ""
+            self.reload()
+        }
+    }
+
 }
 
 let app = NSApplication.shared

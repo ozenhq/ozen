@@ -37,6 +37,13 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Answering Review is the fastest way to improve it: in a simulation with four similar voices, 12 tags picked by
   Review got untagged-line accuracy to 100% with 2 lines still unsure, versus 98% with 35 unsure for 12 random tags.
 
+- **Learns from your text fixes.** Click a line's text in the panel to correct what was said (empty restores it).
+  `ozen fix` keeps the fix in `fixes.json` and relearns `learned.json`, which the live transcriber reads:
+  words your fixes add go into Whisper's hint (up to 30, most used first), and a correction you make twice
+  (e.g. "פי אר" → "PR") is applied to new lines automatically (the line keeps Whisper's own text as `heard`, which later fixes learn
+  from, so undoing a wrong correction cancels it). A correction is skipped while any fix keeps that phrase as right. Each fix also keeps its chunk audio in `fixes/`
+  with the right text (`fixes/dataset.jsonl`), ready for fine-tuning a model later.
+
 - **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon shows the state: ear (stopped), filled ear (recording), pause (paused).
@@ -81,9 +88,10 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen start` / `pause` / `resume` / `stop` | Same as the menu bar buttons. Pause keeps the transcriber loaded; stop finishes transcribing queued audio first |
 | `target/release/ozen status` | `recording`, `paused`, `stopping` or `stopped` |
 | `target/release/ozen health` | One line per problem the menu bar warns about: recording blocked, silent mic, transcriber down or behind |
+| `target/release/ozen fix <line-id> "right text"` | Correct a line's text (what the panel does); empty clears. Relearns hint words and corrections |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
-| `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
+| `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |

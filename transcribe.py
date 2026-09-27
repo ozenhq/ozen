@@ -50,6 +50,7 @@ MODEL = cached("mlx-community/whisper-large-v3-turbo")  # English + language det
 # Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
 MODELS = {"he": cached("mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"), "en": MODEL}
 VOCAB = HERE / "vocab.txt"  # names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
+LEARNED = HERE / "learned.json"  # from your transcript fixes (train.py fix): words to hint, corrections to apply
 NOISE = {  # what Whisper invents on noise, per language
     "en": {"thank you", "thanks", "you", "bye"},
     "he": {"תודה", "תודה רבה", "רבה", "תודה לכם", "ביי"},
@@ -157,10 +158,26 @@ last_lang: dict[str, str] = {}  # per source; short clips reuse it
 last_text: dict[str, str] = {}  # per source; previous line, given to Whisper as context
 
 
+def learned() -> dict:
+    try:
+        return json.loads(LEARNED.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def corrected(text: str) -> str:
+    """Apply the corrections you made repeatedly (learned.json "replace"), whole words only."""
+    for wrong, right in learned().get("replace", {}).items():
+        text = re.sub(rf"(?<!\w){re.escape(wrong)}(?!\w)", right, text)
+    return text
+
+
 def hint(tag: str) -> str:
-    """Prompt with the vocabulary + known people's names + the previous line, so Whisper spells them."""
+    """Prompt with the vocabulary + known people's names + words from your fixes + the previous line,
+    so Whisper spells them."""
     words = [w.strip() for w in re.split(r"[,\n]", VOCAB.read_text()) if w.strip()] if VOCAB.exists() else []
     words += [s[0] for s in speakers if not anon(s[0])]
+    words += learned().get("vocab", [])
     return (", ".join(dict.fromkeys(words)) + ". " + last_text.get(tag, "")[-200:]).strip()
 
 
@@ -256,7 +273,8 @@ while True:
                         lines.append([start, spk, text, w * e, end])
                     prev = spk
                 with out.open("a") as fh, LINES.open("a") as lj:
-                    for i, (start, spk, text, esum, end) in enumerate(lines):
+                    for i, (start, spk, heard, esum, end) in enumerate(lines):
+                        text = corrected(heard)
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
                         fh.write(line + "\n")
@@ -264,6 +282,8 @@ while True:
                         rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "d": round(end - start, 2),
                                "src": SOURCE.get(tag, tag),
                                "spk": spk, "text": text, "e": (esum / np.linalg.norm(esum)).round(5).tolist()}
+                        if text != heard:
+                            rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)

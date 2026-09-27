@@ -1,4 +1,6 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
+mod fixes;
+
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -7,12 +9,13 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | app | bar
+ozen control: start | pause | resume | stop | status | health | look | fix | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
+  fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
@@ -385,8 +388,18 @@ fn main() {
             {
                 println!("screen: {}/screen-small.png", env!("CARGO_MANIFEST_DIR"));
             }
-            // labels corrected by your tags
-            if !ok(cmd("uv").args(["run", "-q", "train.py", "show", &n])) {
+            fixes::show(n.parse().unwrap_or(40)); // speakers corrected by your tags, text by your fixes
+        }
+        "fix" => {
+            let (Some(id), text) = (
+                std::env::args().nth(2),
+                std::env::args().nth(3).unwrap_or_default(),
+            ) else {
+                println!("{USAGE}");
+                exit(2);
+            };
+            if let Err(e) = fixes::fix(&id, text.trim()) {
+                eprintln!("{e}");
                 exit(1);
             }
         }
