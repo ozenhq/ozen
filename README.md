@@ -58,8 +58,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 
 - **Hands meetings to an agent.** Switch the panel to **Meetings** for every past meeting (a silence of 10+ minutes
   starts a new one). Select one or more (⌘/⇧-click) and press **Open** to put their transcripts in a fresh folder
-  under `context/`, then start Claude Code or Hermes there; the folder's `AGENTS.md` (and `CLAUDE.md`) tells the agent
-  what it holds. **Auto add with Kev** also adds every other meeting that local [Kev](https://github.com/jaredpalmer/kev)
+  under `context/`, then start Claude Code or Hermes there in a new Terminal window; the folder's `AGENTS.md` (and
+  `CLAUDE.md`) tells the agent what it holds, and its `claude.command` / `hermes.command` reopen it with a double-click. **Auto add with Kev** also adds every other meeting that local [Kev](https://github.com/jaredpalmer/kev)
   (`localhost:8009`) judges part of the same project or topic; its scores show before you pick the agent.
 
 Output is `transcript.txt`:

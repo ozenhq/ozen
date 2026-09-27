@@ -4,6 +4,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
 const GAP: f64 = 600.0; // this much silence ends a meeting
@@ -250,12 +251,31 @@ Picked by the user: {}{kev_line}\n\nRead these transcripts before answering ques
         list(picked.iter().map(|m| format!("`{}`", m.file())).collect()),
     )).map_err(|e| e.to_string())?;
     fs::write(format!("{dir}/CLAUDE.md"), "@AGENTS.md\n").map_err(|e| e.to_string())?; // Claude Code reads CLAUDE.md, Hermes AGENTS.md
+    // Double-click (or Ozen's buttons) opens Terminal here with the agent running. Opening a .command file
+    // needs no Automation permission, unlike scripting Terminal. Login + interactive so PATH finds the tools.
+    for tool in ["claude", "hermes"] {
+        let path = format!("{dir}/{tool}.command");
+        fs::write(&path, command_script(tool)).map_err(|e| e.to_string())?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
     Ok(dir)
+}
+
+fn command_script(tool: &str) -> String {
+    // Hermes reads project context from TERMINAL_CWD when that's set (e.g. by the user's shell), not the launch dir
+    format!("#!/bin/zsh -il\ncd \"${{0:A:h}}\" && export TERMINAL_CWD=\"$PWD\" && exec {tool}\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launchers_run_the_agent_in_their_own_folder() {
+        let s = command_script("hermes");
+        assert!(s.starts_with("#!/bin/zsh -il\n"));
+        assert!(s.contains(r#"cd "${0:A:h}" && export TERMINAL_CWD="$PWD" && exec hermes"#));
+    }
 
     #[test]
     fn a_long_silence_starts_a_new_meeting() {

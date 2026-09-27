@@ -730,21 +730,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             alert.informativeText = files.joined(separator: "\n") + (kev ? "\n\nKev's scores:\n" + err : "") + "\n\n" + folder
             for b in ["Claude Code", "Hermes", "Show in Finder"] { alert.addButton(withTitle: b) }
             switch alert.runModal() {
-            case .alertFirstButtonReturn: self.terminal(folder, "claude")
-            case .alertSecondButtonReturn: self.terminal(folder, "hermes")
+            case .alertFirstButtonReturn: NSWorkspace.shared.open(URL(fileURLWithPath: folder + "/claude.command"))
+            case .alertSecondButtonReturn: NSWorkspace.shared.open(URL(fileURLWithPath: folder + "/hermes.command"))
             default: NSWorkspace.shared.open(URL(fileURLWithPath: folder))
             }
         }
-    }
-
-    /// New Terminal window in `folder` running `tool`. The folder goes through the environment, never into the script.
-    func terminal(_ folder: String, _ tool: String) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "tell application \"Terminal\" to do script \"cd \" & quoted form of (system attribute \"OZEN_CTX\") & \" && \(tool)\"",
-                       "-e", "tell application \"Terminal\" to activate"]
-        p.environment = ProcessInfo.processInfo.environment.merging(["OZEN_CTX": folder]) { $1 }
-        try? p.run()
     }
 
     @objc func zoom(_ sender: NSButton) {
