@@ -135,10 +135,14 @@ def hint(tag: str) -> str:
     return (", ".join(dict.fromkeys(words)) + ". " + last_text.get(tag, "")[-200:]).strip()
 
 
-def noise(text: str, lang: str) -> bool:
+FILLER = {w for phrases in NOISE.values() for p in phrases for w in p.split()}
+
+
+def noise(text: str) -> bool:
+    """"תודה. תודה רבה." on silence: every word is known filler. Checked across languages, because a clip
+    detected as English can still come out in Hebrew (the hint carries Hebrew names and context)."""
     words = re.sub(r"[^\w\s]", " ", text.lower()).split()
-    # "תודה. תודה רבה. תודה." on silence: every phrase is a known filler
-    return not words or " ".join(dict.fromkeys(words)) in NOISE[lang] or set(words) <= {w for p in NOISE[lang] for w in p.split()}
+    return not words or set(words) <= FILLER
 
 
 def transcribe(clip: np.ndarray, tag: str) -> str:
@@ -160,7 +164,7 @@ def transcribe(clip: np.ndarray, tag: str) -> str:
         for s in r["segments"]
         if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
     ).strip()
-    if noise(text, lang):
+    if noise(text):
         return ""
     last_text[tag] = text
     return text
@@ -187,7 +191,7 @@ while True:
             if tag in covered:
                 covered[tag] = max(covered[tag], t_chunk + len(audio) / SR)
             if audio.size and np.sqrt(np.mean(audio**2)) > SILENCE_RMS:
-                lines, prev = [], None  # [start_sec, speaker, text], merged while speaker repeats
+                lines, prev = [], None  # [start, speaker, text, print sum, end], merged while speaker repeats
                 for start, clip in utterances(audio):
                     t0, t1 = t_chunk + start, t_chunk + start + len(clip) / SR
                     if tag != "mic":
@@ -204,19 +208,22 @@ while True:
                     if spk == "?" and prev is not None:
                         spk = prev  # short clip mid-turn: most likely the same person continuing
                     w = len(clip) / SR if len(clip) >= MIN_EMBED_SEC * SR else 0.01  # short clips barely count
+                    end = start + len(clip) / SR
                     if lines and lines[-1][1] == spk:
                         lines[-1][2] += " " + text
                         lines[-1][3] += w * e
+                        lines[-1][4] = end
                     else:
-                        lines.append([start, spk, text, w * e])
+                        lines.append([start, spk, text, w * e, end])
                     prev = spk
                 with out.open("a") as fh, LINES.open("a") as lj:
-                    for i, (start, spk, text, esum) in enumerate(lines):
+                    for i, (start, spk, text, esum, end) in enumerate(lines):
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
                         fh.write(line + "\n")
                         print(line, flush=True)
-                        rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "src": SOURCE.get(tag, tag),
+                        rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "d": round(end - start, 2),
+                               "src": SOURCE.get(tag, tag),
                                "spk": spk, "text": text, "e": (esum / np.linalg.norm(esum)).round(5).tolist()}
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript

@@ -55,7 +55,133 @@ func meetingUsingMic() -> String? {
     return nil
 }
 
-struct Line { let id: String, time: String, spk: String, src: String, text: String }
+struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String }
+
+// MARK: timeline
+
+struct Segment { let id: String, t: Double, d: Double, speaker: String, text: String, unsure: Bool }
+
+/// One lane per speaker, a bar for each line they spoke, on a horizontally scrollable time axis.
+/// Silences longer than `gapCap` are squeezed to a short break marker so a day of meetings stays scrollable.
+final class TimelineView: NSView, NSViewToolTipOwner {
+    var segments: [Segment] = [] { didSet { layoutTimeline() } }
+    var pxPerSec: CGFloat = 4 { didSet { layoutTimeline() } }
+    var onSelect: ((String) -> Void)?
+    private var lanes: [String] = []
+    private var bars: [(rect: CGRect, seg: Segment)] = []
+    private var spans: [(t0: Double, t1: Double, x0: CGFloat)] = []  // continuous stretches between breaks
+    private var breaks: [(x: CGFloat, gap: Double)] = []
+    let gutter: CGFloat = 112, laneH: CGFloat = 28, axisH: CGFloat = 22, gapCap: Double = 120, breakW: CGFloat = 36
+    override var isFlipped: Bool { true }
+
+    static func color(_ name: String) -> NSColor {
+        if name == "?" { return .tertiaryLabelColor }
+        let palette: [NSColor] = [.systemBlue, .systemGreen, .systemPurple, .systemPink, .systemTeal,
+                                  .systemIndigo, .systemBrown, .systemMint, .systemCyan, .systemYellow]
+        let h = name.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }  // stable per name
+        return palette[Int(h % UInt32(palette.count))]
+    }
+
+    func layoutTimeline() {
+        var talk: [String: Double] = [:]
+        for s in segments { talk[s.speaker, default: 0] += s.d }
+        lanes = talk.sorted { $0.value > $1.value }.map(\.key)
+        bars = []; spans = []; breaks = []
+        var x = gutter + 12, cursor: Double? = nil
+        for s in segments.sorted(by: { $0.t < $1.t }) {
+            if let c = cursor, s.t - c > gapCap {  // long silence: fixed-width break instead of real time
+                spans[spans.count - 1].t1 = c
+                breaks.append((x + 4, s.t - c))
+                x += breakW
+                cursor = nil
+            }
+            if cursor == nil { spans.append((s.t, s.t, x)); cursor = s.t }
+            if s.t > cursor! { x += CGFloat(s.t - cursor!) * pxPerSec; cursor = s.t }
+            let start = x - CGFloat(cursor! - s.t) * pxPerSec  // overlapping speech starts before the cursor
+            let lane = CGFloat(lanes.firstIndex(of: s.speaker) ?? 0)
+            let rect = CGRect(x: start, y: axisH + lane * laneH + 5, width: max(3, CGFloat(s.d) * pxPerSec), height: laneH - 10)
+            bars.append((rect, s))
+            if s.t + s.d > cursor! { x += CGFloat(s.t + s.d - cursor!) * pxPerSec; cursor = s.t + s.d }
+            spans[spans.count - 1].t1 = cursor!
+        }
+        setFrameSize(NSSize(width: max(x + 60, superview?.bounds.width ?? 0),
+                            height: max(axisH + CGFloat(lanes.count) * laneH + 8, superview?.bounds.height ?? 0)))
+        removeAllToolTips()
+        for b in bars { addToolTip(b.rect, owner: self, userData: nil) }
+        needsDisplay = true
+    }
+
+    override func draw(_ dirty: NSRect) {
+        NSColor.textBackgroundColor.setFill()
+        dirty.fill()
+        let small: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
+                                                    .foregroundColor: NSColor.secondaryLabelColor]
+        for (i, _) in lanes.enumerated() where i % 2 == 1 {  // zebra lanes
+            NSColor.quaternaryLabelColor.withAlphaComponent(0.08).setFill()
+            NSRect(x: dirty.minX, y: axisH + CGFloat(i) * laneH, width: dirty.width, height: laneH).fill()
+        }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        let step: Double = pxPerSec >= 8 ? 30 : pxPerSec >= 2 ? 60 : pxPerSec >= 0.5 ? 300 : 900  // tick spacing, s
+        for sp in spans {
+            var m = (sp.t0 / step).rounded(.up) * step
+            while m <= sp.t1 {
+                let tx = sp.x0 + CGFloat(m - sp.t0) * pxPerSec
+                NSColor.separatorColor.setFill()
+                NSRect(x: tx, y: axisH - 6, width: 1, height: bounds.height).fill()
+                (fmt.string(from: Date(timeIntervalSince1970: m)) as NSString).draw(at: NSPoint(x: tx + 3, y: 4), withAttributes: small)
+                m += step
+            }
+        }
+        for b in breaks {  // squeezed silence
+            let label = b.gap >= 3600 ? "\(Int(b.gap / 3600))h" : "\(Int(b.gap / 60))m"
+            NSColor.separatorColor.setFill()
+            NSRect(x: b.x + breakW / 2 - 3, y: axisH, width: 1, height: bounds.height).fill()
+            NSRect(x: b.x + breakW / 2 + 2, y: axisH, width: 1, height: bounds.height).fill()
+            ("⋯" + label as NSString).draw(at: NSPoint(x: b.x, y: 4), withAttributes: small)
+        }
+        for b in bars where b.rect.intersects(dirty) {
+            let path = NSBezierPath(roundedRect: b.rect, xRadius: 3, yRadius: 3)
+            TimelineView.color(b.seg.speaker).withAlphaComponent(b.seg.unsure ? 0.45 : 0.85).setFill()
+            path.fill()
+            if b.seg.unsure {
+                NSColor.systemOrange.setStroke()
+                path.lineWidth = 1.5
+                path.stroke()
+            }
+        }
+        // Speaker names stay pinned to the left edge while scrolling horizontally.
+        let g = NSRect(x: visibleRect.minX, y: 0, width: gutter, height: bounds.height)
+        NSColor.windowBackgroundColor.setFill()
+        g.fill()
+        NSColor.separatorColor.setFill()
+        NSRect(x: g.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
+        for (i, name) in lanes.enumerated() {
+            let y = axisH + CGFloat(i) * laneH
+            TimelineView.color(name).setFill()
+            NSBezierPath(ovalIn: NSRect(x: g.minX + 8, y: y + laneH / 2 - 4, width: 8, height: 8)).fill()
+            let total = segments.filter { $0.speaker == name }.reduce(0) { $0 + $1.d }
+            let label = NSMutableAttributedString(string: name, attributes: [.font: NSFont.boldSystemFont(ofSize: 11),
+                                                                             .foregroundColor: NSColor.labelColor])
+            label.append(NSAttributedString(string: " \(Int(total / 60))m\(Int(total) % 60)s", attributes: small))
+            label.draw(with: NSRect(x: g.minX + 20, y: y + 6, width: gutter - 24, height: laneH - 8),
+                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        }
+    }
+
+    func segment(at p: NSPoint) -> Segment? { bars.first { $0.rect.insetBy(dx: -2, dy: -2).contains(p) }?.seg }
+
+    override func mouseDown(with event: NSEvent) {
+        if let s = segment(at: convert(event.locationInWindow, from: nil)) { onSelect?(s.id) }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData: UnsafeMutableRawPointer?) -> String {
+        guard let s = segment(at: point) else { return "" }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return "\(f.string(from: Date(timeIntervalSince1970: s.t)))  \(s.speaker)\(s.unsure ? " ?" : "")  (\(Int(s.d.rounded()))s)\n\(s.text)"
+    }
+}
 
 final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -77,6 +203,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
     var lastMeeting: Date?, meetingName: String?
     var lastWanted: Bool?  // act only when "should be recording" flips, so manual Pause/Stop stick until then
+    let timeline = TimelineView()
+    let timelineScroll = NSScrollView()
+    let viewControl = NSSegmentedControl(labels: ["Transcript", "Timeline"], trackingMode: .selectOne, target: nil, action: nil)
+    let zoomOut = NSButton(title: "−", target: nil, action: nil)
+    let zoomIn = NSButton(title: "+", target: nil, action: nil)
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -105,10 +236,32 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         modeControl.toolTip = "Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls."
         let controls = NSStackView(views: [status, NSView(), modeControl, reviewButton, startButton, pauseButton, stopButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
-        let stack = NSStackView(views: [controls, scroll, footer])
+        viewControl.target = self
+        viewControl.action = #selector(switchView)
+        viewControl.controlSize = .small
+        viewControl.selectedSegment = UserDefaults.standard.integer(forKey: "view")
+        for (b, sel) in [(zoomOut, #selector(zoom(_:))), (zoomIn, #selector(zoom(_:)))] {
+            b.target = self
+            b.action = sel
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+        }
+        timeline.pxPerSec = CGFloat(UserDefaults.standard.object(forKey: "pxPerSec") as? Double ?? 4)
+        timeline.onSelect = { [weak self] id in self?.jump(to: id) }
+        timelineScroll.documentView = timeline
+        timelineScroll.hasHorizontalScroller = true
+        timelineScroll.hasVerticalScroller = true
+        timelineScroll.autohidesScrollers = true
+        timelineScroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: timelineScroll.contentView,
+                                               queue: .main) { [weak self] _ in self?.timeline.needsDisplay = true }  // repin names
+        let viewRow = NSStackView(views: [viewControl, NSView(), zoomOut, zoomIn])
+        viewRow.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        let stack = NSStackView(views: [controls, viewRow, scroll, timelineScroll, footer])
         stack.orientation = .vertical
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
-        stack.frame = NSRect(x: 0, y: 0, width: 560, height: 660)
+        stack.frame = NSRect(x: 0, y: 0, width: 640, height: 680)
+        applyView()
         let vc = NSViewController()
         vc.view = stack
         popover.contentViewController = vc
@@ -228,15 +381,57 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     @objc func pauseCapture() { control("pause", optimistic: "paused") }
     @objc func stopCapture() { control("stop", optimistic: "stopping") }
 
-    func lines() -> [Line] {
+    // MARK: transcript / timeline switch
+
+    @objc func switchView() {
+        UserDefaults.standard.set(viewControl.selectedSegment, forKey: "view")
+        applyView()
+    }
+
+    func applyView() {
+        let showTimeline = viewControl.selectedSegment == 1
+        scroll.isHidden = showTimeline
+        timelineScroll.isHidden = !showTimeline
+        zoomIn.isHidden = !showTimeline
+        zoomOut.isHidden = !showTimeline
+        if showTimeline { scrollTimelineToEnd() }
+    }
+
+    @objc func zoom(_ sender: NSButton) {
+        let anchor = timelineScroll.contentView.bounds.midX / max(timeline.bounds.width, 1)  // keep the view centered
+        timeline.pxPerSec = min(32, max(0.25, timeline.pxPerSec * (sender == zoomIn ? 2 : 0.5)))
+        UserDefaults.standard.set(Double(timeline.pxPerSec), forKey: "pxPerSec")
+        let w = timelineScroll.contentView.bounds.width
+        timelineScroll.contentView.scroll(to: NSPoint(x: max(0, anchor * timeline.bounds.width - w / 2), y: 0))
+        timelineScroll.reflectScrolledClipView(timelineScroll.contentView)
+    }
+
+    func scrollTimelineToEnd() {
+        let x = max(0, timeline.bounds.width - timelineScroll.contentView.bounds.width)
+        timelineScroll.contentView.scroll(to: NSPoint(x: x, y: 0))
+        timelineScroll.reflectScrolledClipView(timelineScroll.contentView)
+    }
+
+    /// Timeline bar clicked: show that line in the transcript.
+    func jump(to id: String) {
+        viewControl.selectedSegment = 0
+        switchView()
+        guard let range = headerRanges[id] else { return }
+        text.scrollRangeToVisible(range)
+        text.showFindIndicator(for: range)
+    }
+
+    func lines(limit: Int) -> [Line] {
         guard let raw = try? String(contentsOf: dir.appendingPathComponent("lines.jsonl"), encoding: .utf8) else { return [] }
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
         // Call and mic chunks finish transcribing at different times, so file order isn't time order.
-        return raw.split(separator: "\n").suffix(maxLines).compactMap { row -> (Double, Line)? in
+        return raw.split(separator: "\n").suffix(limit).compactMap { row -> (Double, Line)? in
             guard let r = try? JSONSerialization.jsonObject(with: Data(row.utf8)) as? [String: Any],
                   let id = r["id"] as? String, let t = r["t"] as? Double else { return nil }
-            return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), spk: r["spk"] as? String ?? "?",
+            let text = r["text"] as? String ?? ""
+            let d = r["d"] as? Double ?? min(15, max(1, Double(text.count) / 14))  // older lines: estimate from length
+            return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), t: t, d: d, spk: r["spk"] as? String ?? "?",
                             src: r["src"] as? String ?? "", text: r["text"] as? String ?? ""))
         }.sorted { $0.0 < $1.0 }.map(\.1)
     }
@@ -256,7 +451,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
         let out = NSMutableAttributedString()
         headerRanges = [:]
-        let all = lines()
+        let history = lines(limit: 5000)  // timeline spans more than the transcript shows
+        let all = Array(history.suffix(maxLines))
+        let atEnd = timelineScroll.contentView.bounds.maxX >= timeline.bounds.width - 20
+        timeline.segments = history.map { l in
+            let tagged = !(tags[l.id] ?? "").isEmpty
+            let guess = labels[l.id]
+            return Segment(id: l.id, t: l.t, d: l.d, speaker: tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk),
+                           text: l.text, unsure: !tagged && (guess?["unsure"] as? Bool ?? false))
+        }
+        if atEnd { scrollTimelineToEnd() }
         if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Press Start.", attributes: [.foregroundColor: NSColor.secondaryLabelColor])) }
         for l in all {
             let tagged = !(tags[l.id] ?? "").isEmpty

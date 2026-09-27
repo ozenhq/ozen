@@ -40,6 +40,9 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 - **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon shows the state: ear (stopped), filled ear (recording), pause (paused).
+- **Timeline view.** Switch the panel to **Timeline** for one lane per speaker (with their total talk time) and a
+  bar for every line they spoke, on a scrollable time axis; **− / +** zoom. Silences over 2 minutes shrink to a
+  short break marker. Hover a bar for what was said; click it to jump to that line in the transcript.
 - **Records always, or only meetings.** The **Always / Meetings** toggle in the panel (and right-click menu):
   - *Always*: records until you pause or stop, including the room mic and any audio from meeting apps.
   - *Meetings*: starts by itself when a meeting app (Zoom, Chrome/Meet, Teams, Slack, FaceTime, Discord) is using
