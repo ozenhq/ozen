@@ -8,10 +8,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check:
-    # macOS 15 SDK: the recorder uses ScreenCaptureKit mic capture (screencapturekit's macos_15_0 feature)
+    # The recorder needs ScreenCaptureKit mic capture (macOS 15 SDK), and screencapturekit's Metal bridge
+    # compiles against macOS 26 APIs, so build with the newest Xcode the image has.
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
