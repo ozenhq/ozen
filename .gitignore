@@ -10,6 +10,7 @@ chunks/
 recent/
 transcript.txt
 start.log
+mic-silent
 *.png
 lines.jsonl
 tags.json

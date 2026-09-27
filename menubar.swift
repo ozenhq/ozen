@@ -192,6 +192,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var signature = ""
     var pending: [String: String] = [:]  // tags shown right away while train.py runs
     var state = "stopped"  // from `ozen.sh status`: recording | paused | stopping | stopped
+    var problems: [String] = []  // from `ozen.sh health`: why recording isn't turning into transcript
+    let warning = NSTextField(wrappingLabelWithString: "")
     let status = NSTextField(labelWithString: "")
     let startButton = NSButton(title: "Start", target: nil, action: nil)
     let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
@@ -229,6 +231,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             b.controlSize = .small
         }
         status.font = .boldSystemFont(ofSize: 12)
+        warning.font = .systemFont(ofSize: 12)
+        warning.textColor = .systemOrange
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         modeControl.controlSize = .small
@@ -257,7 +261,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                                                queue: .main) { [weak self] _ in self?.timeline.needsDisplay = true }  // repin names
         let viewRow = NSStackView(views: [viewControl, NSView(), zoomOut, zoomIn])
         viewRow.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
-        let stack = NSStackView(views: [controls, viewRow, scroll, timelineScroll, footer])
+        let warningRow = NSStackView(views: [warning])
+        warningRow.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        let stack = NSStackView(views: [controls, warningRow, viewRow, scroll, timelineScroll, footer])
         stack.orientation = .vertical
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
         stack.frame = NSRect(x: 0, y: 0, width: 640, height: 680)
@@ -276,6 +282,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             menu.addItem(withTitle: "ozen: \(state)", action: nil, keyEquivalent: "")
+            for p in problems { menu.addItem(withTitle: "⚠︎ " + p, action: nil, keyEquivalent: "") }
             menu.addItem(.separator())
             for (title, sel, on) in [(state == "paused" ? "Resume" : "Start", #selector(startCapture), state == "stopped" || state == "paused"),
                                      ("Pause", #selector(pauseCapture), state == "recording"),
@@ -329,6 +336,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     func refreshState() {
         ozen("status") { self.show(state: $0); self.autoControl() }
+        ozen("health") {
+            self.problems = $0.split(separator: "\n").map(String.init)
+            self.show(state: self.state)
+        }
     }
 
     // MARK: record mode
@@ -359,7 +370,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     func show(state s: String) {
         state = s
-        let icon = ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass"][s] ?? "ear"
+        let icon = s == "recording" && !problems.isEmpty ? "ear.trianglebadge.exclamationmark"
+            : ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass"][s] ?? "ear"
+        warning.stringValue = problems.map { "⚠︎ " + $0 }.joined(separator: "\n")
+        warning.superview?.isHidden = problems.isEmpty
         item.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
         let meeting = mode == "meetings" && inMeeting ? " · \(meetingName ?? "meeting")" : ""

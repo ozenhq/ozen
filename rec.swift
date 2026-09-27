@@ -19,6 +19,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let audioTag: String
     var files: [String: (file: AVAudioFile, url: URL, start: Date)] = [:]
     var lastMic = Date()  // the mic delivers buffers continuously (silence too), so a gap means it died
+    var lastMicSound = Date()  // a real mic always has a noise floor; all-zero samples mean a dead input (e.g. AirPods)
     let lock = NSLock()
     init(audioTag: String) { self.audioTag = audioTag }
 
@@ -41,6 +42,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             files[tag] = (f, url, Date())
         }
         try? sb.withAudioBufferList { abl, _ in
+            if tag == "mic", abl.contains(where: { b in
+                UnsafeRawBufferPointer(start: b.mData, count: Int(b.mDataByteSize)).contains { $0 != 0 }
+            }) { lastMicSound = Date() }
             guard let pcm = AVAudioPCMBuffer(pcmFormat: fmt, bufferListNoCopy: abl.unsafePointer) else { return }
             try? files[tag]?.file.write(from: pcm)
         }
@@ -54,6 +58,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func resetMic() { lock.lock(); lastMic = Date(); lock.unlock() }
     var micAge: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(lastMic) }
+    var micSilence: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(lastMicSound) }
 
     func finishAll() { lock.lock(); files.keys.forEach(finish); lock.unlock() }
 
@@ -118,11 +123,26 @@ for sig in [SIGINT, SIGTERM] {
 }
 
 // Meeting apps opened after start must join the call filter, so refresh the filters periodically.
+// A mic that delivers only zeros gets one restart per silent spell; if that doesn't bring it back,
+// the mic-silent flag tells the menu bar (via ./ozen.sh health) to ask the user to check the input device.
+let silentFlag = URL(fileURLWithPath: "mic-silent")
+var retriedSilence = false
 var tick = 0
 while true {
     try await Task.sleep(for: .seconds(2))
     if callRec.micAge > 30 {
         await restartMic("no mic audio for 30s")
+    }
+    let silence = callRec.micSilence
+    if silence < 30 {
+        retriedSilence = false
+        try? FileManager.default.removeItem(at: silentFlag)
+    } else if !retriedSilence {
+        retriedSilence = true
+        await restartMic("mic delivered only silence for 30s")
+    } else if silence > 60 {
+        let device = AVCaptureDevice.default(for: .audio)?.localizedName ?? "the input device"
+        FileManager.default.createFile(atPath: silentFlag.path, contents: Data(device.utf8))
     }
     tick += 1
     if tick % 5 == 0, let nf = try? await filters() {
