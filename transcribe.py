@@ -156,6 +156,8 @@ def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
 def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
     """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes."""
     n = int(frame * SR)
+    if len(audio) < n:
+        return  # shorter than one frame (a fragment cut off at stop): nothing to split, and no rms to rank
     rms = np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
     voiced = np.flatnonzero(rms > max(SILENCE_RMS, 0.15 * np.percentile(rms, 95)))
     if not voiced.size:

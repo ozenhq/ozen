@@ -7,12 +7,13 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | app | bar
+ozen control: start | pause | resume | stop | status | health | look | ignore | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
+  ignore ID...  tag transcript lines as a voice to ignore (a video playing nearby), then retrain
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
@@ -22,6 +23,7 @@ const REC: &str = r"^target/release/rec chunks"; // anchored so pgrep never matc
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
+const IGNORE: &str = "Ignored"; // reserved tag: a voice to drop, not a person (same in train.py, transcribe.py, menubar.swift)
 
 fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
@@ -49,6 +51,14 @@ fn running(pattern: &str) -> bool {
 
 fn signal(sig: &str, pattern: &str) {
     let _ = cmd("pkill").args([sig, "-f", pattern]).status();
+}
+
+/// Keep start.log bounded: at `start`, move a log past 1 MiB aside to start.log.1 (one generation kept).
+/// Processes already running keep appending to the moved file until they restart; nothing is lost.
+fn rotate_log() {
+    if fs::metadata("start.log").is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = fs::rename("start.log", "start.log.1");
+    }
 }
 
 fn log() -> File {
@@ -285,12 +295,24 @@ fn build_app(app: &str) -> bool {
     true
 }
 
+/// tags.json with every line in `ids` tagged IGNORE; other tags kept. Unreadable JSON starts empty,
+/// like train.py's `read`.
+fn with_ignores(tags: &str, ids: &[String]) -> String {
+    let mut map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(tags).unwrap_or_default();
+    for id in ids {
+        map.insert(id.clone(), IGNORE.into());
+    }
+    serde_json::to_string_pretty(&map).expect("serialize tags")
+}
+
 fn main() {
     // The repo is where the sources, chunks and logs live, wherever this is called from.
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("cd to the ozen checkout");
     let app = format!("{}/Applications/Ozen.app", home());
     match std::env::args().nth(1).as_deref().unwrap_or("") {
         "start" | "resume" => {
+            rotate_log();
             if !prepare_rec() {
                 exit(1);
             }
@@ -389,6 +411,19 @@ fn main() {
                 exit(1);
             }
         }
+        // Retraining (train.py) turns the tagged lines into prints the transcriber drops.
+        "ignore" => {
+            let ids: Vec<String> = std::env::args().skip(2).collect();
+            if ids.is_empty() {
+                println!("{USAGE}");
+                exit(2);
+            }
+            let tags = fs::read_to_string("tags.json").unwrap_or_default();
+            fs::write("tags.json", with_ignores(&tags, &ids)).expect("write tags.json");
+            if !ok(cmd("uv").args(["run", "-q", "train.py", "retrain"])) {
+                exit(1);
+            }
+        }
         "app" => {
             if !build_app(&app) {
                 exit(1);
@@ -410,7 +445,42 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::recorder_blocked;
+    #[test]
+    fn rotates_only_a_log_past_one_mib() {
+        let dir = std::env::temp_dir().join(format!("ozen-rotate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        std::fs::write("start.log", vec![b'x'; 1000]).unwrap();
+        super::rotate_log();
+        assert!(
+            std::path::Path::new("start.log").exists(),
+            "small log stays"
+        );
+        std::fs::write("start.log", vec![b'x'; (1 << 20) + 1]).unwrap();
+        super::rotate_log();
+        assert!(!std::path::Path::new("start.log").exists());
+        assert_eq!(
+            std::fs::metadata("start.log.1").unwrap().len(),
+            (1 << 20) + 1
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    use super::{recorder_blocked, with_ignores};
+
+    #[test]
+    fn ignoring_keeps_other_tags() {
+        let out = with_ignores(r#"{"a": "Dana Levi", "b": ""}"#, &["b".into(), "c".into()]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"a": "Dana Levi", "b": "Ignored", "c": "Ignored"})
+        );
+        assert_eq!(
+            with_ignores("not json", &["x".into()]),
+            "{\n  \"x\": \"Ignored\"\n}"
+        );
+    }
 
     #[test]
     fn blocked_only_when_the_last_recorder_start_failed() {
