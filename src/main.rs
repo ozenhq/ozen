@@ -25,8 +25,11 @@ ozen control: start | pause | resume | stop | status | health | look | fix | mee
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
-const REC_BIN: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
-const REC: &str = r"^target/release/rec chunks"; // anchored so pgrep never matches shells that merely mention the command
+const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
+// macOS lists a bare binary under its file name in Privacy & Security, so run a copy named ozen.
+const REC_BIN: &str = "target/recorder/ozen";
+// The old path too, so pause/stop still reach a recorder started before the rename.
+const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
@@ -234,12 +237,19 @@ fn restart_dead_transcriber() {
     }
 }
 
-/// `cargo build` re-links rec with an ad-hoc signature, which macOS would treat as a new app; re-sign it
-/// with the stable identity so its recording permission carries over.
+/// `cargo build` re-links rec with an ad-hoc signature, which macOS would treat as a new app; copy it to
+/// REC_BIN and re-sign it with the stable identity so its recording permission carries over.
 fn prepare_rec() -> bool {
-    if !Path::new(REC_BIN).exists() {
-        eprintln!("{REC_BIN} missing: run `cargo build --release`");
+    if !Path::new(REC_BUILT).exists() {
+        eprintln!("{REC_BUILT} missing: run `cargo build --release`");
         return false;
+    }
+    if !newer(REC_BIN, REC_BUILT) {
+        let _ = fs::create_dir_all("target/recorder");
+        if let Err(e) = fs::copy(REC_BUILT, REC_BIN) {
+            eprintln!("copy {REC_BUILT} to {REC_BIN}: {e}");
+            return false;
+        }
     }
     let signed = cmd("codesign")
         .args(["-dr", "-", REC_BIN])
