@@ -2,10 +2,9 @@
 # requires-python = ">=3.11"
 # dependencies = ["numpy"]
 # ///
-"""Speaker tagging and voiceprint training, and learning from transcript fixes.
+"""Speaker tagging and voiceprint training.
 
     uv run train.py tag <line-id> "Dana Levi"   # tag one transcript line (empty name clears), then retrain
-    uv run train.py fix <line-id> "right text"  # correct a line's text (empty clears), then relearn
     uv run train.py retrain                     # rebuild voiceprints from all tags
     uv run train.py show [N]                    # last N lines with the best known speaker
 
@@ -15,18 +14,11 @@ over the tags, calibrates the same-voice threshold from them (config.json, read 
 transcriber), relabels untagged lines with a confidence, queues the least certain ones for you
 to tag next (stats.json "review"), logs the trend (history.jsonl), and pushes the registry.
 That is the loop: tag what it asks -> better prints and threshold -> fewer uncertain lines.
-
-Fixes teach the transcriber (learned.json, read live): words you add go into Whisper's prompt so it
-spells them right, and a correction made FIX_REPEAT times is applied to new lines automatically.
-Each fix also keeps its chunk audio (fixes/) with the right text, for fine-tuning a model later.
 """
-import collections
 import datetime
-import difflib
 import json
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 
@@ -35,9 +27,6 @@ import numpy as np
 HERE = pathlib.Path(__file__).parent
 REPO = HERE / "voices"
 LINES, TAGS, LABELS, STATS = (HERE / n for n in ("lines.jsonl", "tags.json", "labels.json", "stats.json"))
-FIXES, LEARNED, FIX_AUDIO = HERE / "fixes.json", HERE / "learned.json", HERE / "fixes"
-FIX_REPEAT = 2  # the same correction this many times becomes an automatic replacement
-LEARNED_VOCAB = 30  # Whisper's prompt is ~220 tokens, shared with vocab.txt, names and the previous line
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 DEFAULT_THRESHOLD = 0.4  # until there are enough tags to calibrate one
 UNSURE = 0.08  # a line this close to the threshold, or to a second person, gets queued for review
@@ -185,66 +174,14 @@ def retrain(retry: bool = True) -> None:
     print(json.dumps({k: v for k, v in stats.items() if k != "review"}, ensure_ascii=False))
 
 
-def words(text: str) -> list[str]:
-    return re.findall(r"\w+(?:['\"״׳]\w+)*", text)  # keeps ג'ירה, צה"ל whole
-
-
-def rules(pairs: list[tuple[str, str]]) -> dict:
-    """What (heard, right) text pairs teach: the words the fixes added, most used first, and each
-    correction made FIX_REPEAT+ times (the most common one, when a phrase was fixed different ways)."""
-    added, fixed = collections.Counter(), collections.Counter()
-    for heard, right in pairs:
-        a, b = words(heard), words(right)
-        for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
-            if op in ("replace", "insert"):
-                added.update(w for w in b[j1:j2] if len(w) > 1)
-            if op == "replace":
-                fixed[" ".join(a[i1:i2]), " ".join(b[j1:j2])] += 1
-    replace = {}
-    for (wrong, right), n in fixed.most_common():
-        if n >= FIX_REPEAT:
-            replace.setdefault(wrong, right)
-    return {"vocab": [w for w, _ in added.most_common(LEARNED_VOCAB)], "replace": replace}
-
-
-def fix(sid: str, text: str) -> None:
-    fixes, lines = read(FIXES, {}), load_lines()
-    if sid not in lines:
-        sys.exit(f"no line {sid}")
-    if text and text != lines[sid]["text"]:
-        fixes[sid] = text
-        ms, tag, _ = sid.split("-")
-        chunk = HERE / "recent" / f"{ms}-{tag}.wav"  # recent/ rotates: keep the audio while it's still there
-        if chunk.exists():
-            FIX_AUDIO.mkdir(exist_ok=True)
-            shutil.copy(chunk, FIX_AUDIO / chunk.name)
-    else:
-        fixes.pop(sid, None)
-    FIXES.write_text(json.dumps(fixes, ensure_ascii=False, indent=1))
-    # ponytail: learns from the transcriber's output, so a wrong auto-replacement you fix back counts as a
-    # new correction (right -> wrong); keep the raw text in lines.jsonl if that starts to matter.
-    learned = rules([(lines[s]["text"], t) for s, t in fixes.items() if s in lines])
-    LEARNED.write_text(json.dumps(learned, ensure_ascii=False, indent=1))
-    rows = []  # the line's span inside its kept chunk, with the right text
-    for s, t in fixes.items():
-        ms, tag, _ = s.split("-")
-        if s in lines and (FIX_AUDIO / f"{ms}-{tag}.wav").exists():
-            rows.append({"audio": f"{ms}-{tag}.wav", "start": round(lines[s]["t"] - int(ms) / 1000, 2),
-                         "duration": lines[s].get("d"), "text": t})
-    if FIX_AUDIO.exists():
-        (FIX_AUDIO / "dataset.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-    print(json.dumps({"fixes": len(fixes), "vocab": len(learned["vocab"]), "replace": learned["replace"]},
-                     ensure_ascii=False))
-
-
 def show(n: int) -> None:
-    tags, labels, fixes = read(TAGS, {}), read(LABELS, {}), read(FIXES, {})
+    tags, labels = read(TAGS, {}), read(LABELS, {})
     for r in sorted(load_lines().values(), key=lambda r: r["t"])[-n:]:
         ts = datetime.datetime.fromtimestamp(r["t"]).strftime("%H:%M:%S")
         lab = labels.get(r["id"]) or {}
         spk = tags.get(r["id"]) or lab.get("spk") or r["spk"]
         mark = " ✓" if tags.get(r["id"]) else (" ?" if lab.get("unsure") else "")
-        print(f"[{ts}] {spk}{mark} ({r['src']}): {fixes.get(r['id'], r['text'])}")
+        print(f"[{ts}] {spk}{mark} ({r['src']}): {r['text']}")
 
 
 cmd = sys.argv[1] if len(sys.argv) > 1 else "show"
@@ -253,8 +190,6 @@ if cmd == "tag":
     tags[sys.argv[2]] = sys.argv[3].strip() if len(sys.argv) > 3 else ""
     TAGS.write_text(json.dumps(tags, ensure_ascii=False, indent=1))
     retrain()
-elif cmd == "fix":
-    fix(sys.argv[2], sys.argv[3].strip() if len(sys.argv) > 3 else "")
 elif cmd == "retrain":
     retrain()
 elif cmd == "show":

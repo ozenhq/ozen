@@ -2,7 +2,7 @@
 // right-click offers the same controls plus Quit. Controls call the ozen CLI (src/main.rs).
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag. Click a line's text to fix what was
-// said; fixes teach the transcriber words and repeated corrections (train.py fix).
+// said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
 // Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
 import AppKit
@@ -321,12 +321,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     // MARK: capture control (the ozen CLI owns the processes; this only asks it)
 
-    func ozen(_ cmd: String, done: ((String) -> Void)? = nil) {
+    func ozen(_ args: String..., done: ((String) -> Void)? = nil) {
         DispatchQueue.global().async {
             let p = Process()
             let pipe = Pipe()
             p.executableURL = dir.appendingPathComponent("target/release/ozen")
-            p.arguments = [cmd]
+            p.arguments = args
             p.standardOutput = pipe
             try? p.run()
             p.waitUntilExit()
@@ -602,7 +602,19 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     func tag(_ id: String, _ name: String) {
         pending[id] = name
         reload()
-        train("tag", id, name) { self.pending[id] = nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Values go through the environment, never into the command string.
+        p.arguments = ["-lc", "cd \"$OZEN_DIR\" && uv run -q train.py tag \"$OZEN_ID\" \"$OZEN_NAME\""]
+        p.environment = ProcessInfo.processInfo.environment.merging(["OZEN_DIR": dir.path, "OZEN_ID": id, "OZEN_NAME": name]) { $1 }
+        p.terminationHandler = { _ in
+            DispatchQueue.main.async {
+                self.pending[id] = nil
+                self.signature = ""
+                self.reload()
+            }
+        }
+        try? p.run()
     }
 
     // Clicking a line's text: correct what was said. Empty restores what ozen heard.
@@ -633,26 +645,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         let fixed = field.string.trimmingCharacters(in: .whitespacesAndNewlines)
         pendingFixes[id] = fixed
         reload()
-        train("fix", id, fixed) { self.pendingFixes[id] = nil }
+        ozen("fix", id, fixed) { _ in
+            self.pendingFixes[id] = nil
+            self.signature = ""
+            self.reload()
+        }
     }
 
-    /// `uv run train.py <cmd> <id> <value>`, then refresh the panel.
-    func train(_ cmd: String, _ id: String, _ value: String, done: @escaping () -> Void) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Values go through the environment, never into the command string.
-        p.arguments = ["-lc", "cd \"$OZEN_DIR\" && uv run -q train.py \"$OZEN_CMD\" \"$OZEN_ID\" \"$OZEN_VALUE\""]
-        p.environment = ProcessInfo.processInfo.environment.merging(
-            ["OZEN_DIR": dir.path, "OZEN_CMD": cmd, "OZEN_ID": id, "OZEN_VALUE": value]) { $1 }
-        p.terminationHandler = { _ in
-            DispatchQueue.main.async {
-                done()
-                self.signature = ""
-                self.reload()
-            }
-        }
-        try? p.run()
-    }
 }
 
 let app = NSApplication.shared
