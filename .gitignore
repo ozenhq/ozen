@@ -12,6 +12,7 @@ transcript.txt
 start.log
 mic-silent
 no-display
+mic-fallback
 *.png
 lines.jsonl
 tags.json

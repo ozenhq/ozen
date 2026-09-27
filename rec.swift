@@ -3,6 +3,7 @@
 //   mic   = your microphone, transcribed unless it is just echo of call/local audio
 //   local = every other app (e.g. Speak Selection reading text aloud), used only for echo detection
 import AVFoundation
+import CoreAudio
 import Foundation
 import ScreenCaptureKit
 
@@ -14,6 +15,14 @@ let meetingApps: Set<String> = [
     "us.zoom.xos", "com.google.Chrome", "com.microsoft.teams2", "com.microsoft.teams",
     "com.tinyspeck.slackmacgap", "com.apple.FaceTime", "com.hnc.Discord",
 ]
+
+// nil = the default input. Set to the built-in mic while the default input delivers only silence.
+var micDevice: String?
+
+func builtInMic() -> AVCaptureDevice? {
+    AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
+        .first { UInt32(bitPattern: $0.transportType) == kAudioDeviceTransportTypeBuiltIn }
+}
 
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let audioTag: String
@@ -57,6 +66,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func resetMic() { lock.lock(); lastMic = Date(); lock.unlock() }
+    func resetSilence() { lock.lock(); lastMicSound = Date(); lock.unlock() }
     var micAge: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(lastMic) }
     var micSilence: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(lastMicSound) }
 
@@ -86,6 +96,7 @@ func config(mic: Bool) -> SCStreamConfiguration {
     let cfg = SCStreamConfiguration()
     cfg.capturesAudio = true
     cfg.captureMicrophone = mic
+    if mic, let id = micDevice { cfg.microphoneCaptureDeviceID = id }
     cfg.excludesCurrentProcessAudio = true
     cfg.sampleRate = 48000
     cfg.channelCount = 1
@@ -145,10 +156,14 @@ var live = try await startStreams("start")
 // Meeting apps opened after start must join the call filter, so refresh the filters periodically.
 // If the mic stops delivering (its device disappeared, e.g. AirPods/iPhone mic) or capture stopped, rebuild.
 // A live mic delivers silence too, so a gap = dead. A mic that delivers only zeros gets one restart per
-// silent spell; if that doesn't bring it back, the mic-silent flag tells the menu bar to ask the user to
-// check the input device.
+// silent spell; if that doesn't bring it back, recording falls back to the built-in mic (the mic-fallback flag
+// tells the menu bar, via `ozen health`) until the default input changes. With no working mic to fall back
+// to, the mic-silent flag asks the user to check the input device.
 let silentFlag = URL(fileURLWithPath: "mic-silent")
+let fallbackFlag = URL(fileURLWithPath: "mic-fallback")
+try? FileManager.default.removeItem(at: fallbackFlag)
 var retriedSilence = false
+var silentDefault: String?  // uniqueID of the default input we fell back from
 var tick = 0
 while true {
     try await Task.sleep(for: .seconds(2))
@@ -162,6 +177,13 @@ while true {
         live = try await startStreams("no mic audio for 30s")
         continue
     }
+    let defaultMic = AVCaptureDevice.default(for: .audio)
+    if micDevice != nil, defaultMic?.uniqueID != silentDefault {  // the user picked another input: use it
+        micDevice = nil
+        try? FileManager.default.removeItem(at: fallbackFlag)
+        live = try await startStreams("default input changed to \(defaultMic?.localizedName ?? "none")")
+        continue
+    }
     let silence = callRec.micSilence
     if silence < 30 {
         retriedSilence = false
@@ -170,8 +192,16 @@ while true {
         retriedSilence = true
         live = try await startStreams("mic delivered only silence for 30s")
         continue
+    } else if silence > 60, micDevice == nil, let builtIn = builtInMic(), builtIn.uniqueID != defaultMic?.uniqueID {
+        micDevice = builtIn.uniqueID
+        silentDefault = defaultMic?.uniqueID
+        let from = defaultMic?.localizedName ?? "the default input"
+        FileManager.default.createFile(atPath: fallbackFlag.path, contents: Data("\(builtIn.localizedName)\n\(from)".utf8))
+        callRec.resetSilence()  // judge the new mic on its own
+        live = try await startStreams("\(from) is silent, switching to \(builtIn.localizedName)")
+        continue
     } else if silence > 60 {
-        let device = AVCaptureDevice.default(for: .audio)?.localizedName ?? "the input device"
+        let device = (micDevice != nil ? builtInMic() : defaultMic)?.localizedName ?? "the input device"
         FileManager.default.createFile(atPath: silentFlag.path, contents: Data(device.utf8))
     }
     if tick % 5 == 0, let nf = try? await filters() {
