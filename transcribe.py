@@ -31,7 +31,8 @@ LANGS = ("he", "en")
 SR = 16000
 SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
 SAME_SPEAKER = 0.4  # cosine similarity; ECAPA same-voice pairs sit well above, different voices below
-MIN_EMBED_SEC = 1.0  # shorter segments give unreliable voiceprints; they inherit the previous speaker
+MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
+SHORT_MATCH = 0.5  # stricter similarity a short clip needs to take an existing label (else "?")
 
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry; see enroll.py
@@ -52,6 +53,10 @@ unknown = 0
 def who(clip: np.ndarray) -> str:
     e = encoder.encode_batch(torch.from_numpy(clip)[None]).squeeze().numpy()
     e /= np.linalg.norm(e)
+    if clip.size < MIN_EMBED_SEC * SR:
+        # A short clip's print is too noisy to found or reshape a voice: label it only on a strong match.
+        best = max(speakers, key=lambda s: float(s[1] @ e), default=None)
+        return best[0] if best is not None and float(best[1] @ e) >= SHORT_MATCH else "?"
     if speakers:
         best = max(speakers, key=lambda s: float(s[1] @ e))
         if float(best[1] @ e) >= SAME_SPEAKER:
@@ -89,13 +94,20 @@ def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
             yield start / SR, audio[start:end]
 
 
-def transcribe(clip: np.ndarray) -> str:
+last_lang: dict[str, str] = {}  # per source; short clips reuse it
+
+
+def transcribe(clip: np.ndarray, tag: str) -> str:
     # Auto-detect per utterance, but only between the languages actually spoken;
     # open detection on short noisy audio picks random languages and invents words.
-    model = ModelHolder.get_model(MODEL, mx.float16)
-    mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=model.dims.n_mels)
-    _, probs = detect_language(model, mel)
-    lang = max(LANGS, key=lambda l: probs.get(l, 0))
+    # Under ~1.5s detection is unreliable ("שלום" came out as "Shalom"), so keep the source's last language.
+    if clip.size < 1.5 * SR:
+        lang = last_lang.get(tag, LANGS[0])
+    else:
+        model = ModelHolder.get_model(MODEL, mx.float16)
+        mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=model.dims.n_mels)
+        _, probs = detect_language(model, mel)
+        lang = last_lang[tag] = max(LANGS, key=lambda l: probs.get(l, 0))
     r = mlx_whisper.transcribe(clip, path_or_hf_repo=MODEL, language=lang, condition_on_previous_text=False)
     # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
     text = " ".join(
@@ -137,10 +149,12 @@ while True:
                     if tag == "mic" and echo_fraction(t0, t1) >= ECHO_OVERLAP:
                         print(f"echo dropped {t1 - t0:.1f}s", flush=True)
                         continue  # speakers leaking into the mic
-                    text = transcribe(clip)
+                    text = transcribe(clip, tag)
                     if not text:
                         continue
-                    spk = who(clip) if clip.size >= MIN_EMBED_SEC * SR or prev is None else prev
+                    spk = who(clip)
+                    if spk == "?" and prev is not None:
+                        spk = prev  # short clip mid-turn: most likely the same person continuing
                     if lines and lines[-1][1] == spk:
                         lines[-1][2] += " " + text
                     else:
