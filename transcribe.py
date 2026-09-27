@@ -31,9 +31,9 @@ ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
 LANGS = ("he", "en")
 SR = 16000
 SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
-SAME_SPEAKER = 0.4  # cosine similarity; ECAPA same-voice pairs sit well above, different voices below
+SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one train.py calibrates from your tags
 MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
-SHORT_MATCH = 0.5  # stricter similarity a short clip needs to take an existing label (else "?")
+SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing label (else "?")
 
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
@@ -51,12 +51,17 @@ def anon(label: str) -> bool:
 
 def load_registry() -> None:
     """(Re)load named voiceprints; train.py rewrites them after every tag, so pick up changes live."""
-    global registry_mtime
+    global registry_mtime, SAME_SPEAKER
     files = sorted(REGISTRY.glob("voices/*.json"))
-    mtime = max((f.stat().st_mtime for f in files), default=0.0)
+    config = REGISTRY / "config.json"
+    mtime = max((f.stat().st_mtime for f in [*files, config] if f.exists()), default=0.0)
     if mtime == registry_mtime:
         return
     registry_mtime = mtime
+    try:
+        SAME_SPEAKER = float(json.loads(config.read_text())["same_speaker"])
+    except (OSError, ValueError, KeyError):
+        pass
     named = {s[0]: s for s in speakers if not anon(s[0])}
     for f in files:
         v = json.loads(f.read_text())
@@ -68,7 +73,7 @@ def load_registry() -> None:
             named[v["name"]][1:] = [e, v.get("count", 1)]
         else:
             speakers.append([v["name"], e, v.get("count", 1)])
-    print(f"known voices: {[s[0] for s in speakers if not anon(s[0])]}", flush=True)
+    print(f"known voices: {[s[0] for s in speakers if not anon(s[0])]}, threshold {SAME_SPEAKER}", flush=True)
 
 
 load_registry()
@@ -81,7 +86,7 @@ def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
     if clip.size < MIN_EMBED_SEC * SR:
         # A short clip's print is too noisy to found or reshape a voice: label it only on a strong match.
         best = max(speakers, key=lambda s: float(s[1] @ e), default=None)
-        return (best[0] if best is not None and float(best[1] @ e) >= SHORT_MATCH else "?"), e
+        return (best[0] if best is not None and float(best[1] @ e) >= SAME_SPEAKER + SHORT_MARGIN else "?"), e
     if speakers:
         best = max(speakers, key=lambda s: float(s[1] @ e))
         if float(best[1] @ e) >= SAME_SPEAKER:

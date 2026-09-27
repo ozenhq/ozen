@@ -29,6 +29,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let startButton = NSButton(title: "Start", target: nil, action: nil)
     let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
     let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    let reviewButton = NSButton(title: "Review", target: nil, action: nil)
+    var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
+    var review: [String] = []  // line ids train.py is least sure about, most uncertain first
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -43,14 +46,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         text.linkTextAttributes = [.foregroundColor: NSColor.secondaryLabelColor, .cursor: NSCursor.pointingHand]
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture))] {
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext))] {
             b.target = self
             b.action = cmd
             b.bezelStyle = .rounded
             b.controlSize = .small
         }
         status.font = .boldSystemFont(ofSize: 12)
-        let controls = NSStackView(views: [status, NSView(), startButton, pauseButton, stopButton])
+        let controls = NSStackView(views: [status, NSView(), reviewButton, startButton, pauseButton, stopButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         let stack = NSStackView(views: [controls, scroll, footer])
         stack.orientation = .vertical
@@ -142,12 +145,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         guard let raw = try? String(contentsOf: dir.appendingPathComponent("lines.jsonl"), encoding: .utf8) else { return [] }
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
-        return raw.split(separator: "\n").suffix(maxLines).compactMap { row in
+        // Call and mic chunks finish transcribing at different times, so file order isn't time order.
+        return raw.split(separator: "\n").suffix(maxLines).compactMap { row -> (Double, Line)? in
             guard let r = try? JSONSerialization.jsonObject(with: Data(row.utf8)) as? [String: Any],
                   let id = r["id"] as? String, let t = r["t"] as? Double else { return nil }
-            return Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), spk: r["spk"] as? String ?? "?",
-                        src: r["src"] as? String ?? "", text: r["text"] as? String ?? "")
-        }
+            return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), spk: r["spk"] as? String ?? "?",
+                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? ""))
+        }.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
     func reload() {
@@ -162,13 +166,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         let atBottom = scroll.verticalScroller.map { $0.floatValue > 0.98 } ?? true
 
         let tags = (json("tags.json") as? [String: String] ?? [:]).merging(pending) { $1 }
-        let labels = json("labels.json") as? [String: String] ?? [:]
+        let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
         let out = NSMutableAttributedString()
+        headerRanges = [:]
         let all = lines()
         if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Press Start.", attributes: [.foregroundColor: NSColor.secondaryLabelColor])) }
         for l in all {
             let tagged = !(tags[l.id] ?? "").isEmpty
-            let speaker = tagged ? tags[l.id]! : (labels[l.id] ?? l.spk)
+            let guess = labels[l.id]
+            let unsure = !tagged && (guess?["unsure"] as? Bool ?? false)
+            let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
             if l.text.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
@@ -179,8 +186,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             out.append(NSAttributedString(string: "[\(l.time)] ", attributes: base.merging([
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
             ]) { $1 }))
-            out.append(NSAttributedString(string: speaker + (tagged ? " ✓" : ""), attributes: base.merging([
+            let header = speaker + (tagged ? " ✓" : unsure ? " ?" : "")
+            headerRanges[l.id] = NSRange(location: out.length, length: (header as NSString).length)
+            out.append(NSAttributedString(string: header, attributes: base.merging([
                 .font: NSFont.boldSystemFont(ofSize: 12), .link: URL(string: "ozen://tag/\(l.id)")!,
+                // unsure lines are what the loop wants tagged next
+                .foregroundColor: unsure ? NSColor.systemOrange : NSColor.secondaryLabelColor,
             ]) { $1 }))
             out.append(NSAttributedString(string: " (\(l.src)): ", attributes: base.merging([
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor,
@@ -192,14 +203,38 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
         let s = json("stats.json") as? [String: Any] ?? [:]
         let tagged = s["tagged"] as? Int ?? 0
-        let acc = (s["accuracy"] as? Double).map { "speaker accuracy \(Int($0 * 100))% on \(s["evaluated"] ?? 0) checks · " } ?? ""
-        footer.stringValue = "  \(acc)\(tagged) lines tagged · click a name to fix who said it"
+        let pct = { (x: Double) in "\(Int((x * 100).rounded()))%" }
+        var acc = (s["accuracy"] as? Double).map { "accuracy \(pct($0)) on \(s["evaluated"] ?? 0) checks" } ?? "accuracy after 2 tags of one person"
+        if let first = s["accuracy_first"] as? Double, let now = s["accuracy"] as? Double, first != now {
+            acc += " (was \(pct(first)))"
+        }
+        review = (s["review"] as? [String] ?? []).filter { (tags[$0] ?? "").isEmpty && headerRanges[$0] != nil }
+        reviewButton.title = review.isEmpty ? "Review" : "Review \(review.count)"
+        reviewButton.isEnabled = !review.isEmpty
+        footer.stringValue = "  \(acc) · \(tagged) tagged · orange ? = unsure, tag it to teach ozen"
+    }
+
+    // Jump to the line ozen is least sure about and ask who said it.
+    @objc func reviewNext() {
+        guard let id = review.first, let range = headerRanges[id],
+              let lm = text.layoutManager, let tc = text.textContainer else { return }
+        text.scrollRangeToVisible(range)
+        text.showFindIndicator(for: range)
+        let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+        rect.origin.x += text.textContainerOrigin.x
+        rect.origin.y += text.textContainerOrigin.y + rect.height
+        tagMenu(for: id).popUp(positioning: nil, at: rect.origin, in: text)
     }
 
     // Clicking a speaker name: pick who really said the line.
     func textView(_ view: NSTextView, clickedOnLink link: Any, at index: Int) -> Bool {
         guard let url = link as? URL, url.host == "tag" else { return false }
-        let id = url.lastPathComponent
+        if let event = NSApp.currentEvent { NSMenu.popUpContextMenu(tagMenu(for: url.lastPathComponent), with: event, for: view) }
+        return true
+    }
+
+    func tagMenu(for id: String) -> NSMenu {
         let menu = NSMenu(title: "Who said this?")
         for name in knownNames() {
             let mi = NSMenuItem(title: name, action: #selector(pick(_:)), keyEquivalent: "")
@@ -216,8 +251,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         clear.target = self
         clear.representedObject = [id, ""]
         menu.addItem(clear)
-        if let event = NSApp.currentEvent { NSMenu.popUpContextMenu(menu, with: event, for: view) }
-        return true
+        return menu
     }
 
     func knownNames() -> [String] {

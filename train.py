@@ -9,9 +9,11 @@
     uv run train.py show [N]                    # last N lines with the best known speaker
 
 Retraining makes each person's voiceprint the average of every line tagged as them (kept in the
-registry under samples/, so tags accumulate across meetings), relabels untagged lines with the
-new prints (labels.json), measures leave-one-out accuracy over the tags (stats.json), and pushes
-the registry. The more lines you tag, the better the prints and the accuracy get.
+registry under samples/, so tags accumulate across meetings), measures leave-one-out accuracy
+over the tags, calibrates the same-voice threshold from them (config.json, read live by the
+transcriber), relabels untagged lines with a confidence, queues the least certain ones for you
+to tag next (stats.json "review"), logs the trend (history.jsonl), and pushes the registry.
+That is the loop: tag what it asks -> better prints and threshold -> fewer uncertain lines.
 """
 import datetime
 import json
@@ -26,7 +28,19 @@ HERE = pathlib.Path(__file__).parent
 REPO = HERE / "voices"
 LINES, TAGS, LABELS, STATS = (HERE / n for n in ("lines.jsonl", "tags.json", "labels.json", "stats.json"))
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
-SAME_SPEAKER = 0.4  # same threshold the live transcriber uses
+DEFAULT_THRESHOLD = 0.4  # until there are enough tags to calibrate one
+UNSURE = 0.08  # a line this close to the threshold, or to a second person, gets queued for review
+REVIEW_MAX = 50
+
+
+def calibrate(genuine: list[float], impostor: list[float]) -> float:
+    """Match threshold that best separates same-person from different-person similarities in the tags."""
+    if len(genuine) < 3 or len(impostor) < 3:
+        return DEFAULT_THRESHOLD
+    g, i = np.array(genuine), np.array(impostor)
+    grid = np.arange(0.25, 0.66, 0.01)
+    score = [((g >= t).mean() + (i < t).mean()) / 2 for t in grid]  # balanced accuracy
+    return round(float(grid[int(np.argmax(score))]), 2)
 
 
 def read(path: pathlib.Path, default):
@@ -85,8 +99,10 @@ def retrain() -> None:
             f.unlink()
             (REPO / "samples" / f.name).unlink(missing_ok=True)
 
-    # Leave-one-out: predict each tagged line from prints built without it.
+    # Leave-one-out: predict each tagged line from prints built without it. The same pass collects
+    # genuine (own print) and impostor (other prints) similarities to calibrate the match threshold.
     correct = evaluated = 0
+    genuine, impostor = [], []
     for n, s in samples.items():
         for sid, x in s.items():
             if sid == "legacy" or len(s) < 2:
@@ -96,36 +112,62 @@ def retrain() -> None:
             cand[n] = unit(sum(y["w"] * np.array(y["e"]) for k, y in s.items() if k != sid))
             evaluated += 1
             correct += max(cand, key=lambda k: float(cand[k] @ e)) == n
-    stats = {"accuracy": round(correct / evaluated, 3) if evaluated else None, "evaluated": evaluated,
-             "tagged": sum(1 for v in tags.values() if v),
-             "people": {n: len([k for k in s if k != "legacy"]) for n, s in samples.items()}}
-    STATS.write_text(json.dumps(stats, ensure_ascii=False, indent=1))
+            genuine.append(float(cand[n] @ e))
+            impostor += [float(cand[m] @ e) for m in cand if m != n]
+    threshold = calibrate(genuine, impostor)
+    config = {"same_speaker": threshold, "calibrated_on": {"genuine": len(genuine), "impostor": len(impostor)}}
+    (REPO / "config.json").write_text(json.dumps(config, indent=1) + "\n")
 
-    labels = {}
+    labels, review = {}, []
     for sid, r in lines.items():
         if sid in tags or not prints:
             continue
         e = np.array(r["e"])
-        best = max(prints, key=lambda k: float(prints[k] @ e))
-        if float(prints[best] @ e) >= SAME_SPEAKER:
-            labels[sid] = best
+        ranked = sorted(((float(prints[k] @ e), k) for k in prints), reverse=True)
+        best, name = ranked[0]
+        margin = best - ranked[1][0] if len(ranked) > 1 else best - threshold
+        # Unsure = near the threshold or nearly tied between two people: tagging these teaches the most.
+        doubt = min(abs(best - threshold), margin)
+        unsure = doubt < UNSURE
+        labels[sid] = {"spk": name if best >= threshold else None, "sim": round(best, 3),
+                       "margin": round(margin, 3), "unsure": unsure}
+        if unsure:
+            review.append((doubt, sid))
     LABELS.write_text(json.dumps(labels, ensure_ascii=False))
 
+    stats = {"accuracy": round(correct / evaluated, 3) if evaluated else None, "evaluated": evaluated,
+             "tagged": sum(1 for v in tags.values() if v), "threshold": threshold,
+             "review": [sid for _, sid in sorted(review)][:REVIEW_MAX], "unsure": len(review),
+             "people": {n: len([k for k in s if k != "legacy"]) for n, s in samples.items()}}
+    hist_path = REPO / "history.jsonl"
+    hist = [json.loads(x) for x in hist_path.read_text().splitlines()] if hist_path.exists() else []
+    point = {k: stats[k] for k in ("tagged", "evaluated", "accuracy", "threshold")}
+    if not hist or {k: hist[-1].get(k) for k in point} != point:
+        hist.append({"at": datetime.datetime.now().isoformat(timespec="seconds"), **point})
+        with hist_path.open("a") as fh:
+            fh.write(json.dumps(hist[-1]) + "\n")
+    first = next((h["accuracy"] for h in hist if h["accuracy"] is not None), None)
+    stats["accuracy_first"] = first
+    STATS.write_text(json.dumps(stats, ensure_ascii=False, indent=1))
+
     git = lambda *a: subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True)
-    git("add", "-A", "voices", "samples")
+    git("add", "-A", "voices", "samples", "config.json", "history.jsonl")
     if git("diff", "--cached", "--quiet").returncode:
-        git("commit", "-m", f"Retrain voiceprints: {stats['tagged']} tagged lines, accuracy {stats['accuracy']}")
+        git("commit", "-m", f"Retrain voiceprints: {stats['tagged']} tagged lines, accuracy {stats['accuracy']}, "
+                            f"threshold {threshold}")
         if git("push", "-q").returncode:
             print("registry push failed; committed locally", file=sys.stderr)
-    print(json.dumps(stats, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in stats.items() if k != "review"}, ensure_ascii=False))
 
 
 def show(n: int) -> None:
     tags, labels = read(TAGS, {}), read(LABELS, {})
-    for r in list(load_lines().values())[-n:]:
+    for r in sorted(load_lines().values(), key=lambda r: r["t"])[-n:]:
         ts = datetime.datetime.fromtimestamp(r["t"]).strftime("%H:%M:%S")
-        spk = tags.get(r["id"]) or labels.get(r["id"]) or r["spk"]
-        print(f"[{ts}] {spk}{' ✓' if r['id'] in tags else ''} ({r['src']}): {r['text']}")
+        lab = labels.get(r["id"]) or {}
+        spk = tags.get(r["id"]) or lab.get("spk") or r["spk"]
+        mark = " ✓" if tags.get(r["id"]) else (" ?" if lab.get("unsure") else "")
+        print(f"[{ts}] {spk}{mark} ({r['src']}): {r['text']}")
 
 
 cmd = sys.argv[1] if len(sys.argv) > 1 else "show"
