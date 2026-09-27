@@ -2,8 +2,10 @@
 // right-click offers the same controls plus Quit. Controls call ozen.sh.
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag.
+// Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
 // Built into ~/Applications/Ozen.app by `ozen.sh app`. Direct use: Ozen [dir] [--open]
 import AppKit
+import CoreAudio
 
 let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
@@ -12,6 +14,45 @@ let maxLines = 400
 
 func json(_ name: String) -> Any? {
     (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+}
+
+// Meeting apps by bundle id prefix. Chrome covers Google Meet; FaceTime calls capture via avconferenced.
+let meetingApps = [("us.zoom", "Zoom"), ("com.google.Chrome", "Chrome"), ("com.microsoft.teams", "Teams"),
+                   ("com.tinyspeck.slackmacgap", "Slack"), ("com.apple.FaceTime", "FaceTime"),
+                   ("com.apple.avconferenced", "FaceTime"), ("com.hnc.Discord", "Discord")]
+let meetingGrace: TimeInterval = 20  // mic can drop briefly (mute toggles, reconnects) without ending the meeting
+
+/// Name of a meeting app currently capturing the microphone, via Core Audio's per-process objects (macOS 14.2+).
+/// ozen's own capture shows up as com.apple.replayd, so it never counts as a meeting.
+func meetingUsingMic() -> String? {
+    func address(_ sel: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    }
+    func capturing(_ obj: AudioObjectID) -> Bool {
+        var addr = address(kAudioProcessPropertyIsRunningInput)
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &running) == noErr && running != 0
+    }
+    func bundleID(_ obj: AudioObjectID) -> String {
+        var addr = address(kAudioProcessPropertyBundleID)
+        var ref: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &ref) == noErr else { return "" }
+        return ref?.takeRetainedValue() as String? ?? ""  // Core Audio returns a +1 CFString: release it
+    }
+    var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
+                                          mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return nil }
+    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+    guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return nil }
+    for id in ids where capturing(id) {
+        let bundle = bundleID(id)
+        if let app = meetingApps.first(where: { bundle.hasPrefix($0.0) }) { return app.1 }
+    }
+    return nil
 }
 
 struct Line { let id: String, time: String, spk: String, src: String, text: String }
@@ -32,6 +73,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
     var review: [String] = []  // line ids train.py is least sure about, most uncertain first
+    let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
+    var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
+    var lastMeeting: Date?, meetingName: String?
+    var lastWanted: Bool?  // act only when "should be recording" flips, so manual Pause/Stop stick until then
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -53,7 +98,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             b.controlSize = .small
         }
         status.font = .boldSystemFont(ofSize: 12)
-        let controls = NSStackView(views: [status, NSView(), reviewButton, startButton, pauseButton, stopButton])
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        modeControl.controlSize = .small
+        modeControl.selectedSegment = mode == "meetings" ? 1 : 0
+        modeControl.toolTip = "Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls."
+        let controls = NSStackView(views: [status, NSView(), modeControl, reviewButton, startButton, pauseButton, stopButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         let stack = NSStackView(views: [controls, scroll, footer])
         stack.orientation = .vertical
@@ -79,6 +129,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                                      ("Stop", #selector(stopCapture), state == "recording" || state == "paused")] where on {
                 let mi = NSMenuItem(title: title, action: sel, keyEquivalent: "")
                 mi.target = self
+                menu.addItem(mi)
+            }
+            menu.addItem(.separator())
+            for (title, m) in [("Record always", "always"), ("Record only meetings", "meetings")] {
+                let mi = NSMenuItem(title: title, action: #selector(modeChanged(_:)), keyEquivalent: "")
+                mi.target = self
+                mi.representedObject = m
+                mi.state = mode == m ? .on : .off
                 menu.addItem(mi)
             }
             menu.addItem(.separator())
@@ -117,14 +175,43 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     }
 
     func refreshState() {
-        ozen("status") { self.show(state: $0) }
+        ozen("status") { self.show(state: $0); self.autoControl() }
+    }
+
+    // MARK: record mode
+
+    @objc func modeChanged(_ sender: Any?) {
+        let m = (sender as? NSMenuItem)?.representedObject as? String ?? (modeControl.selectedSegment == 1 ? "meetings" : "always")
+        UserDefaults.standard.set(m, forKey: "mode")
+        modeControl.selectedSegment = m == "meetings" ? 1 : 0
+        lastWanted = nil  // apply the new mode right away
+        autoControl()
+    }
+
+    func autoControl() {
+        if let app = meetingUsingMic() {
+            lastMeeting = Date()
+            meetingName = app
+        }
+        let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
+        let wanted = mode == "always" || inMeeting
+        defer { lastWanted = wanted; show(state: state) }
+        guard wanted != lastWanted else { return }
+        if wanted, state == "stopped" || state == "paused" {
+            startCapture()
+        } else if !wanted, state == "recording" || state == "paused" {
+            stopCapture()
+        }
     }
 
     func show(state s: String) {
         state = s
         let icon = ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass"][s] ?? "ear"
         item.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
-        status.stringValue = ["recording": "● Recording", "paused": "Paused", "stopping": "Finishing transcription…"][s] ?? "Stopped"
+        let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
+        let meeting = mode == "meetings" && inMeeting ? " · \(meetingName ?? "meeting")" : ""
+        status.stringValue = ["recording": "● Recording\(meeting)", "paused": "Paused", "stopping": "Finishing transcription…"][s]
+            ?? (mode == "meetings" ? "Waiting for a meeting" : "Stopped")
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
         startButton.title = s == "paused" ? "Resume" : "Start"
         startButton.isEnabled = s == "stopped" || s == "paused"

@@ -37,6 +37,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 - **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon shows the state: ear (stopped), filled ear (recording), pause (paused).
+- **Records always, or only meetings.** The **Always / Meetings** toggle in the panel (and right-click menu):
+  - *Always*: records until you pause or stop, including the room mic and any audio from meeting apps.
+  - *Meetings*: starts by itself when a meeting app (Zoom, Chrome/Meet, Teams, Slack, FaceTime, Discord) is using
+    the microphone, and stops 20s after it releases it. Detected through Core Audio's per-process state, so it
+    works for any call in those apps. Pausing or stopping by hand holds until the next meeting starts or ends.
 
 Output is `transcript.txt`:
 
@@ -85,5 +90,6 @@ on first use.
 
 ## Privacy
 
+In *Always* mode the mic records everything said near the Mac, not only meetings; use *Meetings* mode to limit it.
 This records and transcribes other people. Tell participants, and follow your local recording laws.
 Voiceprints are biometric data: keep the registry private and enroll only people who agreed.
