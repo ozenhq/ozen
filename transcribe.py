@@ -11,6 +11,7 @@ import os
 import pathlib
 import re
 import socket
+import subprocess
 import sys
 import time
 
@@ -66,6 +67,8 @@ encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "model
 # ponytail: online nearest-centroid clustering, no re-clustering; a voice split early stays split.
 speakers: list[list] = []  # [label, centroid, count]; named ones come from the registry
 registry_mtime = 0.0
+PULL_EVERY = 300  # seconds between registry pulls, so tags made on other machines arrive while running
+last_pull = 0.0
 
 
 def anon(label: str) -> bool:
@@ -74,7 +77,13 @@ def anon(label: str) -> bool:
 
 def load_registry() -> None:
     """(Re)load named voiceprints; train.py rewrites them after every tag, so pick up changes live."""
-    global registry_mtime, SAME_SPEAKER
+    global registry_mtime, SAME_SPEAKER, last_pull
+    if time.time() - last_pull > PULL_EVERY:
+        last_pull = time.time()
+        try:  # ponytail: offline or diverged just keeps the local prints; train.py reconciles on its next push
+            subprocess.run(["git", "-C", str(REGISTRY), "pull", "--ff-only", "-q"], capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     files = sorted(REGISTRY.glob("voices/*.json"))
     config = REGISTRY / "config.json"
     mtime = max((f.stat().st_mtime for f in [*files, config] if f.exists()), default=0.0)

@@ -7,17 +7,19 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | app | bar
+ozen control: start | pause | resume | stop | status | health | look | app | bar
   start/resume  record + transcribe (builds the recorder if rec.swift changed)
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
+  look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
 const REC: &str = r"^\./rec chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
+const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
 
 fn home() -> String {
@@ -180,6 +182,41 @@ fn sign(path: &str, deep: bool) {
     }
 }
 
+const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, to pace automatic restarts
+
+fn start_transcriber() {
+    if !ok(cmd("git")
+        .args(["-C", "voices", "pull", "-q", "--ff-only"])
+        .stderr(Stdio::null()))
+    {
+        let _ = std::io::Write::write_all(
+            &mut log(),
+            b"voices registry pull failed; using local copy\n",
+        );
+    }
+    let _ = File::create(TR_STARTED);
+    spawn_detached(
+        cmd("uv").args(["run", "transcribe.py", "chunks", "transcript.txt"]),
+        log().into(),
+        log().into(),
+    );
+}
+
+/// While recording, a transcriber that died gets restarted. The app polls `status` every 2s, so this is the
+/// supervisor. At most once a minute, so one that crashes on start doesn't respawn in a tight loop.
+fn restart_dead_transcriber() {
+    let recent = fs::metadata(TR_STARTED)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < Duration::from_secs(60)));
+    if !recent && !running(TR) {
+        let _ = std::io::Write::write_all(
+            &mut log(),
+            b"transcriber not running while recording; restarting it\n",
+        );
+        start_transcriber();
+    }
+}
+
 fn build_rec() -> bool {
     if newer("rec", "rec.swift") {
         return true;
@@ -249,20 +286,7 @@ fn main() {
             }
             fs::create_dir_all("chunks").expect("create chunks/");
             if !running(TR) {
-                if !ok(cmd("git")
-                    .args(["-C", "voices", "pull", "-q", "--ff-only"])
-                    .stderr(Stdio::null()))
-                {
-                    let _ = std::io::Write::write_all(
-                        &mut log(),
-                        b"voices registry pull failed; using local copy\n",
-                    );
-                }
-                spawn_detached(
-                    cmd("uv").args(["run", "transcribe.py", "chunks", "transcript.txt"]),
-                    log().into(),
-                    log().into(),
-                );
+                start_transcriber();
             }
             if !running(REC) {
                 spawn_detached(cmd("./rec").arg("chunks"), log().into(), log().into());
@@ -288,10 +312,13 @@ fn main() {
         }
         "status" => {
             let state = if running(REC) {
+                restart_dead_transcriber();
                 "recording"
-            } else if Path::new(".stopping").exists() && running(TR) {
+            // .stopping outlives a drain that was killed; without the drain it's stale, not "stopping"
+            } else if Path::new(".stopping").exists() && running(TR) && running(DRAIN) {
                 "stopping"
             } else if running(TR) {
+                let _ = fs::remove_file(".stopping");
                 "paused"
             } else {
                 let _ = fs::remove_file(".stopping");
@@ -315,6 +342,13 @@ fn main() {
                     "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
                 );
             }
+            if let Ok(names) = fs::read_to_string("mic-fallback")
+                && let Some((using, silent)) = names.split_once('\n')
+            {
+                println!(
+                    "Using {using} because {silent} is silent. Pick an input in System Settings > Sound to switch"
+                );
+            }
             if let Ok(device) = fs::read_to_string("mic-silent") {
                 println!(
                     "Microphone is silent ({device}): pick another input in System Settings > Sound"
@@ -323,11 +357,26 @@ fn main() {
             let n = chunks_waiting();
             if !running(TR) {
                 println!(
-                    "Transcriber isn't running, {n} chunks waiting: press Stop, then Start (details in start.log)"
+                    "Transcriber stopped, {n} chunks waiting: restarting it automatically (details in start.log)"
                 );
             } else if n > 12 {
                 // >1 min behind (call+mic+local per 15s); first run also downloads the models
                 println!("Transcriber catching up: {n} chunks waiting");
+            }
+        }
+        // Snapshot for answering a question mid-meeting: screen image + recent transcript.
+        "look" => {
+            let n = std::env::args().nth(2).unwrap_or_else(|| "40".into());
+            if ok(cmd("screencapture").args(["-x", "-D1", "screen.png"]))
+                && ok(cmd("sips")
+                    .args(["-Z", "1280", "screen.png", "--out", "screen-small.png"])
+                    .stdout(Stdio::null()))
+            {
+                println!("screen: {}/screen-small.png", env!("CARGO_MANIFEST_DIR"));
+            }
+            // labels corrected by your tags
+            if !ok(cmd("uv").args(["run", "-q", "train.py", "show", &n])) {
+                exit(1);
             }
         }
         "app" => {
