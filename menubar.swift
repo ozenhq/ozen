@@ -251,6 +251,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
     var lastMeeting: Date?, meetingName: String?
     var lastWanted: Bool?  // act only when "should be recording" flips, so manual Pause/Stop stick until then
+    var adopted = false  // made the first decision since launch
+    let launchedAt = Date()
     let timeline = TimelineView()
     let timelineScroll = NSScrollView()
     let viewControl = NSSegmentedControl(labels: ["Transcript", "Timeline", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
@@ -461,9 +463,20 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             placeLabel = place?.label
             lastWanted = nil  // arriving at or leaving a place applies right away
         }
+        // Just launched, places set, no location yet: wait (up to 30s) rather than let the global mode decide
+        // for a place we can't see yet, e.g. start recording at a place set to meetings only.
+        if place == nil, here == nil, Date().timeIntervalSince(launchedAt) < 30, loadPlaces().contains(where: { $0.lat != nil }) {
+            return show(state: state)
+        }
         let wanted = place.map { $0.action == "record" || $0.action == "meetings" && inMeeting } ?? (mode == "always" || inMeeting)
         defer { lastWanted = wanted; show(state: state) }
         guard wanted != lastWanted else { return }
+        // First decision after launch may start recording, never stop one: a recording already running was
+        // started by hand (or by the previous app), and a relaunch or rebuild shouldn't end it.
+        if !adopted {
+            adopted = true
+            if !wanted { return }
+        }
         if wanted, state == "stopped" || state == "paused" {
             startCapture()
         } else if !wanted, state == "recording" || state == "paused" {
