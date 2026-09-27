@@ -8,8 +8,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
 const GAP: f64 = 600.0; // this much silence ends a meeting
-const KEV: &str = "http://127.0.0.1:8009/v1/systemone"; // local Kev (System One API), see ~/dev/kev
-const EXCERPT: usize = 1500; // chars of each meeting Kev reads; ponytail: head only, summarize first if it misjudges long meetings
+const KEV: &str = "http://127.0.0.1:8009/v1/systemone"; // local Kev (System One API), see ~/dev/kev; OZEN_KEV overrides
+const EXCERPT: usize = 1500; // chars of each candidate meeting Kev reads: its start and end
+const PICKED_BUDGET: usize = 4000; // chars of the picked meetings shared by every question, split between them
+const BATCH: usize = 8; // candidate meetings per Kev request, so prompts stay short however many meetings exist
 const RELATED: f64 = 0.5;
 
 pub struct Line {
@@ -103,8 +105,18 @@ impl Meeting {
             .collect::<Vec<_>>()
             .join("\n")
     }
-    fn excerpt(&self) -> String {
-        self.text().chars().take(EXCERPT).collect()
+    /// Start and end of the transcript within `budget` chars: what a meeting is about and where it landed.
+    fn excerpt(&self, budget: usize) -> String {
+        let chars: Vec<char> = self.text().chars().collect();
+        if chars.len() <= budget {
+            return chars.into_iter().collect();
+        }
+        let half = budget / 2;
+        let (head, tail): (String, String) = (
+            chars[..half].iter().collect(),
+            chars[chars.len() - half..].iter().collect(),
+        );
+        format!("{head}\n[…]\n{tail}")
     }
     /// Tab separated for the menu bar: id, start, minutes, lines, first words.
     pub fn row(&self) -> String {
@@ -124,28 +136,44 @@ impl Meeting {
     }
 }
 
-/// Ask Kev which of `others` belong with `picked`: one yes/no question per meeting, answered in one call.
-fn kev_related(picked: &[&Meeting], others: &[&Meeting]) -> Result<Vec<(String, f64)>, String> {
-    if others.is_empty() {
-        return Ok(vec![]);
-    }
+/// Ask Kev which of `others` belong with `picked`: one yes/no question per meeting, `BATCH` per request.
+fn kev_related(
+    url: &str,
+    picked: &[&Meeting],
+    others: &[&Meeting],
+) -> Result<Vec<(String, f64)>, String> {
+    let share = (PICKED_BUDGET / picked.len().max(1)).max(300);
     let state = picked
         .iter()
-        .map(|m| m.excerpt())
+        .map(|m| m.excerpt(share))
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
-    let questions: Map<String, Value> = others
-        .iter()
-        .map(|m| {
-            (m.id.clone(), json!({
-                "type": "noul",
-                "instructions": format!("The state holds the transcripts of meetings the user picked. Is this other meeting part of the same project, topic or thread of work, so its transcript would help answer questions about the picked ones?\n\nOther meeting:\n{}", m.excerpt()),
-                "criteria": {"true": "Same project, topic, decision or people working on the same thing", "false": "A different subject; only shares small talk or common words"},
-            }))
-        })
-        .collect();
-    let body = json!({"state": format!("Picked meetings:\n\n{state}"), "questions": questions})
-        .to_string();
+    let mut scores = vec![];
+    for batch in others.chunks(BATCH) {
+        let questions: Map<String, Value> = batch
+            .iter()
+            .map(|m| {
+                (m.id.clone(), json!({
+                    "type": "noul",
+                    "instructions": format!("The state holds the transcripts of meetings the user picked. Is this other meeting part of the same project, topic or thread of work, so its transcript would help answer questions about the picked ones?\n\nOther meeting:\n{}", m.excerpt(EXCERPT)),
+                    "criteria": {"true": "Same project, topic, decision or people working on the same thing", "false": "A different subject; only shares small talk or common words"},
+                }))
+            })
+            .collect();
+        let answers = ask(
+            url,
+            &json!({"state": format!("Picked meetings:\n\n{state}"), "questions": questions}),
+        )?;
+        scores.extend(batch.iter().filter_map(|m| {
+            answers["answers"][&m.id]["noul"]
+                .as_f64()
+                .map(|p| (m.id.clone(), p))
+        }));
+    }
+    Ok(scores)
+}
+
+fn ask(url: &str, body: &Value) -> Result<Value, String> {
     let mut curl = Command::new("curl")
         .args([
             "-sS",
@@ -156,7 +184,7 @@ fn kev_related(picked: &[&Meeting], others: &[&Meeting]) -> Result<Vec<(String, 
             "content-type: application/json",
             "--data-binary",
             "@-",
-            KEV,
+            url,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -166,26 +194,17 @@ fn kev_related(picked: &[&Meeting], others: &[&Meeting]) -> Result<Vec<(String, 
     curl.stdin
         .take()
         .unwrap()
-        .write_all(body.as_bytes())
+        .write_all(body.to_string().as_bytes())
         .map_err(|e| e.to_string())?;
     let out = curl.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
-            "Kev isn't answering at {KEV} ({}{}). Start it: cd ~/dev/kev && uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009",
+            "Kev isn't answering at {url} ({}{}). Start it: cd ~/dev/kev && uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009",
             String::from_utf8_lossy(&out.stderr).trim(),
             String::from_utf8_lossy(&out.stdout).trim()
         ));
     }
-    let answers: Value =
-        serde_json::from_slice(&out.stdout).map_err(|e| format!("Kev reply: {e}"))?;
-    Ok(others
-        .iter()
-        .filter_map(|m| {
-            answers["answers"][&m.id]["noul"]
-                .as_f64()
-                .map(|p| (m.id.clone(), p))
-        })
-        .collect())
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("Kev reply: {e}"))
 }
 
 /// Write the picked meetings (plus Kev's related ones) into context/<now>/ and return that folder.
@@ -207,7 +226,8 @@ pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
     let mut added = vec![];
     if kev {
         let others: Vec<&Meeting> = all.iter().filter(|m| !ids.contains(&m.id)).collect();
-        for (id, p) in kev_related(&picked, &others)? {
+        let url = std::env::var("OZEN_KEV").unwrap_or_else(|_| KEV.into());
+        for (id, p) in kev_related(&url, &picked, &others)? {
             eprintln!("kev: {} {p:.2}", by_id[id.as_str()].file());
             if p >= RELATED {
                 added.push((by_id[id.as_str()], p));
@@ -219,8 +239,21 @@ pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
         env!("CARGO_MANIFEST_DIR"),
         Local::now().format("%Y-%m-%d-%H%M%S")
     );
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    for m in picked.iter().chain(added.iter().map(|(m, _)| m)) {
+    write_folder(&dir, &picked, kev.then_some(&added[..]))?;
+    Ok(dir)
+}
+
+/// The folder an agent starts in: one file per meeting, AGENTS.md/CLAUDE.md saying what they are, launchers.
+fn write_folder(
+    dir: &str,
+    picked: &[&Meeting],
+    added: Option<&[(&Meeting, f64)]>,
+) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for m in picked
+        .iter()
+        .chain(added.unwrap_or_default().iter().map(|(m, _)| m))
+    {
         fs::write(format!("{dir}/{}", m.file()), m.text() + "\n").map_err(|e| e.to_string())?;
     }
     let list = |ms: Vec<String>| {
@@ -230,7 +263,7 @@ pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
             ms.join(", ")
         }
     };
-    let kev_line = if kev {
+    let kev_line = if let Some(added) = added {
         format!(
             "\nAdded by Kev as related (probability): {}",
             list(
@@ -258,7 +291,7 @@ Picked by the user: {}{kev_line}\n\nRead these transcripts before answering ques
         fs::write(&path, command_script(tool)).map_err(|e| e.to_string())?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
-    Ok(dir)
+    Ok(())
 }
 
 fn command_script(tool: &str) -> String {
@@ -275,6 +308,65 @@ mod tests {
         let s = command_script("hermes");
         assert!(s.starts_with("#!/bin/zsh -il\n"));
         assert!(s.contains(r#"cd "${0:A:h}" && export TERMINAL_CWD="$PWD" && exec hermes"#));
+    }
+
+    fn meeting(t: f64, texts: &[&str]) -> Meeting {
+        let lines = texts
+            .iter()
+            .map(|s| Line {
+                t,
+                text: s.to_string(),
+            })
+            .collect();
+        Meeting {
+            id: (t as i64).to_string(),
+            lines,
+        }
+    }
+
+    #[test]
+    fn excerpts_keep_the_start_and_the_end() {
+        let m = meeting(0.0, &["abcdef", "ghijkl"]);
+        assert_eq!(m.excerpt(100), "abcdef\nghijkl");
+        assert_eq!(m.excerpt(6), "abc\n[…]\njkl");
+    }
+
+    #[test]
+    fn the_folder_holds_the_transcripts_and_says_what_they_are() {
+        let dir = std::env::temp_dir().join(format!("ozen-test-{}", std::process::id()));
+        let d = dir.to_str().unwrap();
+        let (a, b) = (
+            meeting(1e9, &["[x] A (room): hi"]),
+            meeting(2e9, &["[y] B (call): yo"]),
+        );
+        write_folder(d, &[&a], Some(&[(&b, 0.87)])).unwrap();
+        let agents = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+        assert!(agents.contains(&format!("Picked by the user: `{}`", a.file())));
+        assert!(agents.contains(&format!("`{}` (0.87)", b.file())));
+        assert_eq!(
+            fs::read_to_string(dir.join(a.file())).unwrap(),
+            "[x] A (room): hi\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
+            "@AGENTS.md\n"
+        );
+        let mode = fs::metadata(dir.join("hermes.command"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "launchers must be executable");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_unreachable_kev_is_an_error_that_says_how_to_start_it() {
+        let m = meeting(0.0, &["x"]);
+        let err = kev_related("http://127.0.0.1:9/v1/systemone", &[&m], &[&m]).unwrap_err();
+        assert!(
+            err.contains("Kev isn't answering") && err.contains("kev.serve"),
+            "{err}"
+        );
     }
 
     #[test]
