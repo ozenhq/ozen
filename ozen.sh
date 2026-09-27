@@ -39,7 +39,9 @@ build_app() {
 </dict></plist>
 PLIST
     codesign --force --deep -s - "$APP" 2>/dev/null  # ad-hoc: required for macOS to grant it permissions
-    touch "$APP"  # refresh Finder/Spotlight
+    # Register with Launch Services + Spotlight so it's findable right away, not after the next index pass.
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"
+    mdimport "$APP" 2>/dev/null
 }
 
 case "$1" in
