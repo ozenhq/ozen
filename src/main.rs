@@ -243,7 +243,7 @@ fn prepare_rec() -> bool {
 
 fn build_app(app: &str) -> bool {
     let bin = format!("{app}/Contents/MacOS/Ozen");
-    if newer(&bin, "menubar.swift") && newer(&bin, "icon.swift") {
+    if newer(&bin, "menubar.swift") && newer(&bin, "icon.swift") && newer(&bin, "map.html") {
         return true;
     }
     let resources = format!("{app}/Contents/Resources");
@@ -252,6 +252,9 @@ fn build_app(app: &str) -> bool {
     }
     if !ok(cmd("swiftc").args(["-O", "menubar.swift", "-o", &bin])) {
         return false;
+    }
+    if fs::copy("map.html", format!("{resources}/map.html")).is_err() {
+        eprintln!("map.html missing; the Places map stays blank");
     }
     if !ok(cmd("swift").args(["icon.swift", &resources])) {
         eprintln!("icon build failed; app still works");
