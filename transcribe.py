@@ -6,6 +6,7 @@
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
+import functools
 import json
 import os
 import pathlib
@@ -22,7 +23,13 @@ import torch
 from mlx_whisper.audio import load_audio, log_mel_spectrogram, pad_or_trim
 from mlx_whisper.decoding import detect_language
 from huggingface_hub import snapshot_download
+from mlx_whisper.load_models import load_model
 from mlx_whisper.transcribe import ModelHolder
+
+# mlx_whisper caches a single model, but every utterance uses two: stock turbo detects the language, then
+# the Hebrew model transcribes. Swapping reloaded ~1.6GB twice per line and made the transcriber fall behind.
+# ponytail: keeps every model used resident (two, ~3GB); bound the cache if more models are added.
+ModelHolder.get_model = staticmethod(functools.cache(lambda path, dtype: load_model(path, dtype=dtype)))
 from speechbrain.inference.speaker import EncoderClassifier
 
 HERE = pathlib.Path(__file__).parent
