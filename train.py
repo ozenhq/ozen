@@ -5,7 +5,6 @@
 """Speaker tagging and voiceprint training.
 
     uv run train.py tag <line-id> "Dana Levi"   # tag one transcript line (empty name clears), then retrain
-    uv run train.py ignore <line-id>...         # tag lines as a voice to ignore (a video playing nearby), then retrain
     uv run train.py retrain                     # rebuild voiceprints from all tags
     uv run train.py show [N]                    # last N lines with the best known speaker
 
@@ -16,7 +15,7 @@ transcriber), relabels untagged lines with a confidence, queues the least certai
 to tag next (stats.json "review"), logs the trend (history.jsonl), and pushes the registry.
 That is the loop: tag what it asks -> better prints and threshold -> fewer uncertain lines.
 
-Lines tagged IGNORE are not a person: their prints stay local (ignore.json, never pushed) and are
+Lines tagged IGNORE (`ozen ignore <line-id>...`) are not a person: their prints stay local (ignore.json, never pushed) and are
 matched one by one, since a video playing nearby has many voices. Lines closer to them than to any
 person are labeled IGNORE, and the transcriber drops such utterances live.
 """
@@ -205,11 +204,6 @@ cmd = sys.argv[1] if len(sys.argv) > 1 else "show"
 if cmd == "tag":
     tags = read(TAGS, {})
     tags[sys.argv[2]] = sys.argv[3].strip() if len(sys.argv) > 3 else ""
-    TAGS.write_text(json.dumps(tags, ensure_ascii=False, indent=1))
-    retrain()
-elif cmd == "ignore":
-    tags = read(TAGS, {})
-    tags.update(dict.fromkeys(sys.argv[2:], IGNORE))
     TAGS.write_text(json.dumps(tags, ensure_ascii=False, indent=1))
     retrain()
 elif cmd == "retrain":

@@ -57,7 +57,7 @@ func meetingUsingMic() -> String? {
     return nil
 }
 
-struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String }
+struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int? }
 
 // MARK: timeline
 
@@ -203,7 +203,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
     var review: [String] = []  // line ids train.py is least sure about, most uncertain first
-    var shown: [String: (spk: String, t: Double)] = [:]  // line id -> speaker as shown in the transcript
+    var shown: [String: (spk: String, t: Double, run: Int?)] = [:]  // line id -> speaker as shown in the transcript
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
     var lastMeeting: Date?, meetingName: String?
@@ -448,7 +448,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             let text = r["text"] as? String ?? ""
             let d = r["d"] as? Double ?? min(15, max(1, Double(text.count) / 14))  // older lines: estimate from length
             return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), t: t, d: d, spk: r["spk"] as? String ?? "?",
-                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? ""))
+                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? "", run: r["run"] as? Int))
         }.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
@@ -485,7 +485,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             let guess = labels[l.id]
             let unsure = !tagged && (guess?["unsure"] as? Bool ?? false)
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
-            shown[l.id] = (speaker, l.t)
+            shown[l.id] = (speaker, l.t, l.run)
             let ignored = speaker == ignoreTag
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
@@ -567,9 +567,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         ignore.representedObject = [id, ignoreTag]
         menu.addItem(ignore)
         // Only session labels: a named person (you) is never one click from being ignored.
-        if let (spk, t) = shown[id], spk.range(of: "^S[0-9]+$", options: .regularExpression) != nil {
-            // S1, S2... restart with the transcriber, so only lines near this one are the same voice.
-            let same = shown.filter { $0.value.spk == spk && abs($0.value.t - t) < 3600 }.map(\.key)
+        if let (spk, t, run) = shown[id], spk.range(of: "^S[0-9]+$", options: .regularExpression) != nil {
+            // S1, S2... restart with the transcriber, so only that run's lines are the same voice
+            // (older lines have no run: those within an hour).
+            let same = shown.filter { l in l.value.spk == spk && (run != nil ? l.value.run == run : abs(l.value.t - t) < 3600) }.map(\.key)
             let all = NSMenuItem(title: "Ignore all \(same.count) line\(same.count == 1 ? "" : "s") by \(spk)", action: #selector(ignoreAll(_:)), keyEquivalent: "")
             all.target = self
             all.representedObject = same
@@ -616,7 +617,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
 
     @objc func ignoreAll(_ sender: NSMenuItem) {
         guard let ids = sender.representedObject as? [String] else { return }
-        tag(ids, ignoreTag, command: "cd \"$OZEN_DIR\" && uv run -q train.py ignore ${=OZEN_ID}")
+        tag(ids, ignoreTag, command: "cd \"$OZEN_DIR\" && target/release/ozen ignore ${=OZEN_ID}")
     }
 
     func tag(_ id: String, _ name: String) {
