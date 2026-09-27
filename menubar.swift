@@ -977,7 +977,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         if let (spk, t) = shown[id], spk.range(of: "^S[0-9]+$", options: .regularExpression) != nil {
             // S1, S2... restart with the transcriber, so only lines near this one are the same voice.
             let same = shown.filter { $0.value.spk == spk && abs($0.value.t - t) < 3600 }.map(\.key)
-            let all = NSMenuItem(title: "Ignore all \(same.count) lines by \(spk)", action: #selector(ignoreAll(_:)), keyEquivalent: "")
+            let all = NSMenuItem(title: "Ignore all \(same.count) line\(same.count == 1 ? "" : "s") by \(spk)", action: #selector(ignoreAll(_:)), keyEquivalent: "")
             all.target = self
             all.representedObject = same
             menu.addItem(all)
