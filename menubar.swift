@@ -8,6 +8,7 @@
 import AppKit
 import CoreAudio
 import CoreLocation
+import MapKit  // Apple Maps: free in native apps, no API key
 
 let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
@@ -205,7 +206,7 @@ final class TimelineView: NSView, NSViewToolTipOwner {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate {
+final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, MKMapViewDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let popover = NSPopover()
     let scroll = NSTextView.scrollableTextView()
@@ -239,6 +240,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var settingPlace: Int?  // row waiting for a location fix after "Use current location"
     var placesWindow: NSWindow?
     let placesStack = NSStackView()
+    let placesMap = MKMapView()
     let placesNote = NSTextField(wrappingLabelWithString: "")
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -500,6 +502,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             placesNote.font = .systemFont(ofSize: 11)
             placesNote.textColor = .secondaryLabelColor
             w.contentView = placesStack
+            placesMap.delegate = self
+            placesMap.heightAnchor.constraint(equalToConstant: 280).isActive = true
             placesWindow = w
         }
         buildPlaces()
@@ -515,6 +519,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             + "Always/Meetings. Set a place to where you are now with “Use current location”.")
         intro.font = .systemFont(ofSize: 12)
         placesStack.addArrangedSubview(intro)
+        placesStack.addArrangedSubview(placesMap)
         for (i, p) in loadPlaces().enumerated() {
             let name = NSTextField(string: p.label)
             name.placeholderString = "Label"
@@ -547,9 +552,53 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         add.bezelStyle = .rounded
         placesStack.addArrangedSubview(add)
         placesStack.addArrangedSubview(placesNote)
-        let rowWidth = placesStack.arrangedSubviews.dropFirst().map(\.fittingSize.width).max() ?? 536
+        let rowWidth = placesStack.arrangedSubviews.dropFirst(2).map(\.fittingSize.width).max() ?? 536
+        placesMap.constraints.filter { $0.firstAttribute == .width }.forEach { placesMap.removeConstraint($0) }
+        placesMap.widthAnchor.constraint(equalToConstant: rowWidth).isActive = true
+        showPlacesOnMap()
         intro.preferredMaxLayoutWidth = rowWidth  // wrap the intro to the rows, so it never squeezes them
         placesWindow?.setContentSize(placesStack.fittingSize)
+    }
+
+    /// A pin and a radius circle per located place; red records, gray turns recording off.
+    func showPlacesOnMap() {
+        placesMap.removeAnnotations(placesMap.annotations.filter { !($0 is MKUserLocation) })
+        placesMap.removeOverlays(placesMap.overlays)
+        let located = loadPlaces().compactMap { p in p.lat.flatMap { lat in p.lon.map { (p, CLLocationCoordinate2D(latitude: lat, longitude: $0)) } } }
+        placesMap.showsUserLocation = !located.isEmpty  // never ask for location before a place uses it
+        for (p, c) in located {
+            let pin = MKPointAnnotation()
+            pin.coordinate = c
+            pin.title = p.label
+            pin.subtitle = placeActions.first { $0.0 == p.action }?.1
+            placesMap.addAnnotation(pin)
+            let circle = MKCircle(center: c, radius: placeRadius)
+            circle.title = p.action
+            placesMap.addOverlay(circle)
+        }
+        if !located.isEmpty {
+            let rect = placesMap.overlays.reduce(MKMapRect.null) { $0.union($1.boundingMapRect) }
+            placesMap.setVisibleMapRect(rect, edgePadding: NSEdgeInsets(top: 40, left: 40, bottom: 40, right: 40), animated: false)
+        } else if let here {
+            placesMap.setRegion(MKCoordinateRegion(center: here.coordinate, latitudinalMeters: 2000, longitudinalMeters: 2000), animated: false)
+        }
+    }
+
+    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        guard !(annotation is MKUserLocation) else { return nil }
+        let v = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: nil)
+        v.markerTintColor = annotation.subtitle == placeActions[0].1 ? .systemRed : .systemGray
+        v.glyphImage = NSImage(systemSymbolName: annotation.subtitle == placeActions[0].1 ? "ear.fill" : "ear", accessibilityDescription: nil)
+        return v
+    }
+
+    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        let r = MKCircleRenderer(overlay: overlay)
+        let color: NSColor = (overlay as? MKCircle)?.title == "record" ? .systemRed : .systemGray
+        r.fillColor = color.withAlphaComponent(0.15)
+        r.strokeColor = color
+        r.lineWidth = 1.5
+        return r
     }
 
     func editPlaces(_ change: (inout [Place]) -> Void) {
@@ -559,6 +608,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         watchLocation()
         lastWanted = nil  // a changed place applies right away
         autoControl()
+        showPlacesOnMap()
     }
 
     /// Save a label still being typed while row indexes are valid; a field removed mid-edit would rename the wrong row.
