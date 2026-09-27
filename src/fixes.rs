@@ -55,7 +55,8 @@ fn bump(counts: &mut Vec<(String, usize)>, key: String) {
 }
 
 /// What (heard, right) pairs teach: the words the fixes added, most used first, and each correction made
-/// FIX_REPEAT+ times (the most common one, when a phrase was fixed different ways).
+/// FIX_REPEAT+ times (the most common one, when a phrase was fixed different ways). A correction is
+/// skipped while any fixed line still keeps the "wrong" phrase: there it was right, so replacing it is unsafe.
 pub fn rules(pairs: &[(&str, &str)]) -> Value {
     let (mut added, mut fixed) = (vec![], vec![]);
     for (heard, right) in pairs {
@@ -81,7 +82,16 @@ pub fn rules(pairs: &[(&str, &str)]) -> Value {
     let mut replace = Map::new();
     for (pair, _) in fixed.into_iter().filter(|(_, n)| *n >= FIX_REPEAT) {
         let (wrong, right) = pair.split_once('\t').unwrap();
-        replace.entry(wrong).or_insert(json!(right));
+        let kept = pairs.iter().any(|(_, r)| {
+            WORD.find_iter(r)
+                .map(|m| m.as_str())
+                .collect::<Vec<_>>()
+                .windows(wrong.split(' ').count())
+                .any(|w| w.join(" ") == wrong)
+        });
+        if !kept {
+            replace.entry(wrong).or_insert(json!(right));
+        }
     }
     let vocab: Vec<String> = added
         .into_iter()
@@ -212,5 +222,17 @@ mod tests {
         ]);
         assert_eq!(r["replace"], json!({"פי אר": "PR"})); // קב was fixed once each way: no rule
         assert_eq!(r["vocab"], json!(["PR", "ג'ירה", "Kev"]));
+    }
+
+    #[test]
+    fn no_replacement_where_a_fix_kept_the_phrase() {
+        let r = rules(&[
+            ("קב אמר", "Kev אמר"),
+            ("שאלתי את קב", "שאלתי את Kev"),
+            ("קב הזמן", "קב הזמן, בדיוק"),
+        ]);
+        assert_eq!(r["replace"], json!({}));
+        let r = rules(&[("קב אמר", "Kev אמר"), ("שאלתי את קב", "שאלתי את Kev")]);
+        assert_eq!(r["replace"], json!({"קב": "Kev"}));
     }
 }
