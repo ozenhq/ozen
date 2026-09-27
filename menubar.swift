@@ -95,7 +95,7 @@ func meetingUsingMic() -> String? {
     return nil
 }
 
-struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int? }
+struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int?, doubt: Double? }
 
 // MARK: timeline
 
@@ -242,9 +242,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
-    var reviewQueue: [String] = []  // line ids train.py is least sure about, most uncertain first
+    var reviewQueue: [String] = []  // untagged unsure line ids, most uncertain first
     var review: [String] = []  // the queue minus lines too old to remember who said them
     let reviewMaxAge: Double = 600  // seconds
+    let unsureDoubt = 0.08  // train.py UNSURE: this close to the threshold, or to a second person
     var shown: [String: (spk: String, t: Double, run: Int?)] = [:]  // line id -> speaker as shown in the transcript
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
@@ -867,7 +868,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let text = r["text"] as? String ?? ""
             let d = r["d"] as? Double ?? min(15, max(1, Double(text.count) / 14))  // older lines: estimate from length
             return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), t: t, d: d, spk: r["spk"] as? String ?? "?",
-                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? "", run: r["run"] as? Int))
+                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? "", run: r["run"] as? Int,
+                            doubt: r["doubt"] as? Double))
         }.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
@@ -885,6 +887,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let tags = (json("tags.json") as? [String: String] ?? [:]).merging(pending) { $1 }
         let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
         let fixes = (json("fixes.json") as? [String: String] ?? [:]).merging(pendingFixes) { $1 }
+        let threshold = (json("stats.json") as? [String: Any])?["threshold"] as? Double
+        // How unsure a line is, nil when sure: train.py's verdict once it has retrained, before that the
+        // transcriber's own (same formula), so new lines reach Review without waiting for the next tag.
+        func unsureBy(_ l: Line) -> Double? {
+            guard let g = labels[l.id] else { return l.doubt.flatMap { $0 < unsureDoubt ? $0 : nil } }
+            guard g["unsure"] as? Bool == true else { return nil }
+            guard let sim = g["sim"] as? Double, let thr = threshold else { return 0 }
+            return min(abs(sim - thr), g["margin"] as? Double ?? 0)
+        }
+        var queue: [(Double, String)] = []
         let out = NSMutableAttributedString()
         headerRanges = [:]
         let history = lines(limit: 5000)  // timeline spans more than the transcript shows
@@ -895,7 +907,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let guess = labels[l.id]
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             return speaker == ignoreTag ? nil : Segment(id: l.id, t: l.t, d: l.d, speaker: speaker,
-                                                        text: l.text, unsure: !tagged && (guess?["unsure"] as? Bool ?? false))
+                                                        text: l.text, unsure: !tagged && unsureBy(l) != nil)
         }
         shown = [:]
         if atEnd { scrollTimelineToEnd() }
@@ -903,7 +915,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         for l in all {
             let tagged = !(tags[l.id] ?? "").isEmpty
             let guess = labels[l.id]
-            let unsure = !tagged && (guess?["unsure"] as? Bool ?? false)
+            let doubt = tagged ? nil : unsureBy(l)
+            let unsure = doubt != nil
+            if let doubt { queue.append((doubt, l.id)) }
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             let said = fixes[l.id].flatMap { $0.isEmpty ? nil : $0 } ?? l.text
             shown[l.id] = (speaker, l.t, l.run)
@@ -945,7 +959,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         if let first = s["accuracy_first"] as? Double, let now = s["accuracy"] as? Double, first != now {
             acc += " (was \(pct(first)))"
         }
-        reviewQueue = (s["review"] as? [String] ?? []).filter { (tags[$0] ?? "").isEmpty && headerRanges[$0] != nil }
+        reviewQueue = queue.sorted { $0.0 < $1.0 }.map(\.1)
         refreshReview()
         let ignoredLines = (s["ignored"] as? Int ?? 0) > 0 ? " · \(s["ignored"]!) ignored" : ""
         footer.stringValue = "  \(acc) · \(tagged) tagged\(ignoredLines) · orange ? = unsure, tag it to teach ozen · click text to fix it"

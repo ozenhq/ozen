@@ -128,6 +128,15 @@ def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
     return speakers[-1][0], e
 
 
+def doubt(e: np.ndarray) -> float | None:
+    """How unsure train.py would be about this line (same formula), so Review can ask before the next retrain."""
+    sims = sorted((float(s[1] @ e) for s in speakers if not anon(s[0])), reverse=True)
+    if not sims:
+        return None
+    margin = sims[0] - sims[1] if len(sims) > 1 else sims[0] - SAME_SPEAKER
+    return round(min(abs(sims[0] - SAME_SPEAKER), margin), 3)
+
+
 def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
     """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes."""
     n = int(frame * SR)
@@ -243,9 +252,11 @@ while True:
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
                         fh.write(line + "\n")
                         print(line, flush=True)
+                        e = esum / np.linalg.norm(esum)
                         rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "d": round(end - start, 2),
-                               "src": SOURCE.get(tag, tag), "run": RUN,
-                               "spk": spk, "text": text, "e": (esum / np.linalg.norm(esum)).round(5).tolist()}
+                               "src": SOURCE.get(tag, tag), "run": RUN, "spk": spk, "text": text, "e": e.round(5).tolist()}
+                        if (dt := doubt(e)) is not None:
+                            rec["doubt"] = dt
                         if text != heard:
                             rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
