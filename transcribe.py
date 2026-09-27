@@ -128,6 +128,7 @@ def load_registry() -> None:
 
 load_registry()
 unknown = 0
+RUN = int(time.time())  # S1, S2... are per run: lines carry it so the panel can group a label's lines
 
 
 def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
@@ -299,7 +300,7 @@ while True:
                         fh.write(line + "\n")
                         print(line, flush=True)
                         rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "d": round(end - start, 2),
-                               "src": SOURCE.get(tag, tag),
+                               "src": SOURCE.get(tag, tag), "run": RUN,
                                "spk": spk, "text": text, "e": (esum / np.linalg.norm(esum)).round(5).tolist()}
                         if text != heard:
                             rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction

@@ -10,13 +10,14 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | meetings | gather | app | bar
+ozen control: start | pause | resume | stop | status | health | look | fix | ignore | meetings | gather | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
+  ignore ID...  tag transcript lines as a voice to ignore (a video playing nearby), then retrain
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   meetings      list past meetings: id, start, minutes, lines, first words (tab separated)
   gather [--kev] ID...
@@ -30,6 +31,7 @@ const REC: &str = r"^target/release/rec chunks"; // anchored so pgrep never matc
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
+const IGNORE: &str = "Ignored"; // reserved tag: a voice to drop, not a person (same in train.py, transcribe.py, menubar.swift)
 
 fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
@@ -305,6 +307,17 @@ fn build_app(app: &str) -> bool {
     true
 }
 
+/// tags.json with every line in `ids` tagged IGNORE; other tags kept. Unreadable JSON starts empty,
+/// like train.py's `read`.
+fn with_ignores(tags: &str, ids: &[String]) -> String {
+    let mut map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(tags).unwrap_or_default();
+    for id in ids {
+        map.insert(id.clone(), IGNORE.into());
+    }
+    serde_json::to_string_pretty(&map).expect("serialize tags")
+}
+
 fn main() {
     // The repo is where the sources, chunks and logs live, wherever this is called from.
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("cd to the ozen checkout");
@@ -436,6 +449,19 @@ fn main() {
                 }
             }
         }
+        // Retraining (train.py) turns the tagged lines into prints the transcriber drops.
+        "ignore" => {
+            let ids: Vec<String> = std::env::args().skip(2).collect();
+            if ids.is_empty() {
+                println!("{USAGE}");
+                exit(2);
+            }
+            let tags = fs::read_to_string("tags.json").unwrap_or_default();
+            fs::write("tags.json", with_ignores(&tags, &ids)).expect("write tags.json");
+            if !ok(cmd("uv").args(["run", "-q", "train.py", "retrain"])) {
+                exit(1);
+            }
+        }
         "app" => {
             if !build_app(&app) {
                 exit(1);
@@ -478,7 +504,21 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    use super::recorder_blocked;
+    use super::{recorder_blocked, with_ignores};
+
+    #[test]
+    fn ignoring_keeps_other_tags() {
+        let out = with_ignores(r#"{"a": "Dana Levi", "b": ""}"#, &["b".into(), "c".into()]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"a": "Dana Levi", "b": "Ignored", "c": "Ignored"})
+        );
+        assert_eq!(
+            with_ignores("not json", &["x".into()]),
+            "{\n  \"x\": \"Ignored\"\n}"
+        );
+    }
 
     #[test]
     fn blocked_only_when_the_last_recorder_start_failed() {

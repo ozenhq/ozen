@@ -102,11 +102,11 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen fix <line-id> "right text"` | Correct a line's text (what the panel does); empty clears. Relearns hint words and corrections |
 | `target/release/ozen meetings` | Past meetings, newest first: id, start, minutes, lines, first words |
 | `target/release/ozen gather [--kev] ID...` | Write those meetings into `context/<now>/` and print the folder; `--kev` adds the ones Kev judges related |
+| `target/release/ozen ignore <line-id>...` | Tag lines as a voice to ignore (what **Ignore all** in the panel does). Retrains |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
-| `uv run train.py ignore <line-id>...` | Tag lines as a voice to ignore (what **Ignore** in the panel does). Retrains |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
 | `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
