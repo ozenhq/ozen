@@ -40,7 +40,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 - **Learns from your text fixes.** Click a line's text in the panel to correct what was said (empty restores it).
   `ozen fix` keeps the fix in `fixes.json` and relearns `learned.json`, which the live transcriber reads:
   words your fixes add go into Whisper's hint (up to 30, most used first), and a correction you make twice
-  (e.g. "פי אר" → "PR") is applied to new lines automatically. Each fix also keeps its chunk audio in `fixes/`
+  (e.g. "פי אר" → "PR") is applied to new lines automatically (the line keeps Whisper's own text as `heard`, which later fixes learn
+  from, so undoing a wrong correction cancels it). A correction is skipped while any fix keeps that phrase as right. Each fix also keeps its chunk audio in `fixes/`
   with the right text (`fixes/dataset.jsonl`), ready for fine-tuning a model later.
 
 - **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript

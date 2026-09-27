@@ -165,6 +165,13 @@ def learned() -> dict:
         return {}
 
 
+def corrected(text: str) -> str:
+    """Apply the corrections you made repeatedly (learned.json "replace"), whole words only."""
+    for wrong, right in learned().get("replace", {}).items():
+        text = re.sub(rf"(?<!\w){re.escape(wrong)}(?!\w)", right, text)
+    return text
+
+
 def hint(tag: str) -> str:
     """Prompt with the vocabulary + known people's names + words from your fixes + the previous line,
     so Whisper spells them."""
@@ -205,8 +212,6 @@ def transcribe(clip: np.ndarray, tag: str) -> str:
     ).strip()
     if noise(text):
         return ""
-    for wrong, right in learned().get("replace", {}).items():  # corrections you made repeatedly
-        text = re.sub(rf"(?<!\w){re.escape(wrong)}(?!\w)", right, text)
     last_text[tag] = text
     return text
 
@@ -268,7 +273,8 @@ while True:
                         lines.append([start, spk, text, w * e, end])
                     prev = spk
                 with out.open("a") as fh, LINES.open("a") as lj:
-                    for i, (start, spk, text, esum, end) in enumerate(lines):
+                    for i, (start, spk, heard, esum, end) in enumerate(lines):
+                        text = corrected(heard)
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
                         fh.write(line + "\n")
@@ -276,6 +282,8 @@ while True:
                         rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "d": round(end - start, 2),
                                "src": SOURCE.get(tag, tag),
                                "spk": spk, "text": text, "e": (esum / np.linalg.norm(esum)).round(5).tolist()}
+                        if text != heard:
+                            rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)

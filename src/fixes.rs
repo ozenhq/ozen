@@ -42,6 +42,13 @@ fn lines() -> Vec<Map<String, Value>> {
         .collect()
 }
 
+/// Whisper's own text, before automatic corrections (the transcriber keeps it as "heard" when they changed it).
+fn heard(r: &Map<String, Value>) -> &str {
+    r.get("heard")
+        .and_then(Value::as_str)
+        .unwrap_or(str_of(r, "text"))
+}
+
 fn str_of<'a>(r: &'a Map<String, Value>, k: &str) -> &'a str {
     r.get(k).and_then(Value::as_str).unwrap_or("")
 }
@@ -134,11 +141,10 @@ pub fn fix(id: &str, text: &str) -> Result<(), String> {
     write(FIXES, &Value::Object(fixes.clone()));
 
     let by_id = |s: &str| all.iter().find(|r| str_of(r, "id") == s);
-    // ponytail: learns from the transcriber's output, so a wrong auto-replacement you fix back counts as a
-    // new correction (right -> wrong); keep the raw text in lines.jsonl if that starts to matter.
+    // Learn from what Whisper heard, before automatic corrections: undoing a wrong one then just cancels it.
     let pairs: Vec<(&str, &str)> = fixes
         .iter()
-        .filter_map(|(s, t)| Some((str_of(by_id(s)?, "text"), t.as_str()?)))
+        .filter_map(|(s, t)| Some((heard(by_id(s)?), t.as_str()?)))
         .collect();
     let learned = rules(&pairs);
     write(LEARNED, &learned);
