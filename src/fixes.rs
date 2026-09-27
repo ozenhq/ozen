@@ -2,7 +2,7 @@
 //!
 //! `ozen fix <line-id> "right text"` stores the fix in fixes.json (empty text clears it) and relearns
 //! learned.json, which the transcriber reads live: words the fixes added go into Whisper's prompt so it
-//! spells them right, and a correction made FIX_REPEAT times is applied to new lines automatically.
+//! spells them right, and a correction made `LEARN.repeat` times is applied to new lines automatically.
 //! Each fix also keeps its chunk audio (fixes/) with the right text, for fine-tuning a model later.
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -15,10 +15,18 @@ const LINES: &str = "lines.jsonl";
 const FIXES: &str = "fixes.json";
 const LEARNED: &str = "learned.json";
 const FIX_AUDIO: &str = "fixes";
-const FIX_REPEAT: usize = 2; // the same correction this many times becomes an automatic replacement
-const LEARNED_VOCAB: usize = 30; // Whisper's prompt is ~220 tokens, shared with vocab.txt, names and the previous line
+/// How fixes turn into what the transcriber uses. `ozen eval` sweeps these to find the best values.
+#[derive(Clone, Copy, Debug)]
+pub struct Learn {
+    pub vocab: usize, // most learned hint words; Whisper's prompt is ~220 tokens, shared with vocab.txt, names, previous line
+    pub repeat: usize, // the same correction this many times becomes an automatic replacement (0: never)
+}
+pub const LEARN: Learn = Learn {
+    vocab: 30,
+    repeat: 2,
+};
 
-static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\w+(?:['"״׳]\w+)*"#).unwrap()); // ג'ירה, צה"ל stay whole
+pub static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\w+(?:['"״׳]\w+)*"#).unwrap()); // ג'ירה, צה"ל stay whole
 
 fn read(path: &str) -> Map<String, Value> {
     fs::read(path)
@@ -62,9 +70,9 @@ fn bump(counts: &mut Vec<(String, usize)>, key: String) {
 }
 
 /// What (heard, right) pairs teach: the words the fixes added, most used first, and each correction made
-/// FIX_REPEAT+ times (the most common one, when a phrase was fixed different ways). A correction is
+/// `cfg.repeat`+ times (the most common one, when a phrase was fixed different ways). A correction is
 /// skipped while any fixed line still keeps the "wrong" phrase: there it was right, so replacing it is unsafe.
-pub fn rules(pairs: &[(&str, &str)]) -> Value {
+pub fn rules(pairs: &[(&str, &str)], cfg: Learn) -> Value {
     let (mut added, mut fixed) = (vec![], vec![]);
     for (heard, right) in pairs {
         let a: Vec<&str> = WORD.find_iter(heard).map(|m| m.as_str()).collect();
@@ -87,7 +95,10 @@ pub fn rules(pairs: &[(&str, &str)]) -> Value {
     added.sort_by_key(|x| std::cmp::Reverse(x.1)); // stable: ties keep first-seen order
     fixed.sort_by_key(|x| std::cmp::Reverse(x.1));
     let mut replace = Map::new();
-    for (pair, _) in fixed.into_iter().filter(|(_, n)| *n >= FIX_REPEAT) {
+    for (pair, _) in fixed
+        .into_iter()
+        .filter(|(_, n)| cfg.repeat > 0 && *n >= cfg.repeat)
+    {
         let (wrong, right) = pair.split_once('\t').unwrap();
         let kept = pairs.iter().any(|(_, r)| {
             WORD.find_iter(r)
@@ -100,11 +111,7 @@ pub fn rules(pairs: &[(&str, &str)]) -> Value {
             replace.entry(wrong).or_insert(json!(right));
         }
     }
-    let vocab: Vec<String> = added
-        .into_iter()
-        .take(LEARNED_VOCAB)
-        .map(|(w, _)| w)
-        .collect();
+    let vocab: Vec<String> = added.into_iter().take(cfg.vocab).map(|(w, _)| w).collect();
     json!({"vocab": vocab, "replace": replace})
 }
 
@@ -146,7 +153,7 @@ pub fn fix(id: &str, text: &str) -> Result<(), String> {
         .iter()
         .filter_map(|(s, t)| Some((heard(by_id(s)?), t.as_str()?)))
         .collect();
-    let learned = rules(&pairs);
+    let learned = rules(&pairs, LEARN);
     write(LEARNED, &learned);
 
     if Path::new(FIX_AUDIO).exists() {
@@ -220,25 +227,34 @@ mod tests {
 
     #[test]
     fn learns_added_words_and_repeated_corrections() {
-        let r = rules(&[
-            ("נפתח קב על זה", "נפתח ג'ירה על זה"),
-            ("תשאל את קב, בסדר", "תשאל את Kev, בסדר"),
-            ("ה-פי אר מוכן", "ה-PR מוכן"),
-            ("פי אר חדש", "PR חדש"),
-        ]);
+        let r = rules(
+            &[
+                ("נפתח קב על זה", "נפתח ג'ירה על זה"),
+                ("תשאל את קב, בסדר", "תשאל את Kev, בסדר"),
+                ("ה-פי אר מוכן", "ה-PR מוכן"),
+                ("פי אר חדש", "PR חדש"),
+            ],
+            LEARN,
+        );
         assert_eq!(r["replace"], json!({"פי אר": "PR"})); // קב was fixed once each way: no rule
         assert_eq!(r["vocab"], json!(["PR", "ג'ירה", "Kev"]));
     }
 
     #[test]
     fn no_replacement_where_a_fix_kept_the_phrase() {
-        let r = rules(&[
-            ("קב אמר", "Kev אמר"),
-            ("שאלתי את קב", "שאלתי את Kev"),
-            ("קב הזמן", "קב הזמן, בדיוק"),
-        ]);
+        let r = rules(
+            &[
+                ("קב אמר", "Kev אמר"),
+                ("שאלתי את קב", "שאלתי את Kev"),
+                ("קב הזמן", "קב הזמן, בדיוק"),
+            ],
+            LEARN,
+        );
         assert_eq!(r["replace"], json!({}));
-        let r = rules(&[("קב אמר", "Kev אמר"), ("שאלתי את קב", "שאלתי את Kev")]);
+        let r = rules(
+            &[("קב אמר", "Kev אמר"), ("שאלתי את קב", "שאלתי את Kev")],
+            LEARN,
+        );
         assert_eq!(r["replace"], json!({"קב": "Kev"}));
     }
 }

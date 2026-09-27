@@ -6,60 +6,33 @@
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
-import functools
 import json
 import os
 import pathlib
 import re
-import socket
 import subprocess
 import sys
 import time
 
-import mlx.core as mx
-import mlx_whisper
 import numpy as np
 import torch
-from mlx_whisper.audio import load_audio, log_mel_spectrogram, pad_or_trim
-from mlx_whisper.decoding import detect_language
-from huggingface_hub import snapshot_download
-from mlx_whisper.load_models import load_model
-from mlx_whisper.transcribe import ModelHolder
+from mlx_whisper.audio import load_audio
 
-# mlx_whisper caches a single model, but every utterance uses two: stock turbo detects the language, then
-# the Hebrew model transcribes. Swapping reloaded ~1.6GB twice per line and made the transcriber fall behind.
-# ponytail: keeps every model used resident (two, ~3GB); bound the cache if more models are added.
-ModelHolder.get_model = staticmethod(functools.cache(lambda path, dtype: load_model(path, dtype=dtype)))
 from speechbrain.inference.speaker import EncoderClassifier
+
+import asr  # Whisper setup shared with the eval (asr.py)
 
 HERE = pathlib.Path(__file__).parent
 chunks = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
-socket.setdefaulttimeout(60)  # a stalled download must fail, not hang the transcriber forever
 
 
-def cached(repo: str) -> str:
-    """The local copy once downloaded, so loading never waits on the Hub's update check."""
-    try:
-        return snapshot_download(repo, local_files_only=True)
-    except Exception:
-        return repo  # not downloaded yet: fetch on first use
-
-
-MODEL = cached("mlx-community/whisper-large-v3-turbo")  # English + language detection
-# Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
-MODELS = {"he": cached("mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"), "en": MODEL}
 VOCAB = HERE / "vocab.txt"  # names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
 LEARNED = HERE / "learned.json"  # from your transcript fixes (train.py fix): words to hint, corrections to apply
-NOISE = {  # what Whisper invents on noise, per language
-    "en": {"thank you", "thanks", "you", "bye"},
-    "he": {"תודה", "תודה רבה", "רבה", "תודה לכם", "ביי"},
-}
 SOURCE = {"call": "call", "mic": "room"}
 ECHO_OVERLAP = 0.6  # mic turn mostly overlapping speaker output = echo, not a person in the room
 ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
-LANGS = ("he", "en")
-SR = 16000
+SR = asr.SR
 SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
 SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one train.py calibrates from your tags
 MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
@@ -182,54 +155,19 @@ def learned() -> dict:
         return {}
 
 
-def corrected(text: str) -> str:
-    """Apply the corrections you made repeatedly (learned.json "replace"), whole words only."""
-    for wrong, right in learned().get("replace", {}).items():
-        text = re.sub(rf"(?<!\w){re.escape(wrong)}(?!\w)", right, text)
-    return text
-
-
 def hint(tag: str) -> str:
     """Prompt with the vocabulary + known people's names + words from your fixes + the previous line,
     so Whisper spells them."""
     words = [w.strip() for w in re.split(r"[,\n]", VOCAB.read_text()) if w.strip()] if VOCAB.exists() else []
     words += [s[0] for s in speakers if not anon(s[0])]
     words += learned().get("vocab", [])
-    return (", ".join(dict.fromkeys(words)) + ". " + last_text.get(tag, "")[-200:]).strip()
-
-
-FILLER = {w for phrases in NOISE.values() for p in phrases for w in p.split()}
-
-
-def noise(text: str) -> bool:
-    """"תודה. תודה רבה." on silence: every word is known filler. Checked across languages, because a clip
-    detected as English can still come out in Hebrew (the hint carries Hebrew names and context)."""
-    words = re.sub(r"[^\w\s]", " ", text.lower()).split()
-    return not words or set(words) <= FILLER
+    return asr.prompt(words, last_text.get(tag, ""))
 
 
 def transcribe(clip: np.ndarray, tag: str) -> str:
-    # Auto-detect per utterance, but only between the languages actually spoken;
-    # open detection on short noisy audio picks random languages and invents words.
-    # Under ~1.5s detection is unreliable ("שלום" came out as "Shalom"), so keep the source's last language.
-    if clip.size < 1.5 * SR:
-        lang = last_lang.get(tag, LANGS[0])
-    else:
-        model = ModelHolder.get_model(MODEL, mx.float16)
-        mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=model.dims.n_mels)
-        _, probs = detect_language(model, mel)
-        lang = last_lang[tag] = max(LANGS, key=lambda l: probs.get(l, 0))
-    r = mlx_whisper.transcribe(clip, path_or_hf_repo=MODELS[lang], language=lang, initial_prompt=hint(tag),
-                               condition_on_previous_text=False)
-    # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
-    text = " ".join(
-        s["text"].strip()
-        for s in r["segments"]
-        if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
-    ).strip()
-    if noise(text):
-        return ""
-    last_text[tag] = text
+    text, last_lang[tag] = asr.recognize(clip, hint(tag), last_lang.get(tag, asr.LANGS[0]))
+    if text:
+        last_text[tag] = text
     return text
 
 
@@ -300,7 +238,7 @@ while True:
                     prev = spk
                 with out.open("a") as fh, LINES.open("a") as lj:
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
-                        text = corrected(heard)
+                        text = asr.corrected(heard, learned().get("replace", {}))
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
                         fh.write(line + "\n")

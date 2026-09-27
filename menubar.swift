@@ -468,13 +468,20 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             : ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass"][s] ?? "ear"
         warning.stringValue = problems.map { "⚠︎ " + $0 }.joined(separator: "\n")
         warning.superview?.isHidden = problems.isEmpty
-        item.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
+        let image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
+        // Only recording is red and filled; every other state is the plain monochrome menu bar icon.
+        item.button?.image = s == "recording"
+            ? image?.withSymbolConfiguration(.init(paletteColors: [.systemRed])).map { $0.isTemplate = false; return $0 }
+            : image
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
         let place = currentPlace()
         let meetingsOnly = place.map { $0.action == "meetings" } ?? (mode == "meetings")
         let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + (place.map { " · \($0.label)" } ?? "")
-        status.stringValue = ["recording": "● Recording\(meeting)", "paused": "Paused", "stopping": "Finishing transcription…"][s]
-            ?? (meetingsOnly ? "Waiting for a meeting" : place == nil ? "Stopped" : "Off") + (place.map { " · \($0.label)" } ?? "")
+        // Anything but recording says so first, so a paused, finishing or waiting state never reads as recording.
+        status.stringValue = s == "recording" ? "● Recording\(meeting)"
+            : "Not recording · " + (["paused": "paused", "stopping": "finishing transcription…"][s]
+                ?? (meetingsOnly ? "waiting for a meeting" : "stopped") + (place.map { " · \($0.label)" } ?? ""))
+        item.button?.toolTip = "Ozen: " + status.stringValue
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
         startButton.title = s == "paused" ? "Resume" : "Start"
         startButton.isEnabled = s == "stopped" || s == "paused"

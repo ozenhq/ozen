@@ -33,3 +33,7 @@ target/
 
 # folders built by `ozen gather` for Claude Code / Hermes
 context/
+
+eval/audio/
+eval/cache.jsonl
+eval/report.json
