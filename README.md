@@ -52,7 +52,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 
 - **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
-  the same controls. The icon shows the state: ear (stopped), filled ear (recording), pause (paused).
+  the same controls. The icon is a red filled ear only while recording; otherwise it's monochrome (ear stopped, pause paused,
+  hourglass finishing transcription) and the panel says **Not recording** and why.
 - **Timeline view.** Switch the panel to **Timeline** for one lane per speaker (with their total talk time) and a
   bar for every line they spoke, on a scrollable time axis; **− / +** zoom. Silences over 2 minutes shrink to a
   short break marker. Hover a bar for what was said; click it to jump to that line in the transcript.
