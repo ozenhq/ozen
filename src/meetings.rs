@@ -266,8 +266,9 @@ pub fn live(now: f64) -> Result<String, String> {
     let ozen = std::env::current_exe().map_err(|e| e.to_string())?;
     let ozen = ozen.display();
     let note = format!(
-        "\n\nThis meeting is still going, so its file is a snapshot. Run `{ozen} live` to refresh this folder \
-with the latest lines, and `{ozen} look` for a screenshot of the user's screen plus the last lines."
+        "\n\nThis meeting is still going. Its file is rewritten with the latest lines every 15 seconds, so reread it \
+before answering; `{ozen} live` refreshes it right away, and `{ozen} look` gives a screenshot of the user's screen plus \
+the last lines."
     );
     write_folder(&dir, &[m], None, &note)?;
     Ok(dir)

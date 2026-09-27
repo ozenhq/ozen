@@ -80,8 +80,9 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   `CLAUDE.md`) tells the agent what it holds, and its `claude.command` / `hermes.command` reopen it with a double-click. **Auto add with Kev** also adds every other meeting that local [Kev](https://github.com/jaredpalmer/kev)
   (`localhost:8009`) judges part of the same project or topic; its scores show before you pick the agent.
 - **Ask about the meeting happening now.** **Ask about now** in the panel starts Claude Code or Hermes on the current
-  meeting (one whose last line is under 10 minutes old), in `context/live/`. The agent is told how to refresh that
-  folder with the latest lines (`ozen live`) and to look at your screen (`ozen look`), so it keeps up as the meeting goes on.
+  meeting (one whose last line is under 10 minutes old), in `context/live/`. A background `ozen live-sync` rewrites
+  that folder with the latest lines every 15s and exits when the meeting ends; the agent is told to reread it, and that
+  `ozen look` shows your screen.
 
 Output is `transcript.txt`:
 
@@ -119,7 +120,7 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen fix <line-id> "right text"` | Correct a line's text (what the panel does); empty clears. Relearns hint words and corrections |
 | `target/release/ozen meetings` | Past meetings, newest first: id, start, minutes, lines, first words |
 | `target/release/ozen gather [--kev] ID...` | Write those meetings into `context/<now>/`, print the files then the folder; `--kev` adds the ones Kev judges related |
-| `target/release/ozen live [--open claude\|hermes]` | Write the meeting happening now into `context/live/` (rerun to refresh) and print the folder; `--open` starts that agent there |
+| `target/release/ozen live [--open claude\|hermes]` | Write the meeting happening now into `context/live/` and print the folder; a background `live-sync` keeps it current every 15s until the meeting ends. `--open` starts that agent there |
 | `target/release/ozen open DIR claude\|hermes\|finder` | Start that agent (or Finder) in a folder written by `gather` or `live` |
 | `target/release/ozen ignore <line-id>...` | Tag lines as a voice to ignore (what **Ignore all** in the panel does). Retrains |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
