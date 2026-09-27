@@ -9,6 +9,7 @@ publish = false
 strip = true
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 hound = "3.5.1"
 jiff = "0.2.37"
 regex = "1.13.1"

@@ -29,3 +29,6 @@ voices/
 
 # ozen control CLI (cargo build --release)
 target/
+
+# folders built by `ozen gather` for Claude Code / Hermes
+context/

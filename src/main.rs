@@ -1,5 +1,6 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
 mod fixes;
+mod meetings;
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::process::CommandExt;
@@ -9,7 +10,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | app | bar
+ozen control: start | pause | resume | stop | status | health | look | meetings | gather | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -17,6 +18,10 @@ ozen control: start | pause | resume | stop | status | health | look | fix | app
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
+  meetings      list past meetings: id, start, minutes, lines, first words (tab separated)
+  gather [--kev] ID...
+                write those meetings into context/<now>/ to start Claude Code or Hermes in; --kev also adds
+                the ones local Kev (localhost:8009) judges related. Prints the folder
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
@@ -413,6 +418,22 @@ fn main() {
             if let Err(e) = fixes::fix(&id, text.trim()) {
                 eprintln!("{e}");
                 exit(1);
+            }
+        }
+        "meetings" => {
+            for m in meetings::all().iter().rev() {
+                println!("{}", m.row());
+            }
+        }
+        "gather" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let ids: Vec<String> = args.iter().filter(|a| *a != "--kev").cloned().collect();
+            match meetings::gather(&ids, args.iter().any(|a| a == "--kev")) {
+                Ok(dir) => println!("{dir}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    exit(1);
+                }
             }
         }
         "app" => {
