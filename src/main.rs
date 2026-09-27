@@ -7,17 +7,19 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | app | bar
+ozen control: start | pause | resume | stop | status | health | look | app | bar
   start/resume  record + transcribe (builds the recorder if rec.swift changed)
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
+  look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
 const REC: &str = r"^\./rec chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
+const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
 
 fn home() -> String {
@@ -197,9 +199,11 @@ fn main() {
         "status" => {
             let state = if running(REC) {
                 "recording"
-            } else if Path::new(".stopping").exists() && running(TR) {
+            // .stopping outlives a drain that was killed; without the drain it's stale, not "stopping"
+            } else if Path::new(".stopping").exists() && running(TR) && running(DRAIN) {
                 "stopping"
             } else if running(TR) {
+                let _ = fs::remove_file(".stopping");
                 "paused"
             } else {
                 let _ = fs::remove_file(".stopping");
@@ -243,6 +247,21 @@ fn main() {
             } else if n > 12 {
                 // >1 min behind (call+mic+local per 15s); first run also downloads the models
                 println!("Transcriber catching up: {n} chunks waiting");
+            }
+        }
+        // Snapshot for answering a question mid-meeting: screen image + recent transcript.
+        "look" => {
+            let n = std::env::args().nth(2).unwrap_or_else(|| "40".into());
+            if ok(cmd("screencapture").args(["-x", "-D1", "screen.png"]))
+                && ok(cmd("sips")
+                    .args(["-Z", "1280", "screen.png", "--out", "screen-small.png"])
+                    .stdout(Stdio::null()))
+            {
+                println!("screen: {}/screen-small.png", env!("CARGO_MANIFEST_DIR"));
+            }
+            // labels corrected by your tags
+            if !ok(cmd("uv").args(["run", "-q", "train.py", "show", &n])) {
+                exit(1);
             }
         }
         "app" => {
