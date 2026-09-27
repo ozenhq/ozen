@@ -58,16 +58,16 @@ Output is `transcript.txt`:
 
 ## Setup
 
-Requires macOS 15+ on Apple Silicon, Xcode command line tools (`swiftc`), [`uv`](https://docs.astral.sh/uv/) and `ffmpeg`.
+Requires macOS 15+ on Apple Silicon, Xcode command line tools (`swiftc`), [Rust](https://rustup.rs) (`cargo`), [`uv`](https://docs.astral.sh/uv/) and `ffmpeg`.
 
 ```sh
 git clone https://github.com/tupe12334/ozen ~/ozen
 git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
-~/ozen/ozen.sh app     # builds ~/Applications/Ozen.app
+cd ~/ozen && cargo run --release -- app   # builds the ozen CLI and ~/Applications/Ozen.app
 ```
 
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
-press Start there. After pulling new code, run `./ozen.sh app` again to rebuild it.
+press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
 
 On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** and **Microphone** access;
 grant both (System Settings > Privacy & Security), then press Start again. The app is ad-hoc signed, so after
@@ -78,10 +78,11 @@ on first use.
 
 | Command | What it does |
 |---|---|
-| `./ozen.sh start` / `pause` / `resume` / `stop` | Same as the menu bar buttons. Pause keeps the transcriber loaded; stop finishes transcribing queued audio first |
-| `./ozen.sh status` | `recording`, `paused`, `stopping` or `stopped` |
-| `./ozen.sh app` | Build and install `~/Applications/Ozen.app` |
-| `./ozen.sh bar` | Build if needed and open Ozen.app |
+| `target/release/ozen start` / `pause` / `resume` / `stop` | Same as the menu bar buttons. Pause keeps the transcriber loaded; stop finishes transcribing queued audio first |
+| `target/release/ozen status` | `recording`, `paused`, `stopping` or `stopped` |
+| `target/release/ozen health` | One line per problem the menu bar warns about: recording blocked, silent mic, transcriber down or behind |
+| `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
+| `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |

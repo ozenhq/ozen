@@ -124,7 +124,7 @@ for sig in [SIGINT, SIGTERM] {
 
 // Meeting apps opened after start must join the call filter, so refresh the filters periodically.
 // A mic that delivers only zeros gets one restart per silent spell; if that doesn't bring it back,
-// the mic-silent flag tells the menu bar (via ./ozen.sh health) to ask the user to check the input device.
+// the mic-silent flag tells the menu bar (via `ozen health`) to ask the user to check the input device.
 let silentFlag = URL(fileURLWithPath: "mic-silent")
 var retriedSilence = false
 var tick = 0
