@@ -7,6 +7,7 @@ call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
 import json
+import os
 import pathlib
 import re
 import sys
@@ -24,7 +25,14 @@ from speechbrain.inference.speaker import EncoderClassifier
 HERE = pathlib.Path(__file__).parent
 chunks = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
-MODEL = "mlx-community/whisper-large-v3-turbo"
+MODEL = "mlx-community/whisper-large-v3-turbo"  # English + language detection
+# Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
+MODELS = {"he": "mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx", "en": MODEL}
+VOCAB = HERE / "vocab.txt"  # names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
+NOISE = {  # what Whisper invents on noise, per language
+    "en": {"thank you", "thanks", "you", "bye"},
+    "he": {"תודה", "תודה רבה", "רבה", "תודה לכם", "ביי"},
+}
 SOURCE = {"call": "call", "mic": "room"}
 ECHO_OVERLAP = 0.6  # mic turn mostly overlapping speaker output = echo, not a person in the room
 ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
@@ -37,6 +45,8 @@ SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing
 
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
+RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks, local only
+KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
@@ -115,6 +125,20 @@ def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
 
 
 last_lang: dict[str, str] = {}  # per source; short clips reuse it
+last_text: dict[str, str] = {}  # per source; previous line, given to Whisper as context
+
+
+def hint(tag: str) -> str:
+    """Prompt with the vocabulary + known people's names + the previous line, so Whisper spells them."""
+    words = [w.strip() for w in re.split(r"[,\n]", VOCAB.read_text()) if w.strip()] if VOCAB.exists() else []
+    words += [s[0] for s in speakers if not anon(s[0])]
+    return (", ".join(dict.fromkeys(words)) + ". " + last_text.get(tag, "")[-200:]).strip()
+
+
+def noise(text: str, lang: str) -> bool:
+    words = re.sub(r"[^\w\s]", " ", text.lower()).split()
+    # "תודה. תודה רבה. תודה." on silence: every phrase is a known filler
+    return not words or " ".join(dict.fromkeys(words)) in NOISE[lang] or set(words) <= {w for p in NOISE[lang] for w in p.split()}
 
 
 def transcribe(clip: np.ndarray, tag: str) -> str:
@@ -128,14 +152,18 @@ def transcribe(clip: np.ndarray, tag: str) -> str:
         mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=model.dims.n_mels)
         _, probs = detect_language(model, mel)
         lang = last_lang[tag] = max(LANGS, key=lambda l: probs.get(l, 0))
-    r = mlx_whisper.transcribe(clip, path_or_hf_repo=MODEL, language=lang, condition_on_previous_text=False)
+    r = mlx_whisper.transcribe(clip, path_or_hf_repo=MODELS[lang], language=lang, initial_prompt=hint(tag),
+                               condition_on_previous_text=False)
     # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
     text = " ".join(
         s["text"].strip()
         for s in r["segments"]
         if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
     ).strip()
-    return "" if text.lower().strip(" .!") in {"thank you", "thanks", "you", "bye"} else text
+    if noise(text, lang):
+        return ""
+    last_text[tag] = text
+    return text
 
 
 active: list[tuple[float, float]] = []  # absolute times when call or local (computer) audio played
@@ -193,6 +221,11 @@ while True:
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
+        if KEEP_AUDIO and tag != "local" and f.exists():  # recent audio for comparing models (./ozen.sh eval)
+            RECENT.mkdir(exist_ok=True)
+            f.replace(RECENT / f.name)
+            for old in sorted(RECENT.glob("*.wav"))[:-KEEP_AUDIO]:
+                old.unlink()
         f.unlink(missing_ok=True)
     active = [(a, b) for a, b in active if b > time.time() - 120]
     load_registry()

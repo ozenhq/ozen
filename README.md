@@ -12,8 +12,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   - `mic`: your microphone
   - `local`: every other app, e.g. macOS Speak Selection reading text aloud. Never transcribed; it only
     tells the transcriber when the computer itself is talking.
-- **Transcribes Hebrew and English.** Whisper large-v3-turbo (MLX, on-device) per utterance, with the language
-  picked between `he` and `en` for each one, so mixed-language meetings work.
+- **Transcribes Hebrew and English.** On-device Whisper (MLX) per utterance, language picked between `he` and `en`
+  for each one: Hebrew goes to [ivrit.ai's Hebrew-trained turbo](https://huggingface.co/mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx),
+  English to stock large-v3-turbo. Each call is hinted with `vocab.txt` (terms and names to spell right, e.g. Kev,
+  PR, code review; edit freely), the known people's names, and the previous line. Known filler that Whisper invents
+  on noise ("Thank you.", "תודה רבה") is dropped.
 - **Drops echo.** A mic utterance that mostly overlaps call or local audio is speaker bleed, not a person in
   the room, so it's discarded. That covers the computer reading text aloud and remote voices leaking into the mic.
 - **Knows who's speaking.** Each utterance gets an ECAPA voiceprint (speechbrain) and is matched against voices
@@ -79,11 +82,13 @@ on first use.
 | `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
+| `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
 | `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
 
 ## Limits
 
 - Lines arrive ~15–30s after speech (chunked, not streaming).
+- English terms spoken inside Hebrew are the weakest spot; add them to `vocab.txt`. Distant voices in the room are hard to hear.
 - You talking over the computer voice or a remote speaker can be dropped as echo.
 - Overlapping speakers are merged into one line; utterances under 1s inherit the previous speaker.
 - Live speaker matching is online (no re-clustering); tagging a few lines fixes past and future labels.

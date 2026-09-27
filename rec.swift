@@ -18,6 +18,7 @@ let meetingApps: Set<String> = [
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let audioTag: String
     var files: [String: (file: AVAudioFile, url: URL, start: Date)] = [:]
+    var lastMic = Date()  // the mic delivers buffers continuously (silence too), so a gap means it died
     let lock = NSLock()
     init(audioTag: String) { self.audioTag = audioTag }
 
@@ -25,7 +26,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         let tag: String
         switch type {
         case .audio: tag = audioTag
-        case .microphone: tag = "mic"
+        case .microphone: tag = "mic"; lock.lock(); lastMic = Date(); lock.unlock()
         default: return
         }
         guard let desc = sb.formatDescription,
@@ -50,6 +51,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let cur = files.removeValue(forKey: tag) else { return }
         try? FileManager.default.moveItem(at: cur.url, to: outDir.appendingPathComponent(cur.url.lastPathComponent))
     }
+
+    func resetMic() { lock.lock(); lastMic = Date(); lock.unlock() }
+    var micAge: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(lastMic) }
 
     func finishAll() { lock.lock(); files.keys.forEach(finish); lock.unlock() }
 
@@ -82,7 +86,7 @@ func config(mic: Bool) -> SCStreamConfiguration {
 
 let callRec = Recorder(audioTag: "call"), localRec = Recorder(audioTag: "local")
 var f = try await filters()
-let callStream = SCStream(filter: f.call, configuration: config(mic: true), delegate: callRec)
+var callStream = SCStream(filter: f.call, configuration: config(mic: true), delegate: callRec)
 let localStream = SCStream(filter: f.local, configuration: config(mic: false), delegate: localRec)
 let q = DispatchQueue(label: "audio")
 try callStream.addStreamOutput(callRec, type: .audio, sampleHandlerQueue: q)
@@ -99,10 +103,29 @@ for sig in [SIGINT, SIGTERM] {
     src.resume()
     _ = Unmanaged.passRetained(src)
 }
+// If the mic stream stops delivering (its device disappeared, e.g. AirPods/iPhone mic, or capture was
+// interrupted), rebuild it on the current default input. A live mic delivers silence too, so a gap = dead.
+@MainActor func restartMic(_ why: String) async {
+    print("restarting mic stream: \(why)"); fflush(stdout)
+    try? await callStream.stopCapture()
+    callRec.finishAll()
+    guard let nf = try? await filters() else { return }
+    let s = SCStream(filter: nf.call, configuration: config(mic: true), delegate: callRec)
+    try? s.addStreamOutput(callRec, type: .audio, sampleHandlerQueue: q)
+    try? s.addStreamOutput(callRec, type: .microphone, sampleHandlerQueue: q)
+    if (try? await s.startCapture()) != nil { callStream = s }
+    callRec.resetMic()
+}
+
 // Meeting apps opened after start must join the call filter, so refresh the filters periodically.
+var tick = 0
 while true {
-    try await Task.sleep(for: .seconds(10))
-    if let nf = try? await filters() {
+    try await Task.sleep(for: .seconds(2))
+    if callRec.micAge > 30 {
+        await restartMic("no mic audio for 30s")
+    }
+    tick += 1
+    if tick % 5 == 0, let nf = try? await filters() {
         try? await callStream.updateContentFilter(nf.call)
         try? await localStream.updateContentFilter(nf.local)
     }

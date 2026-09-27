@@ -7,6 +7,7 @@ models/
 
 # per-meeting data: audio, transcript, screenshots, speaker state
 chunks/
+recent/
 transcript.txt
 start.log
 *.png
