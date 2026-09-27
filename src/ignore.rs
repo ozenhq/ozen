@@ -6,6 +6,7 @@
 //! Ignored prints are matched one by one, not averaged: a video has many voices.
 use crate::fixes::{lines, read, write};
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 use std::fs;
 
 pub const IGNORE: &str = "Ignored"; // reserved tag, same in transcribe.py, train.py and menubar.swift
@@ -88,9 +89,12 @@ fn registry() -> (Vec<Vec<f32>>, f32) {
 /// them out of the review queue.
 pub fn apply() {
     let tags = read(TAGS);
+    // Keyed by id like train.py: a line written twice (two transcribers on one chunk) counts once.
     let lines: Vec<(String, Vec<f32>)> = lines()
         .into_iter()
         .filter_map(|r| Some((r.get("id")?.as_str()?.to_string(), unit(r.get("e")?)?)))
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
         .collect();
     let ignored: Vec<Vec<f32>> = lines
         .iter()
