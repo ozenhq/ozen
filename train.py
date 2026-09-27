@@ -12,8 +12,8 @@ Tags are written by `ozen tag <line-id> "Dana Levi"` (what the panel does), whic
 Retraining makes each person's voiceprint the average of every line tagged as them (kept in the
 registry under samples/, so tags accumulate across meetings), measures leave-one-out accuracy
 over the tags, calibrates the same-voice threshold from them (config.json, read live by the
-transcriber), relabels untagged lines with a confidence and marks the least certain ones for you
-to tag next (labels.json "unsure"), logs the trend (history.jsonl), and pushes the registry.
+transcriber), relabels untagged lines with a confidence, queues the least certain ones for you
+to tag next (stats.json "review"), logs the trend (history.jsonl), and pushes the registry.
 That is the loop: tag what it asks -> better prints and threshold -> fewer uncertain lines.
 
 Lines tagged IGNORE (`ozen ignore <line-id>...`) are not a person, so they never become a voiceprint here;
@@ -34,6 +34,7 @@ LINES, TAGS, LABELS, STATS = (HERE / n for n in ("lines.jsonl", "tags.json", "la
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 DEFAULT_THRESHOLD = 0.4  # until there are enough tags to calibrate one
 UNSURE = 0.08  # a line this close to the threshold, or to a second person, gets queued for review
+REVIEW_MAX = 50
 IGNORE = "Ignored"  # reserved tag: a voice to drop, not a person; src/ignore.rs handles those lines
 
 
@@ -135,7 +136,7 @@ def retrain(retry: bool = True) -> None:
     config = {"same_speaker": threshold, "calibrated_on": {"genuine": len(genuine), "impostor": len(impostor)}}
     (REPO / "config.json").write_text(json.dumps(config, indent=1) + "\n")
 
-    labels = {}
+    labels, review = {}, []
     for sid, r in lines.items():
         if sid in tags or not prints:
             continue
@@ -148,11 +149,13 @@ def retrain(retry: bool = True) -> None:
         unsure = doubt < UNSURE
         labels[sid] = {"spk": name if best >= threshold else None, "sim": round(best, 3),
                        "margin": round(margin, 3), "unsure": unsure}
+        if unsure:
+            review.append((doubt, sid))
     LABELS.write_text(json.dumps(labels, ensure_ascii=False))
 
     stats = {"accuracy": round(correct / evaluated, 3) if evaluated else None, "evaluated": evaluated,
              "tagged": sum(1 for v in tags.values() if v and v != IGNORE), "threshold": threshold,
-             "unsure": sum(v["unsure"] for v in labels.values()),
+             "review": [sid for _, sid in sorted(review)][:REVIEW_MAX], "unsure": len(review),
              "people": {n: len([k for k in s if k != "legacy"]) for n, s in samples.items()}}
     hist_path = REPO / "history.jsonl"
     hist = [json.loads(x) for x in hist_path.read_text().splitlines()] if hist_path.exists() else []
@@ -173,7 +176,7 @@ def retrain(retry: bool = True) -> None:
         if retry:  # another machine pushed since the fetch: rebuild on top of it, once
             return retrain(retry=False)
         print("registry push failed; committed locally, rebuilt and pushed on the next retrain", file=sys.stderr)
-    print(json.dumps(stats, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in stats.items() if k != "review"}, ensure_ascii=False))
 
 
 def show(n: int) -> None:
