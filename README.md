@@ -70,9 +70,9 @@ Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
 
 On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** and **Microphone** access;
-grant both (System Settings > Privacy & Security), then press Start again. The app is ad-hoc signed, so after
-a rebuild macOS may ask again. The Whisper and ECAPA models download
-on first use.
+grant both (System Settings > Privacy & Security), then press Start again. The build signs the app and recorder
+with a local self-signed certificate (created once in `~/Library/Keychains/ozen-signing.keychain-db`), so the
+permissions survive rebuilds. The Whisper and ECAPA models download on first use.
 
 ## Use
 

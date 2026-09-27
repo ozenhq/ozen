@@ -91,8 +91,104 @@ fn recorder_blocked(log: &str) -> bool {
         .is_some_and(|l| l.contains(BLOCKED))
 }
 
+/// Local self-signed code-signing identity, kept in its own keychain so it never prompts. macOS ties the
+/// Screen Recording and Microphone permissions to a signature's designated requirement: ad hoc that is the
+/// binary's hash, so every rebuild lost them; with a certificate it is the certificate, which stays put.
+/// The keychain password only guards this throwaway local certificate.
+const SIGNING_KEYCHAIN: &str = "Library/Keychains/ozen-signing.keychain-db";
+const SIGNING_PASS: &str = "ozen";
+
+fn create_identity(keychain: &str) -> bool {
+    let tmp = std::env::temp_dir().join(format!("ozen-signing-{}", std::process::id()));
+    let _ = fs::create_dir_all(&tmp);
+    let (key, cert, p12) = (tmp.join("k.pem"), tmp.join("c.pem"), tmp.join("id.p12"));
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    let pass = format!("pass:{SIGNING_PASS}");
+    // /usr/bin/openssl (LibreSSL) writes a PKCS#12 that `security import` reads; OpenSSL 3's default doesn't.
+    let made = ok(cmd("/usr/bin/openssl")
+        .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650"])
+        .args(["-subj", "/CN=Ozen Local Signing", "-addext", "extendedKeyUsage=codeSigning"])
+        .args(["-addext", "keyUsage=critical,digitalSignature", "-keyout", &path(&key), "-out", &path(&cert)])
+        .stderr(Stdio::null()))
+        && ok(cmd("/usr/bin/openssl").args(["pkcs12", "-export", "-inkey", &path(&key), "-in", &path(&cert)])
+            .args(["-out", &path(&p12), "-passout", &pass]))
+        && ok(cmd("security").args(["create-keychain", "-p", SIGNING_PASS, keychain]))
+        && ok(cmd("security").args(["import", &path(&p12), "-k", keychain, "-P", SIGNING_PASS, "-T", "/usr/bin/codesign"])
+            .stdout(Stdio::null()))
+        // lets codesign use the key without a GUI prompt
+        && ok(cmd("security").args(["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", SIGNING_PASS, keychain])
+            .stdout(Stdio::null()));
+    let _ = fs::remove_dir_all(&tmp);
+    if !made {
+        let _ = fs::remove_file(keychain);
+    }
+    made
+}
+
+/// SHA-1 of the signing identity, creating it on first use; None falls back to ad-hoc signing.
+fn signing_identity() -> Option<String> {
+    let keychain = format!("{}/{SIGNING_KEYCHAIN}", home());
+    if !Path::new(&keychain).exists() && !create_identity(&keychain) {
+        eprintln!(
+            "could not create the local signing identity; signing ad hoc (permissions reset on rebuild)"
+        );
+        return None;
+    }
+    // no auto-lock, unlocked, and on the search list: codesign only finds identities there
+    let _ = cmd("security")
+        .args(["set-keychain-settings", &keychain])
+        .status();
+    let _ = cmd("security")
+        .args(["unlock-keychain", "-p", SIGNING_PASS, &keychain])
+        .status();
+    let listed = cmd("security")
+        .args(["list-keychains", "-d", "user"])
+        .output()
+        .ok()?;
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    if !listed.contains(&keychain) {
+        let mut all: Vec<&str> = listed
+            .split_whitespace()
+            .map(|k| k.trim_matches('"'))
+            .collect();
+        all.push(&keychain);
+        let _ = cmd("security")
+            .args(["list-keychains", "-d", "user", "-s"])
+            .args(all)
+            .status();
+    }
+    let found = cmd("security")
+        .args(["find-identity", "-p", "codesigning", &keychain])
+        .output()
+        .ok()?;
+    // self-signed, so it's listed as not trusted; codesign accepts it by hash anyway
+    String::from_utf8_lossy(&found.stdout)
+        .split_whitespace()
+        .find(|w| w.len() == 40 && w.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_string)
+}
+
+fn sign(path: &str, deep: bool) {
+    let id = signing_identity().unwrap_or_else(|| "-".into());
+    let mut c = cmd("codesign");
+    c.args(["--force", "-s", &id]);
+    if deep {
+        c.arg("--deep");
+    }
+    if !ok(c.arg(path).stderr(Stdio::null())) {
+        eprintln!("codesign failed for {path}");
+    }
+}
+
 fn build_rec() -> bool {
-    newer("rec", "rec.swift") || ok(cmd("swiftc").args(["-O", "rec.swift", "-o", "rec"]))
+    if newer("rec", "rec.swift") {
+        return true;
+    }
+    let built = ok(cmd("swiftc").args(["-O", "rec.swift", "-o", "rec"]));
+    if built {
+        sign("rec", false);
+    }
+    built
 }
 
 fn build_app(app: &str) -> bool {
@@ -134,11 +230,7 @@ fn build_app(app: &str) -> bool {
   <key>NSAudioCaptureUsageDescription</key><string>Ozen transcribes the meeting audio, on this Mac only.</string>
 </dict></plist>
 "#)).expect("write Info.plist");
-    // ad-hoc: required for macOS to grant it permissions
-    let _ = cmd("codesign")
-        .args(["--force", "--deep", "-s", "-", app])
-        .stderr(Stdio::null())
-        .status();
+    sign(app, true); // macOS grants permissions only to signed apps
     // Register with Launch Services + Spotlight so it's findable right away, not after the next index pass.
     let _ = cmd("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
         .args(["-f", app]).status();
