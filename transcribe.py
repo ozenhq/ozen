@@ -40,7 +40,7 @@ SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing
 
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
-RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks, local only
+RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks (computer audio in recent/local), local only
 KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); train.py writes their prints
@@ -209,9 +209,15 @@ while True:
                         active.append((t0, t1))
                     if tag == "local":
                         continue  # computer's own audio: reference only, never transcribed
-                    if tag == "mic" and echo_fraction(t0, t1) >= ECHO_OVERLAP:
-                        print(f"echo dropped {t1 - t0:.1f}s", flush=True)
-                        continue  # speakers leaking into the mic
+                    if tag == "mic":
+                        overlap = echo_fraction(t0, t1)
+                        if overlap >= ECHO_OVERLAP:
+                            print(f"echo dropped {t1 - t0:.1f}s", flush=True)
+                            continue  # speakers leaking into the mic
+                        # Evidence for a missed echo: how much computer audio overlapped, and whether the
+                        # local reference even reached this far (negative = it hadn't been read yet).
+                        print(f"mic kept {t1 - t0:.1f}s in {f.name}: echo overlap {overlap:.2f}, "
+                              f"local reference {covered['local'] - t1:+.1f}s past it", flush=True)
                     text = transcribe(clip, tag)
                     if not text:
                         continue
@@ -245,10 +251,13 @@ while True:
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
-        if KEEP_AUDIO and tag != "local" and f.exists():  # recent audio for comparing models (uv run eval.py)
-            RECENT.mkdir(exist_ok=True)
-            f.replace(RECENT / f.name)
-            for old in sorted(RECENT.glob("*.wav"))[:-KEEP_AUDIO]:
+        if KEEP_AUDIO and f.exists():
+            # mic/call: recent audio for comparing models (uv run eval.py). local: computer audio only,
+            # kept apart so a missed echo can be replayed with the reference the transcriber had.
+            keep = RECENT / "local" if tag == "local" else RECENT
+            keep.mkdir(parents=True, exist_ok=True)
+            f.replace(keep / f.name)
+            for old in sorted(keep.glob("*.wav"))[:-KEEP_AUDIO]:
                 old.unlink()
         f.unlink(missing_ok=True)
         if any(start_ms(g) > int(ms) for g in chunks.glob("*.wav")):
