@@ -275,6 +275,7 @@ fn build_app(app: &str) -> bool {
   <key>LSUIElement</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Ozen transcribes what you say in meetings, on this Mac only.</string>
   <key>NSAudioCaptureUsageDescription</key><string>Ozen transcribes the meeting audio, on this Mac only.</string>
+  <key>NSLocationUsageDescription</key><string>Ozen starts or stops recording when you arrive at places you set, like Home or Work.</string>
 </dict></plist>
 "#)).expect("write Info.plist");
     sign(app, true); // macOS grants permissions only to signed apps
