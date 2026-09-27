@@ -62,6 +62,14 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   - *Meetings*: starts by itself when a meeting app (Zoom, Chrome/Meet, Teams, Slack, FaceTime, Discord) is using
     the microphone, and stops 20s after it releases it. Detected through Core Audio's per-process state, so it
     works for any call in those apps. Pausing or stopping by hand holds until the next meeting starts or ends.
+- **Switches by place.** **Places…** (in the panel and the right-click menu) lists labeled places, each set to
+  *Auto record*, *Record meetings only* or *Auto off*. While you're inside a place's radius, its setting replaces
+  Always / Meetings; arriving or leaving applies right away, and a manual pause or start holds until then. Locate a
+  place by typing its latitude and longitude, with **Use current location**, with **Pick on map** and a click, or
+  by dragging its pin. Home and Work are there from the start with no location, so they do nothing until you set
+  them. Places are saved to `places.json` in the ozen folder as plain JSON (fields: `Place` in `menubar.swift`;
+  default radius: `defaultRadius`). The map is `map.html` (Leaflet + OpenStreetMap, no API key), which any web view
+  or browser can host.
 
 - **Hands meetings to an agent.** Switch the panel to **Meetings** for every past meeting (a silence of 10+ minutes
   starts a new one). Select one or more (⌘/⇧-click) and press **Open** to put their transcripts in a fresh folder
@@ -90,7 +98,8 @@ Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
 
 On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** and **Microphone** access;
-grant both (System Settings > Privacy & Security), then press Start again. The build signs the app and recorder
+grant both (System Settings > Privacy & Security), then press Start again. **Location Services** is asked for
+only when you first locate a place; without it, places never match and recording follows Always / Meetings. The build signs the app and recorder
 with a local self-signed certificate (created once in `~/Library/Keychains/ozen-signing.keychain-db`), so the
 permissions survive rebuilds. The Whisper and ECAPA models download on first use.
 
@@ -139,3 +148,6 @@ with `--real` once you have a few dozen fixes.
 In *Always* mode the mic records everything said near the Mac, not only meetings; use *Meetings* mode to limit it.
 This records and transcribes other people. Tell participants, and follow your local recording laws.
 Voiceprints are biometric data: keep the registry private and enroll only people who agreed.
+`places.json` holds where you live and work. It stays on the Mac and is gitignored; don't copy it into shared
+folders. Your location is never sent anywhere, but viewing the Places map fetches tiles for that area from
+OpenStreetMap's servers.
