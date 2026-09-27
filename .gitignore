@@ -13,6 +13,7 @@ start.log
 mic-silent
 no-display
 mic-fallback
+.transcriber-started
 *.png
 lines.jsonl
 tags.json

@@ -93,6 +93,41 @@ fn recorder_blocked(log: &str) -> bool {
         .is_some_and(|l| l.contains(BLOCKED))
 }
 
+const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, to pace automatic restarts
+
+fn start_transcriber() {
+    if !ok(cmd("git")
+        .args(["-C", "voices", "pull", "-q", "--ff-only"])
+        .stderr(Stdio::null()))
+    {
+        let _ = std::io::Write::write_all(
+            &mut log(),
+            b"voices registry pull failed; using local copy\n",
+        );
+    }
+    let _ = File::create(TR_STARTED);
+    spawn_detached(
+        cmd("uv").args(["run", "transcribe.py", "chunks", "transcript.txt"]),
+        log().into(),
+        log().into(),
+    );
+}
+
+/// While recording, a transcriber that died gets restarted. The app polls `status` every 2s, so this is the
+/// supervisor. At most once a minute, so one that crashes on start doesn't respawn in a tight loop.
+fn restart_dead_transcriber() {
+    let recent = fs::metadata(TR_STARTED)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < Duration::from_secs(60)));
+    if !recent && !running(TR) {
+        let _ = std::io::Write::write_all(
+            &mut log(),
+            b"transcriber not running while recording; restarting it\n",
+        );
+        start_transcriber();
+    }
+}
+
 fn build_rec() -> bool {
     newer("rec", "rec.swift") || ok(cmd("swiftc").args(["-O", "rec.swift", "-o", "rec"]))
 }
@@ -159,20 +194,7 @@ fn main() {
             }
             fs::create_dir_all("chunks").expect("create chunks/");
             if !running(TR) {
-                if !ok(cmd("git")
-                    .args(["-C", "voices", "pull", "-q", "--ff-only"])
-                    .stderr(Stdio::null()))
-                {
-                    let _ = std::io::Write::write_all(
-                        &mut log(),
-                        b"voices registry pull failed; using local copy\n",
-                    );
-                }
-                spawn_detached(
-                    cmd("uv").args(["run", "transcribe.py", "chunks", "transcript.txt"]),
-                    log().into(),
-                    log().into(),
-                );
+                start_transcriber();
             }
             if !running(REC) {
                 spawn_detached(cmd("./rec").arg("chunks"), log().into(), log().into());
@@ -198,6 +220,7 @@ fn main() {
         }
         "status" => {
             let state = if running(REC) {
+                restart_dead_transcriber();
                 "recording"
             // .stopping outlives a drain that was killed; without the drain it's stale, not "stopping"
             } else if Path::new(".stopping").exists() && running(TR) && running(DRAIN) {
@@ -242,7 +265,7 @@ fn main() {
             let n = chunks_waiting();
             if !running(TR) {
                 println!(
-                    "Transcriber isn't running, {n} chunks waiting: press Stop, then Start (details in start.log)"
+                    "Transcriber stopped, {n} chunks waiting: restarting it automatically (details in start.log)"
                 );
             } else if n > 12 {
                 // >1 min behind (call+mic+local per 15s); first run also downloads the models
