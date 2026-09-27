@@ -38,6 +38,7 @@ UNSURE = 0.08  # a line this close to the threshold, or to a second person, gets
 REVIEW_MAX = 50
 IGNORE = "Ignored"  # reserved tag: a voice to drop, not a person
 IGNORES = HERE / "ignore.json"
+IGNORE_MARGIN = 0.1  # same as transcribe.py: a line is only ignored on a clear match
 
 
 def calibrate(genuine: list[float], impostor: list[float]) -> float:
@@ -148,7 +149,7 @@ def retrain(retry: bool = True) -> None:
         e = np.array(r["e"])
         ranked = sorted(((float(prints[k] @ e), k) for k in prints), reverse=True) or [(-1.0, None)]
         near = float((ignore @ e).max()) if ignored else -1.0
-        if near >= threshold and near > ranked[0][0]:  # a voice you ignored, not a person
+        if near >= threshold + IGNORE_MARGIN and near > ranked[0][0]:  # a voice you ignored, not a person
             labels[sid] = {"spk": IGNORE, "sim": round(near, 3), "margin": 0, "unsure": False}
             continue
         if not prints:

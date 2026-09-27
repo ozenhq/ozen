@@ -71,6 +71,7 @@ KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); train.py writes their prints
 IGNORES = HERE / "ignore.json"
+IGNORE_MARGIN = 0.1  # ignoring needs SAME_SPEAKER + this: dropping someone's speech costs more than keeping noise
 ignored = np.zeros((0, 192), dtype=np.float32)
 
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
@@ -133,7 +134,7 @@ def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
     e /= np.linalg.norm(e)
     # ponytail: nearest ignored line, O(ignored lines) per utterance; fine for thousands
     near = float((ignored @ e).max()) if len(ignored) else -1.0
-    if near >= SAME_SPEAKER and near > max((float(s[1] @ e) for s in speakers if not anon(s[0])), default=-1.0):
+    if near >= SAME_SPEAKER + IGNORE_MARGIN and near > max((float(s[1] @ e) for s in speakers if not anon(s[0])), default=-1.0):
         return IGNORE, e  # closer to a voice you ignored than to anyone you know
     if clip.size < MIN_EMBED_SEC * SR:
         # A short clip's print is too noisy to found or reshape a voice: label it only on a strong match.
