@@ -223,6 +223,13 @@ fn main() {
                     "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
                 );
             }
+            if let Ok(names) = fs::read_to_string("mic-fallback")
+                && let Some((using, silent)) = names.split_once('\n')
+            {
+                println!(
+                    "Using {using} because {silent} is silent. Pick an input in System Settings > Sound to switch"
+                );
+            }
             if let Ok(device) = fs::read_to_string("mic-silent") {
                 println!(
                     "Microphone is silent ({device}): pick another input in System Settings > Sound"
