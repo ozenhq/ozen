@@ -83,14 +83,22 @@ fn ours(pattern: &str) -> Vec<String> {
     let Ok(found) = cmd("pgrep").args(["-f", pattern]).output() else {
         return Vec::new();
     };
-    let pids: Vec<&str> = std::str::from_utf8(&found.stdout).unwrap_or("").split_whitespace().collect();
+    let pids: Vec<&str> = std::str::from_utf8(&found.stdout)
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
     if pids.is_empty() {
         return Vec::new();
     }
-    let Ok(cwd) = cmd("lsof").args(["-a", "-d", "cwd", "-Fpn", "-p", &pids.join(",")]).output() else {
+    let Ok(cwd) = cmd("lsof")
+        .args(["-a", "-d", "cwd", "-Fpn", "-p", &pids.join(",")])
+        .output()
+    else {
         return Vec::new();
     };
-    let here = std::env::current_dir().and_then(fs::canonicalize).unwrap_or_default();
+    let here = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .unwrap_or_default();
     pids_in(&String::from_utf8_lossy(&cwd.stdout), &here)
 }
 
@@ -552,7 +560,11 @@ mod tests {
         let other = tmp.join(format!("ozen-pids-other-{}", std::process::id()));
         std::fs::create_dir_all(&here).unwrap();
         std::fs::create_dir_all(&other).unwrap();
-        let out = format!("p10\nfcwd\nn{}\np11\nfcwd\nn{}\np12\nfcwd\nn/gone\n", here.display(), other.display());
+        let out = format!(
+            "p10\nfcwd\nn{}\np11\nfcwd\nn{}\np12\nfcwd\nn/gone\n",
+            here.display(),
+            other.display()
+        );
         assert_eq!(super::pids_in(&out, &here), ["10"]);
         let _ = (std::fs::remove_dir(&here), std::fs::remove_dir(&other));
     }
@@ -593,4 +605,3 @@ mod tests {
         assert!(!recorder_blocked(""));
     }
 }
-
