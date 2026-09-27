@@ -43,9 +43,9 @@ REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebu
 RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks, local only
 KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
-IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); train.py writes their prints
+IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); `ozen retrain` (src/ignore.rs) writes their prints
 IGNORES = HERE / "ignore.json"
-IGNORE_MARGIN = 0.1  # ignoring needs SAME_SPEAKER + this: dropping someone's speech costs more than keeping noise
+IGNORE_MARGIN = 0.1  # same as src/ignore.rs MARGIN: dropping someone's speech costs more than keeping noise
 ignored = np.zeros((0, 192), dtype=np.float32)
 
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})

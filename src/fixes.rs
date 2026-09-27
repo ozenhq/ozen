@@ -28,20 +28,20 @@ pub const LEARN: Learn = Learn {
 
 pub static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\w+(?:['"״׳]\w+)*"#).unwrap()); // ג'ירה, צה"ל stay whole
 
-fn read(path: &str) -> Map<String, Value> {
+pub(crate) fn read(path: &str) -> Map<String, Value> {
     fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 
-fn write(path: &str, v: &Value) {
+pub(crate) fn write(path: &str, v: &Value) {
     fs::write(path, serde_json::to_string_pretty(v).expect("json") + "\n")
         .unwrap_or_else(|e| panic!("write {path}: {e}"));
 }
 
 /// Transcript lines in file order (only lines with a voiceprint, like train.py).
-fn lines() -> Vec<Map<String, Value>> {
+pub(crate) fn lines() -> Vec<Map<String, Value>> {
     fs::read_to_string(LINES)
         .unwrap_or_default()
         .lines()

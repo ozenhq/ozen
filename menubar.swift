@@ -19,7 +19,7 @@ let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
 let dir = URL(fileURLWithPath: args.first ?? NSString(string: "~/ozen").expandingTildeInPath)
 let maxLines = 400
-let ignoreTag = "Ignored"  // reserved tag, same as train.py / transcribe.py
+let ignoreTag = "Ignored"  // reserved tag, same as src/ignore.rs / transcribe.py
 
 func json(_ name: String) -> Any? {
     (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
@@ -231,7 +231,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let footer = NSTextField(labelWithString: "")
     var text: NSTextView { scroll.documentView as! NSTextView }
     var signature = ""
-    var pending: [String: String] = [:]  // tags shown right away while train.py runs
+    var pending: [String: String] = [:]  // tags shown right away while `ozen tag` retrains
     var pendingFixes: [String: String] = [:]  // same for text fixes
     var state = "stopped"  // from `ozen status`: recording | paused | stopping | stopped
     var problems: [String] = []  // from `ozen health`: why recording isn't turning into transcript
@@ -1035,7 +1035,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     func tag(_ id: String, _ name: String) {
-        tag([id], name, command: "cd \"$OZEN_DIR\" && uv run -q train.py tag \"$OZEN_ID\" \"$OZEN_NAME\"")
+        tag([id], name, command: "cd \"$OZEN_DIR\" && target/release/ozen tag \"$OZEN_ID\" \"$OZEN_NAME\"")
     }
 
     func tag(_ ids: [String], _ name: String, command: String) {
