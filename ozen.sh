@@ -52,7 +52,7 @@ start | resume)
         git -C voices pull -q --ff-only 2>/dev/null || echo "voices registry pull failed; using local copy" >>start.log
         nohup uv run transcribe.py chunks transcript.txt >>start.log 2>&1 </dev/null &
     fi
-    pgrep -qf "$REC" || nohup ./rec chunks >>start.log 2>&1 </dev/null &
+    pgrep -qf "$REC" || { nohup ./rec chunks >>start.log 2>&1 </dev/null & }  # braces: no subshell left waiting on rec
     ;;
 pause)
     pkill -INT -f "$REC"  # SIGINT: recorder flushes its current chunk first
