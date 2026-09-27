@@ -1,0 +1,27 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    # The recorder needs ScreenCaptureKit mic capture (macOS 15 SDK), and screencapturekit's Metal bridge
+    # compiles against macOS 26 APIs, so build with the newest Xcode the image has.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+      - name: Swift menu bar and icon type-check
+        run: swiftc -typecheck menubar.swift && swiftc -typecheck icon.swift
+      - name: Python scripts compile
+        run: python3 -m py_compile transcribe.py train.py eval.py
