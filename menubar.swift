@@ -3,6 +3,8 @@
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag. Click a line's text to fix what was
 // said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
+// Tag a voice "Ignored" (a video playing nearby) and ozen stops transcribing it; ignored lines show
+// dimmed and leave the timeline.
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
 // Places: labeled locations that override the mode while you're there (auto record, or auto off).
 // Meetings view: pick past meetings (⌘/⇧-click for several), optionally let Kev add related ones, and start
@@ -17,6 +19,7 @@ let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
 let dir = URL(fileURLWithPath: args.first ?? NSString(string: "~/ozen").expandingTildeInPath)
 let maxLines = 400
+let ignoreTag = "Ignored"  // reserved tag, same as train.py / transcribe.py
 
 func json(_ name: String) -> Any? {
     (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
@@ -92,7 +95,7 @@ func meetingUsingMic() -> String? {
     return nil
 }
 
-struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String }
+struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int? }
 
 // MARK: timeline
 
@@ -240,6 +243,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
     var review: [String] = []  // line ids train.py is least sure about, most uncertain first
+    var shown: [String: (spk: String, t: Double, run: Int?)] = [:]  // line id -> speaker as shown in the transcript
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
     var lastMeeting: Date?, meetingName: String?
@@ -844,7 +848,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let text = r["text"] as? String ?? ""
             let d = r["d"] as? Double ?? min(15, max(1, Double(text.count) / 14))  // older lines: estimate from length
             return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), t: t, d: d, spk: r["spk"] as? String ?? "?",
-                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? ""))
+                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? "", run: r["run"] as? Int))
         }.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
@@ -867,12 +871,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let history = lines(limit: 5000)  // timeline spans more than the transcript shows
         let all = Array(history.suffix(maxLines))
         let atEnd = timelineScroll.contentView.bounds.maxX >= timeline.bounds.width - 20
-        timeline.segments = history.map { l in
+        timeline.segments = history.compactMap { l in
             let tagged = !(tags[l.id] ?? "").isEmpty
             let guess = labels[l.id]
-            return Segment(id: l.id, t: l.t, d: l.d, speaker: tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk),
-                           text: l.text, unsure: !tagged && (guess?["unsure"] as? Bool ?? false))
+            let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
+            return speaker == ignoreTag ? nil : Segment(id: l.id, t: l.t, d: l.d, speaker: speaker,
+                                                        text: l.text, unsure: !tagged && (guess?["unsure"] as? Bool ?? false))
         }
+        shown = [:]
         if atEnd { scrollTimelineToEnd() }
         if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Press Start.", attributes: [.foregroundColor: NSColor.secondaryLabelColor])) }
         for l in all {
@@ -881,6 +887,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let unsure = !tagged && (guess?["unsure"] as? Bool ?? false)
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             let said = fixes[l.id].flatMap { $0.isEmpty ? nil : $0 } ?? l.text
+            shown[l.id] = (speaker, l.t, l.run)
+            let ignored = speaker == ignoreTag
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
             if said.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
@@ -902,7 +910,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor,
             ]) { $1 }))
             out.append(NSAttributedString(string: said, attributes: base.merging([
-                .font: NSFont.systemFont(ofSize: 13), .link: URL(string: "ozen://fix/\(l.id)")!,
+                .font: NSFont.systemFont(ofSize: ignored ? 11 : 13), .link: URL(string: "ozen://fix/\(l.id)")!,
+                .foregroundColor: ignored ? NSColor.tertiaryLabelColor : NSColor.labelColor,
                 .toolTip: said == l.text ? "Click to fix the text" : "Fixed. Heard: \(l.text)",
             ]) { $1 }))
             out.append(NSAttributedString(string: "\n", attributes: base))
@@ -920,7 +929,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         review = (s["review"] as? [String] ?? []).filter { (tags[$0] ?? "").isEmpty && headerRanges[$0] != nil }
         reviewButton.title = review.isEmpty ? "Review" : "Review \(review.count)"
         reviewButton.isEnabled = !review.isEmpty
-        footer.stringValue = "  \(acc) · \(tagged) tagged · orange ? = unsure, tag it to teach ozen · click text to fix it"
+        let ignoredLines = (s["ignored"] as? Int ?? 0) > 0 ? " · \(s["ignored"]!) ignored" : ""
+        footer.stringValue = "  \(acc) · \(tagged) tagged\(ignoredLines) · orange ? = unsure, tag it to teach ozen · click text to fix it"
     }
 
     // Jump to the line ozen is least sure about and ask who said it.
@@ -958,6 +968,22 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         new.target = self
         new.representedObject = id
         menu.addItem(new)
+        // Not a person (a video playing nearby): ozen stops transcribing voices like this one.
+        let ignore = NSMenuItem(title: "Ignore this voice", action: #selector(pick(_:)), keyEquivalent: "")
+        ignore.target = self
+        ignore.representedObject = [id, ignoreTag]
+        menu.addItem(ignore)
+        // Only session labels: a named person (you) is never one click from being ignored.
+        if let (spk, t, run) = shown[id], spk.range(of: "^S[0-9]+$", options: .regularExpression) != nil {
+            // S1, S2... restart with the transcriber, so only that run's lines are the same voice
+            // (older lines have no run: those within an hour).
+            let same = shown.filter { l in l.value.spk == spk && (run != nil ? l.value.run == run : abs(l.value.t - t) < 3600) }.map(\.key)
+            let all = NSMenuItem(title: "Ignore all \(same.count) line\(same.count == 1 ? "" : "s") by \(spk)", action: #selector(ignoreAll(_:)), keyEquivalent: "")
+            all.target = self
+            all.representedObject = same
+            menu.addItem(all)
+        }
+        menu.addItem(.separator())
         let clear = NSMenuItem(title: "Clear tag", action: #selector(pick(_:)), keyEquivalent: "")
         clear.target = self
         clear.representedObject = [id, ""]
@@ -971,7 +997,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let fromRegistry = registry.compactMap { f in
             (try? Data(contentsOf: f)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["name"] as? String
         }
-        let fromTags = (json("tags.json") as? [String: String] ?? [:]).values.filter { !$0.isEmpty }
+        let fromTags = (json("tags.json") as? [String: String] ?? [:]).values.filter { !$0.isEmpty && $0 != ignoreTag }
         return Array(Set(fromRegistry + fromTags)).sorted()
     }
 
@@ -996,17 +1022,26 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         tag(pair[0], pair[1])
     }
 
+    @objc func ignoreAll(_ sender: NSMenuItem) {
+        guard let ids = sender.representedObject as? [String] else { return }
+        tag(ids, ignoreTag, command: "cd \"$OZEN_DIR\" && target/release/ozen ignore ${=OZEN_ID}")
+    }
+
     func tag(_ id: String, _ name: String) {
-        pending[id] = name
+        tag([id], name, command: "cd \"$OZEN_DIR\" && uv run -q train.py tag \"$OZEN_ID\" \"$OZEN_NAME\"")
+    }
+
+    func tag(_ ids: [String], _ name: String, command: String) {
+        for id in ids { pending[id] = name }
         reload()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Values go through the environment, never into the command string.
-        p.arguments = ["-lc", "cd \"$OZEN_DIR\" && uv run -q train.py tag \"$OZEN_ID\" \"$OZEN_NAME\""]
-        p.environment = ProcessInfo.processInfo.environment.merging(["OZEN_DIR": dir.path, "OZEN_ID": id, "OZEN_NAME": name]) { $1 }
+        // Values go through the environment, never into the command string. Line ids have no spaces.
+        p.arguments = ["-lc", command]
+        p.environment = ProcessInfo.processInfo.environment.merging(["OZEN_DIR": dir.path, "OZEN_ID": ids.joined(separator: " "), "OZEN_NAME": name]) { $1 }
         p.terminationHandler = { _ in
             DispatchQueue.main.async {
-                self.pending[id] = nil
+                for id in ids { self.pending[id] = nil }
                 self.signature = ""
                 self.reload()
             }

@@ -14,6 +14,10 @@ over the tags, calibrates the same-voice threshold from them (config.json, read 
 transcriber), relabels untagged lines with a confidence, queues the least certain ones for you
 to tag next (stats.json "review"), logs the trend (history.jsonl), and pushes the registry.
 That is the loop: tag what it asks -> better prints and threshold -> fewer uncertain lines.
+
+Lines tagged IGNORE (`ozen ignore <line-id>...`) are not a person: their prints stay local (ignore.json, never pushed) and are
+matched one by one, since a video playing nearby has many voices. Lines closer to them than to any
+person are labeled IGNORE, and the transcriber drops such utterances live.
 """
 import datetime
 import json
@@ -31,6 +35,9 @@ ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 DEFAULT_THRESHOLD = 0.4  # until there are enough tags to calibrate one
 UNSURE = 0.08  # a line this close to the threshold, or to a second person, gets queued for review
 REVIEW_MAX = 50
+IGNORE = "Ignored"  # reserved tag: a voice to drop, not a person
+IGNORES = HERE / "ignore.json"
+IGNORE_MARGIN = 0.1  # same as transcribe.py: a line is only ignored on a clear match
 
 
 def calibrate(genuine: list[float], impostor: list[float]) -> float:
@@ -96,8 +103,10 @@ def retrain(retry: bool = True) -> None:
         for n, s in samples.items():
             if n != name:
                 s.pop(sid, None)
+    ignored = [lines[sid]["e"] for sid, name in tags.items() if name == IGNORE and sid in lines]
+    IGNORES.write_text(json.dumps(ignored))
     for sid, name in tags.items():
-        if name and sid in lines:
+        if name and name != IGNORE and sid in lines:
             samples.setdefault(name, {})[sid] = {"w": 1, "e": lines[sid]["e"]}
     samples = {n: s for n, s in samples.items() if s}
 
@@ -132,11 +141,18 @@ def retrain(retry: bool = True) -> None:
     (REPO / "config.json").write_text(json.dumps(config, indent=1) + "\n")
 
     labels, review = {}, []
+    ignore = np.array(ignored).reshape(len(ignored), -1)
     for sid, r in lines.items():
-        if sid in tags or not prints:
+        if sid in tags or not (prints or ignored):
             continue
         e = np.array(r["e"])
-        ranked = sorted(((float(prints[k] @ e), k) for k in prints), reverse=True)
+        ranked = sorted(((float(prints[k] @ e), k) for k in prints), reverse=True) or [(-1.0, None)]
+        near = float((ignore @ e).max()) if ignored else -1.0
+        if near >= threshold + IGNORE_MARGIN and near > ranked[0][0]:  # a voice you ignored, not a person
+            labels[sid] = {"spk": IGNORE, "sim": round(near, 3), "margin": 0, "unsure": False}
+            continue
+        if not prints:
+            continue
         best, name = ranked[0]
         margin = best - ranked[1][0] if len(ranked) > 1 else best - threshold
         # Unsure = near the threshold or nearly tied between two people: tagging these teaches the most.
@@ -149,7 +165,7 @@ def retrain(retry: bool = True) -> None:
     LABELS.write_text(json.dumps(labels, ensure_ascii=False))
 
     stats = {"accuracy": round(correct / evaluated, 3) if evaluated else None, "evaluated": evaluated,
-             "tagged": sum(1 for v in tags.values() if v), "threshold": threshold,
+             "tagged": sum(1 for v in tags.values() if v and v != IGNORE), "ignored": len(ignored), "threshold": threshold,
              "review": [sid for _, sid in sorted(review)][:REVIEW_MAX], "unsure": len(review),
              "people": {n: len([k for k in s if k != "legacy"]) for n, s in samples.items()}}
     hist_path = REPO / "history.jsonl"

@@ -27,6 +27,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Each tag runs `train.py`: every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
   prints, and the live transcriber reloads them.
+- **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
+  name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
+  Those lines, and earlier ones that sound like them, turn grey and leave the timeline, and the transcriber stops
+  writing that voice from then on. Ignored prints stay on this Mac (`ignore.json`), never in the registry. To undo,
+  tag the line as a person or **Clear tag**.
 - **Improves itself: the loop.** Every retrain also
   1. calibrates the same-voice threshold from your tags (the cutoff that best separates same-person from
      different-person similarities), which the live transcriber picks up immediately;
@@ -98,6 +103,7 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen fix <line-id> "right text"` | Correct a line's text (what the panel does); empty clears. Relearns hint words and corrections |
 | `target/release/ozen meetings` | Past meetings, newest first: id, start, minutes, lines, first words |
 | `target/release/ozen gather [--kev] ID...` | Write those meetings into `context/<now>/` and print the folder; `--kev` adds the ones Kev judges related |
+| `target/release/ozen ignore <line-id>...` | Tag lines as a voice to ignore (what **Ignore all** in the panel does). Retrains |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
