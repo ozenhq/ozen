@@ -501,7 +501,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     // MARK: places
 
     func currentPlace() -> Place? {
-        guard let here, Date().timeIntervalSince(here.timestamp) < 30 * 60 else { return nil }  // stale fix: don't guess
+        // No age limit: tracking sends no new fix while you stand still, so an old fix at home is still home.
+        // A failed or revoked location clears `here` instead, so a stale place never outlives its source.
+        guard let here else { return nil }
         return loadPlaces().first { p in
             guard let lat = p.lat, let lon = p.lon else { return false }
             return here.distance(from: CLLocation(latitude: lat, longitude: lon)) <= p.radius ?? defaultRadius
@@ -537,6 +539,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {
+        if (error as? CLError)?.code != .locationUnknown { here = nil }  // locationUnknown is transient; it keeps trying
         if settingPlace != nil {
             settingPlace = nil
             placesNote.stringValue = "Couldn't get your location: \(error.localizedDescription)"
@@ -545,6 +548,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
         if m.authorizationStatus == .denied || m.authorizationStatus == .restricted {
+            here = nil
             placesNote.stringValue = "Location access is off. Turn on Ozen in System Settings → Privacy & Security → Location Services."
         }
     }
