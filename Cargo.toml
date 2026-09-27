@@ -6,3 +6,8 @@ publish = false
 
 [profile.release]
 strip = true
+
+[dependencies]
+hound = "3.5.1"
+screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }
+signal-hook = "0.4.4"

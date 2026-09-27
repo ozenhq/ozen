@@ -1,5 +1,4 @@
 # build output
-rec
 __pycache__/
 
 # model weights (downloaded on first run)

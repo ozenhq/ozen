@@ -8,7 +8,7 @@ use std::time::Duration;
 
 const USAGE: &str = "\
 ozen control: start | pause | resume | stop | status | health | look | app | bar
-  start/resume  record + transcribe (builds the recorder if rec.swift changed)
+  start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
@@ -17,7 +17,8 @@ ozen control: start | pause | resume | stop | status | health | look | app | bar
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
-const REC: &str = r"^\./rec chunks"; // anchored so pgrep never matches shells that merely mention the command
+const REC_BIN: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
+const REC: &str = r"^target/release/rec chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
@@ -217,15 +218,24 @@ fn restart_dead_transcriber() {
     }
 }
 
-fn build_rec() -> bool {
-    if newer("rec", "rec.swift") {
-        return true;
+/// `cargo build` re-links rec with an ad-hoc signature, which macOS would treat as a new app; re-sign it
+/// with the stable identity so its recording permission carries over.
+fn prepare_rec() -> bool {
+    if !Path::new(REC_BIN).exists() {
+        eprintln!("{REC_BIN} missing: run `cargo build --release`");
+        return false;
     }
-    let built = ok(cmd("swiftc").args(["-O", "rec.swift", "-o", "rec"]));
-    if built {
-        sign("rec", false);
+    let signed = cmd("codesign")
+        .args(["-dr", "-", REC_BIN])
+        .output()
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout).contains("certificate leaf")
+                || String::from_utf8_lossy(&o.stderr).contains("certificate leaf")
+        });
+    if !signed {
+        sign(REC_BIN, false);
     }
-    built
+    true
 }
 
 fn build_app(app: &str) -> bool {
@@ -281,7 +291,7 @@ fn main() {
     let app = format!("{}/Applications/Ozen.app", home());
     match std::env::args().nth(1).as_deref().unwrap_or("") {
         "start" | "resume" => {
-            if !build_rec() {
+            if !prepare_rec() {
                 exit(1);
             }
             fs::create_dir_all("chunks").expect("create chunks/");
@@ -289,7 +299,7 @@ fn main() {
                 start_transcriber();
             }
             if !running(REC) {
-                spawn_detached(cmd("./rec").arg("chunks"), log().into(), log().into());
+                spawn_detached(cmd(REC_BIN).arg("chunks"), log().into(), log().into());
             }
         }
         "pause" => signal("-INT", REC), // SIGINT: recorder flushes its current chunk first
