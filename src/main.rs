@@ -54,6 +54,14 @@ fn signal(sig: &str, pattern: &str) {
     let _ = cmd("pkill").args([sig, "-f", pattern]).status();
 }
 
+/// Keep start.log bounded: at `start`, move a log past 1 MiB aside to start.log.1 (one generation kept).
+/// Processes already running keep appending to the moved file until they restart; nothing is lost.
+fn rotate_log() {
+    if fs::metadata("start.log").is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = fs::rename("start.log", "start.log.1");
+    }
+}
+
 fn log() -> File {
     OpenOptions::new()
         .create(true)
@@ -298,6 +306,7 @@ fn main() {
     let app = format!("{}/Applications/Ozen.app", home());
     match std::env::args().nth(1).as_deref().unwrap_or("") {
         "start" | "resume" => {
+            rotate_log();
             if !prepare_rec() {
                 exit(1);
             }
@@ -427,6 +436,27 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rotates_only_a_log_past_one_mib() {
+        let dir = std::env::temp_dir().join(format!("ozen-rotate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        std::fs::write("start.log", vec![b'x'; 1000]).unwrap();
+        super::rotate_log();
+        assert!(
+            std::path::Path::new("start.log").exists(),
+            "small log stays"
+        );
+        std::fs::write("start.log", vec![b'x'; (1 << 20) + 1]).unwrap();
+        super::rotate_log();
+        assert!(!std::path::Path::new("start.log").exists());
+        assert_eq!(
+            std::fs::metadata("start.log.1").unwrap().len(),
+            (1 << 20) + 1
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::recorder_blocked;
 
     #[test]
