@@ -3,9 +3,11 @@
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag.
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
+// Places: labeled locations that override the mode while you're there (auto record, or auto off).
 // Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
 import AppKit
 import CoreAudio
+import CoreLocation
 
 let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
@@ -21,6 +23,26 @@ let meetingApps = [("us.zoom", "Zoom"), ("com.google.Chrome", "Chrome"), ("com.m
                    ("com.tinyspeck.slackmacgap", "Slack"), ("com.apple.FaceTime", "FaceTime"),
                    ("com.apple.avconferenced", "FaceTime"), ("com.hnc.Discord", "Discord")]
 let meetingGrace: TimeInterval = 20  // mic can drop briefly (mute toggles, reconnects) without ending the meeting
+
+// A place with no coordinates yet does nothing until you set it to where you are.
+struct Place: Codable {
+    var label: String
+    var lat: Double?
+    var lon: Double?
+    var action: String  // "record" | "off"
+}
+let placeRadius: CLLocationDistance = 150  // meters; ponytail: one radius for every place, make it per-place if needed
+let placeActions = [("record", "Auto record"), ("off", "Auto off")]
+
+func loadPlaces() -> [Place] {
+    guard let d = UserDefaults.standard.data(forKey: "places"),
+          let p = try? JSONDecoder().decode([Place].self, from: d) else {
+        return [Place(label: "Home", action: "off"), Place(label: "Work", action: "record")]
+    }
+    return p
+}
+
+func savePlaces(_ p: [Place]) { UserDefaults.standard.set(try? JSONEncoder().encode(p), forKey: "places") }
 
 /// Name of a meeting app currently capturing the microphone, via Core Audio's per-process objects (macOS 14.2+).
 /// ozen's own capture shows up as com.apple.replayd, so it never counts as a meeting.
@@ -183,7 +205,7 @@ final class TimelineView: NSView, NSViewToolTipOwner {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
+final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let popover = NSPopover()
     let scroll = NSTextView.scrollableTextView()
@@ -210,6 +232,14 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     let viewControl = NSSegmentedControl(labels: ["Transcript", "Timeline"], trackingMode: .selectOne, target: nil, action: nil)
     let zoomOut = NSButton(title: "−", target: nil, action: nil)
     let zoomIn = NSButton(title: "+", target: nil, action: nil)
+    let placesButton = NSButton(title: "Places…", target: nil, action: nil)
+    let location = CLLocationManager()
+    var here: CLLocation?
+    var placeLabel: String?  // label of the place we're in; a change re-applies auto control
+    var settingPlace: Int?  // row waiting for a location fix after "Use current location"
+    var placesWindow: NSWindow?
+    let placesStack = NSStackView()
+    let placesNote = NSTextField(wrappingLabelWithString: "")
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -224,7 +254,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         text.linkTextAttributes = [.foregroundColor: NSColor.secondaryLabelColor, .cursor: NSCursor.pointingHand]
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext))] {
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces))] {
             b.target = self
             b.action = cmd
             b.bezelStyle = .rounded
@@ -238,7 +268,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         modeControl.controlSize = .small
         modeControl.selectedSegment = mode == "meetings" ? 1 : 0
         modeControl.toolTip = "Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls."
-        let controls = NSStackView(views: [status, NSView(), modeControl, reviewButton, startButton, pauseButton, stopButton])
+        let controls = NSStackView(views: [status, NSView(), modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         viewControl.target = self
         viewControl.action = #selector(switchView)
@@ -273,6 +303,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         popover.contentViewController = vc
         popover.behavior = .transient
 
+        location.delegate = self
+        location.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        location.distanceFilter = 50
+        watchLocation()
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload(); self?.refreshState() }
         refreshState()
         if CommandLine.arguments.contains("--open") { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.clicked() } }
@@ -299,6 +333,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
                 mi.state = mode == m ? .on : .off
                 menu.addItem(mi)
             }
+            let places = NSMenuItem(title: "Places…", action: #selector(showPlaces), keyEquivalent: "")
+            places.target = self
+            menu.addItem(places)
             menu.addItem(.separator())
             menu.addItem(withTitle: "Quit ozen bar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             item.menu = menu
@@ -357,7 +394,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             meetingName = app
         }
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
-        let wanted = mode == "always" || inMeeting
+        let place = currentPlace()
+        if place?.label != placeLabel {
+            placeLabel = place?.label
+            lastWanted = nil  // arriving at or leaving a place applies right away
+        }
+        let wanted = place.map { $0.action == "record" } ?? (mode == "always" || inMeeting)
         defer { lastWanted = wanted; show(state: state) }
         guard wanted != lastWanted else { return }
         if wanted, state == "stopped" || state == "paused" {
@@ -375,9 +417,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         warning.superview?.isHidden = problems.isEmpty
         item.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
-        let meeting = mode == "meetings" && inMeeting ? " · \(meetingName ?? "meeting")" : ""
+        let place = currentPlace()
+        let meeting = place.map { " · \($0.label)" } ?? (mode == "meetings" && inMeeting ? " · \(meetingName ?? "meeting")" : "")
         status.stringValue = ["recording": "● Recording\(meeting)", "paused": "Paused", "stopping": "Finishing transcription…"][s]
-            ?? (mode == "meetings" ? "Waiting for a meeting" : "Stopped")
+            ?? (place.map { "Off · \($0.label)" } ?? (mode == "meetings" ? "Waiting for a meeting" : "Stopped"))
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
         startButton.title = s == "paused" ? "Resume" : "Start"
         startButton.isEnabled = s == "stopped" || s == "paused"
@@ -393,6 +436,167 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     @objc func startCapture() { control(state == "paused" ? "resume" : "start", optimistic: "recording") }
     @objc func pauseCapture() { control("pause", optimistic: "paused") }
     @objc func stopCapture() { control("stop", optimistic: "stopping") }
+
+    // MARK: places
+
+    func currentPlace() -> Place? {
+        guard let here, Date().timeIntervalSince(here.timestamp) < 30 * 60 else { return nil }  // stale fix: don't guess
+        return loadPlaces().first { p in
+            guard let lat = p.lat, let lon = p.lon else { return false }
+            return here.distance(from: CLLocation(latitude: lat, longitude: lon)) <= placeRadius
+        }
+    }
+
+    /// Track location only while some place has coordinates, so an unused feature never asks for location.
+    func watchLocation() {
+        if loadPlaces().contains(where: { $0.lat != nil }) {
+            location.requestAlwaysAuthorization()
+            location.startUpdatingLocation()
+        } else {
+            location.stopUpdatingLocation()
+            here = nil
+        }
+    }
+
+    func locationManager(_ m: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let fix = locations.last else { return }
+        here = fix
+        if let i = settingPlace {
+            settingPlace = nil
+            var places = loadPlaces()
+            if places.indices.contains(i) {
+                places[i].lat = fix.coordinate.latitude
+                places[i].lon = fix.coordinate.longitude
+                savePlaces(places)
+                watchLocation()
+                buildPlaces()
+            }
+        }
+        autoControl()
+    }
+
+    func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {
+        if settingPlace != nil {
+            settingPlace = nil
+            placesNote.stringValue = "Couldn't get your location: \(error.localizedDescription)"
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+        if m.authorizationStatus == .denied || m.authorizationStatus == .restricted {
+            placesNote.stringValue = "Location access is off. Turn on Ozen in System Settings → Privacy & Security → Location Services."
+        }
+    }
+
+    @objc func showPlaces() {
+        if placesWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 240), styleMask: [.titled, .closable],
+                             backing: .buffered, defer: false)
+            w.title = "Ozen Places"
+            w.isReleasedWhenClosed = false
+            placesStack.orientation = .vertical
+            placesStack.alignment = .leading
+            placesStack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+            placesNote.font = .systemFont(ofSize: 11)
+            placesNote.textColor = .secondaryLabelColor
+            w.contentView = placesStack
+            placesWindow = w
+        }
+        buildPlaces()
+        placesWindow?.center()
+        placesWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
+    /// One row per place: label, action, where it is, and buttons; the row index rides in each control's tag.
+    func buildPlaces() {
+        placesStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let intro = NSTextField(wrappingLabelWithString: "While you're within \(Int(placeRadius)) m of a place, its setting replaces "
+            + "Always/Meetings. Set a place to where you are now with “Use current location”.")
+        intro.font = .systemFont(ofSize: 12)
+        placesStack.addArrangedSubview(intro)
+        for (i, p) in loadPlaces().enumerated() {
+            let name = NSTextField(string: p.label)
+            name.placeholderString = "Label"
+            name.tag = i
+            name.target = self
+            name.action = #selector(renamePlace(_:))
+            name.cell?.sendsActionOnEndEditing = true  // clicking away saves too, not only Return
+            name.widthAnchor.constraint(equalToConstant: 120).isActive = true
+            let action = NSPopUpButton(frame: .zero, pullsDown: false)
+            action.addItems(withTitles: placeActions.map(\.1))
+            action.selectItem(at: placeActions.firstIndex { $0.0 == p.action } ?? 0)
+            action.tag = i
+            action.target = self
+            action.action = #selector(placeActionChanged(_:))
+            let whereText = p.lat.flatMap { lat in p.lon.map { String(format: "%.4f, %.4f", lat, $0) } } ?? "Not set"
+            let whereLabel = NSTextField(labelWithString: settingPlace == i ? "Locating…" : whereText)
+            whereLabel.textColor = p.lat == nil ? .secondaryLabelColor : .labelColor
+            whereLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
+            let row = NSStackView(views: [name, action, whereLabel])
+            for (title, sel) in [("Use current location", #selector(setPlaceHere(_:))), ("Remove", #selector(removePlace(_:)))] {
+                let b = NSButton(title: title, target: self, action: sel)
+                b.tag = i
+                b.bezelStyle = .rounded
+                b.controlSize = .small
+                row.addArrangedSubview(b)
+            }
+            placesStack.addArrangedSubview(row)
+        }
+        let add = NSButton(title: "Add place", target: self, action: #selector(addPlace))
+        add.bezelStyle = .rounded
+        placesStack.addArrangedSubview(add)
+        placesStack.addArrangedSubview(placesNote)
+        let rowWidth = placesStack.arrangedSubviews.dropFirst().map(\.fittingSize.width).max() ?? 536
+        intro.preferredMaxLayoutWidth = rowWidth  // wrap the intro to the rows, so it never squeezes them
+        placesWindow?.setContentSize(placesStack.fittingSize)
+    }
+
+    func editPlaces(_ change: (inout [Place]) -> Void) {
+        var places = loadPlaces()
+        change(&places)
+        savePlaces(places)
+        watchLocation()
+        lastWanted = nil  // a changed place applies right away
+        autoControl()
+    }
+
+    /// Save a label still being typed while row indexes are valid; a field removed mid-edit would rename the wrong row.
+    func commitEdits() { placesWindow?.makeFirstResponder(nil) }
+
+    @objc func renamePlace(_ sender: NSTextField) {
+        let label = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        editPlaces { if $0.indices.contains(sender.tag), !label.isEmpty { $0[sender.tag].label = label } }
+    }
+
+    @objc func placeActionChanged(_ sender: NSPopUpButton) {
+        editPlaces { if $0.indices.contains(sender.tag) { $0[sender.tag].action = placeActions[sender.indexOfSelectedItem].0 } }
+    }
+
+    @objc func setPlaceHere(_ sender: NSButton) {
+        commitEdits()
+        placesNote.stringValue = ""
+        settingPlace = sender.tag
+        if let here, Date().timeIntervalSince(here.timestamp) < 120 {
+            locationManager(location, didUpdateLocations: [here])  // already tracking and standing still: no new fix will come
+            return
+        }
+        location.requestAlwaysAuthorization()
+        location.requestLocation()  // one fresh fix, even when an older one is cached
+        buildPlaces()
+    }
+
+    @objc func removePlace(_ sender: NSButton) {
+        commitEdits()
+        editPlaces { if $0.indices.contains(sender.tag) { $0.remove(at: sender.tag) } }
+        buildPlaces()
+    }
+
+    @objc func addPlace() {
+        commitEdits()
+        editPlaces { $0.append(Place(label: "Place \($0.count + 1)", action: "record")) }
+        buildPlaces()
+    }
 
     // MARK: transcript / timeline switch
 
