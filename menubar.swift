@@ -351,6 +351,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         location.desiredAccuracy = kCLLocationAccuracyHundredMeters
         location.distanceFilter = 50
         watchLocation()
+        // The Mac may have moved while asleep: restarting tracking sends a fresh fix within seconds; the old place
+        // holds until it lands, rather than dropping to the global mode.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.location.stopUpdatingLocation()
+            self?.watchLocation()
+        }
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload(); self?.refreshState() }
         refreshState()
         if CommandLine.arguments.contains("--open") { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.clicked() } }
