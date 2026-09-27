@@ -22,11 +22,16 @@ pub struct Meeting {
 }
 
 fn local(t: f64) -> DateTime<Local> {
-    DateTime::from_timestamp(t as i64, 0).unwrap_or_default().with_timezone(&Local)
+    DateTime::from_timestamp(t as i64, 0)
+        .unwrap_or_default()
+        .with_timezone(&Local)
 }
 
 fn read_json(path: &str) -> Value {
-    fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null)
+    fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// Every transcript line, time ordered, rendered like `train.py show`: speakers corrected by your tags.
@@ -39,11 +44,26 @@ fn lines() -> Vec<Line> {
         .filter_map(|r| {
             let (id, t) = (r["id"].as_str()?, r["t"].as_f64()?);
             let tag = tags[id].as_str().filter(|s| !s.is_empty());
-            let spk = tag.or(labels[id]["spk"].as_str()).or(r["spk"].as_str()).unwrap_or("?");
-            let mark = if tag.is_some() { " ✓" } else if labels[id]["unsure"] == true { " ?" } else { "" };
+            let spk = tag
+                .or(labels[id]["spk"].as_str())
+                .or(r["spk"].as_str())
+                .unwrap_or("?");
+            let mark = if tag.is_some() {
+                " ✓"
+            } else if labels[id]["unsure"] == true {
+                " ?"
+            } else {
+                ""
+            };
             let when = local(t).format("%H:%M:%S");
-            let (src, text) = (r["src"].as_str().unwrap_or(""), r["text"].as_str().unwrap_or(""));
-            Some(Line { t, text: format!("[{when}] {spk}{mark} ({src}): {text}") })
+            let (src, text) = (
+                r["src"].as_str().unwrap_or(""),
+                r["text"].as_str().unwrap_or(""),
+            );
+            Some(Line {
+                t,
+                text: format!("[{when}] {spk}{mark} ({src}): {text}"),
+            })
         })
         .collect();
     out.sort_by(|a, b| a.t.total_cmp(&b.t)); // call and mic chunks finish at different times
@@ -55,7 +75,10 @@ pub fn split(lines: Vec<Line>) -> Vec<Meeting> {
     for l in lines {
         match out.last_mut() {
             Some(m) if l.t - m.lines.last().unwrap().t <= GAP => m.lines.push(l),
-            _ => out.push(Meeting { id: (l.t as i64).to_string(), lines: vec![l] }),
+            _ => out.push(Meeting {
+                id: (l.t as i64).to_string(),
+                lines: vec![l],
+            }),
         }
     }
     out
@@ -73,7 +96,11 @@ impl Meeting {
         local(self.start()).format("%Y-%m-%d %H%M.md").to_string()
     }
     fn text(&self) -> String {
-        self.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")
+        self.lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
     fn excerpt(&self) -> String {
         self.text().chars().take(EXCERPT).collect()
@@ -82,9 +109,17 @@ impl Meeting {
     pub fn row(&self) -> String {
         let mins = ((self.lines.last().unwrap().t - self.start()) / 60.0).ceil() as i64;
         let first = self.lines[0].text.split_once("): ").map_or("", |(_, t)| t);
-        let preview: String = first.chars().take(80).collect::<String>().replace('\t', " ");
+        let preview: String = first
+            .chars()
+            .take(80)
+            .collect::<String>()
+            .replace('\t', " ");
         let when = local(self.start()).format("%a %d %b %H:%M");
-        format!("{}\t{when}\t{mins}\t{}\t{preview}", self.id, self.lines.len())
+        format!(
+            "{}\t{when}\t{mins}\t{}\t{preview}",
+            self.id,
+            self.lines.len()
+        )
     }
 }
 
@@ -93,7 +128,11 @@ fn kev_related(picked: &[&Meeting], others: &[&Meeting]) -> Result<Vec<(String, 
     if others.is_empty() {
         return Ok(vec![]);
     }
-    let state = picked.iter().map(|m| m.excerpt()).collect::<Vec<_>>().join("\n\n---\n\n");
+    let state = picked
+        .iter()
+        .map(|m| m.excerpt())
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n");
     let questions: Map<String, Value> = others
         .iter()
         .map(|m| {
@@ -104,15 +143,30 @@ fn kev_related(picked: &[&Meeting], others: &[&Meeting]) -> Result<Vec<(String, 
             }))
         })
         .collect();
-    let body = json!({"state": format!("Picked meetings:\n\n{state}"), "questions": questions}).to_string();
+    let body = json!({"state": format!("Picked meetings:\n\n{state}"), "questions": questions})
+        .to_string();
     let mut curl = Command::new("curl")
-        .args(["-sS", "--fail-with-body", "-m", "300", "-H", "content-type: application/json", "--data-binary", "@-", KEV])
+        .args([
+            "-sS",
+            "--fail-with-body",
+            "-m",
+            "300",
+            "-H",
+            "content-type: application/json",
+            "--data-binary",
+            "@-",
+            KEV,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("curl: {e}"))?;
-    curl.stdin.take().unwrap().write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    curl.stdin
+        .take()
+        .unwrap()
+        .write_all(body.as_bytes())
+        .map_err(|e| e.to_string())?;
     let out = curl.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
@@ -121,10 +175,15 @@ fn kev_related(picked: &[&Meeting], others: &[&Meeting]) -> Result<Vec<(String, 
             String::from_utf8_lossy(&out.stdout).trim()
         ));
     }
-    let answers: Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("Kev reply: {e}"))?;
+    let answers: Value =
+        serde_json::from_slice(&out.stdout).map_err(|e| format!("Kev reply: {e}"))?;
     Ok(others
         .iter()
-        .filter_map(|m| answers["answers"][&m.id]["noul"].as_f64().map(|p| (m.id.clone(), p)))
+        .filter_map(|m| {
+            answers["answers"][&m.id]["noul"]
+                .as_f64()
+                .map(|p| (m.id.clone(), p))
+        })
         .collect())
 }
 
@@ -134,7 +193,12 @@ pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
     let by_id: HashMap<&str, &Meeting> = all.iter().map(|m| (m.id.as_str(), m)).collect();
     let picked: Vec<&Meeting> = ids
         .iter()
-        .map(|id| by_id.get(id.as_str()).copied().ok_or(format!("no meeting {id}; see `ozen meetings`")))
+        .map(|id| {
+            by_id
+                .get(id.as_str())
+                .copied()
+                .ok_or(format!("no meeting {id}; see `ozen meetings`"))
+        })
         .collect::<Result<_, _>>()?;
     if picked.is_empty() {
         return Err("pick at least one meeting".into());
@@ -149,14 +213,32 @@ pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
             }
         }
     }
-    let dir = format!("{}/context/{}", env!("CARGO_MANIFEST_DIR"), Local::now().format("%Y-%m-%d-%H%M%S"));
+    let dir = format!(
+        "{}/context/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        Local::now().format("%Y-%m-%d-%H%M%S")
+    );
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     for m in picked.iter().chain(added.iter().map(|(m, _)| m)) {
         fs::write(format!("{dir}/{}", m.file()), m.text() + "\n").map_err(|e| e.to_string())?;
     }
-    let list = |ms: Vec<String>| if ms.is_empty() { "none".into() } else { ms.join(", ") };
+    let list = |ms: Vec<String>| {
+        if ms.is_empty() {
+            "none".into()
+        } else {
+            ms.join(", ")
+        }
+    };
     let kev_line = if kev {
-        format!("\nAdded by Kev as related (probability): {}", list(added.iter().map(|(m, p)| format!("`{}` ({p:.2})", m.file())).collect()))
+        format!(
+            "\nAdded by Kev as related (probability): {}",
+            list(
+                added
+                    .iter()
+                    .map(|(m, p)| format!("`{}` ({p:.2})", m.file()))
+                    .collect()
+            )
+        )
     } else {
         String::new()
     };
@@ -177,8 +259,21 @@ mod tests {
 
     #[test]
     fn a_long_silence_starts_a_new_meeting() {
-        let l = |t: f64| Line { t, text: String::new() };
-        let ms = split(vec![l(100.0), l(100.0 + GAP), l(101.0 + 2.0 * GAP), l(102.0 + 2.0 * GAP)]);
-        assert_eq!(ms.iter().map(|m| (m.id.as_str(), m.lines.len())).collect::<Vec<_>>(), [("100", 2), ("1301", 2)]);
+        let l = |t: f64| Line {
+            t,
+            text: String::new(),
+        };
+        let ms = split(vec![
+            l(100.0),
+            l(100.0 + GAP),
+            l(101.0 + 2.0 * GAP),
+            l(102.0 + 2.0 * GAP),
+        ]);
+        assert_eq!(
+            ms.iter()
+                .map(|m| (m.id.as_str(), m.lines.len()))
+                .collect::<Vec<_>>(),
+            [("100", 2), ("1301", 2)]
+        );
     }
 }
