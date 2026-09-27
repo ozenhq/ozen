@@ -20,6 +20,9 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   already heard, so a person keeps one label for the whole meeting. Known people come from the
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
 
+- **Shows the transcript in the menu bar.** `ozen-bar` puts an ear icon in the top menu bar; click it for the live
+  transcript (updates every 2s, Hebrew lines right-to-left). Right-click to quit. `start.sh` launches it.
+
 Output is `transcript.txt`:
 
 ```
@@ -46,6 +49,7 @@ on first use.
 | Command | What it does |
 |---|---|
 | `./start.sh` | Start recording and transcribing (Ctrl-C stops). Run detached: `nohup ./start.sh > start.log 2>&1 &` |
+| `./ozen-bar [dir] [--open]` | Menu bar transcript viewer (started by `start.sh`); `--open` shows the panel at launch |
 | `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
 | `python3 enroll.py S3 "Dana Levi"` | Save S3's voiceprint to the registry under that name and push it. Repeat to add more samples |
 

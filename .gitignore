@@ -1,5 +1,6 @@
 # build output
 rec
+ozen-bar
 __pycache__/
 
 # model weights (downloaded on first run)
