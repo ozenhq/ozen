@@ -335,6 +335,15 @@ fn fatal(e: SCError) -> ! {
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "chunks".into()));
     fs::create_dir_all(out.join(".partial")).expect("create chunk dir");
+    // A recorder killed hard leaves its in-progress chunks in .partial. ffmpeg (the transcriber's loader)
+    // reads them in full without the final header sizes, so publish them instead of losing that audio.
+    for e in fs::read_dir(out.join(".partial"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let _ = fs::rename(e.path(), out.join(e.file_name()));
+    }
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
         signal_hook::flag::register(sig, stop.clone()).expect("signal handler");
