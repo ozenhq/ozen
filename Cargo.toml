@@ -2,6 +2,7 @@
 name = "ozen"
 version = "0.1.0"
 edition = "2024"
+default-run = "ozen"  # `cargo run -- app` (README) must not have to pick between ozen and rec
 publish = false
 
 [profile.release]
