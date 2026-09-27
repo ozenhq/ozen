@@ -1,0 +1,17 @@
+# build output
+rec
+__pycache__/
+
+# model weights (downloaded on first run)
+models/
+
+# per-meeting data: audio, transcript, screenshots, speaker state
+chunks/
+transcript.txt
+start.log
+*.png
+names.json
+session_speakers.json
+
+# voiceprints live in their own private repo (tupe12334/voices-embedding-registry)
+voices/
