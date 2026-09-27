@@ -62,15 +62,21 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func finishAll() { lock.lock(); files.keys.forEach(finish); lock.unlock() }
 
+    var stopped = false  // set when capture stops by itself (display slept/locked, interrupted); the loop rebuilds
+    var isStopped: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+    func clearStopped() { lock.lock(); stopped = false; lock.unlock() }
+
     func stream(_ s: SCStream, didStopWithError error: Error) {
         FileHandle.standardError.write("stream stopped: \(error)\n".data(using: .utf8)!)
-        exit(1)
+        lock.lock(); stopped = true; lock.unlock()
     }
 }
 
+struct NoDisplay: Error {}  // screen asleep or locked: wait for it rather than exit
+
 func filters() async throws -> (call: SCContentFilter, local: SCContentFilter) {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-    guard let display = content.displays.first else { fatalError("no display") }
+    guard let display = content.displays.first else { throw NoDisplay() }
     let meeting = content.applications.filter { meetingApps.contains($0.bundleIdentifier) }
     return (SCContentFilter(display: display, including: meeting, exceptingWindows: []),
             SCContentFilter(display: display, excludingApplications: meeting, exceptingWindows: []))
@@ -90,48 +96,71 @@ func config(mic: Bool) -> SCStreamConfiguration {
 }
 
 let callRec = Recorder(audioTag: "call"), localRec = Recorder(audioTag: "local")
-var f = try await filters()
-var callStream = SCStream(filter: f.call, configuration: config(mic: true), delegate: callRec)
-let localStream = SCStream(filter: f.local, configuration: config(mic: false), delegate: localRec)
 let q = DispatchQueue(label: "audio")
-try callStream.addStreamOutput(callRec, type: .audio, sampleHandlerQueue: q)
-try callStream.addStreamOutput(callRec, type: .microphone, sampleHandlerQueue: q)
-try localStream.addStreamOutput(localRec, type: .audio, sampleHandlerQueue: q)
-try await callStream.startCapture()
-try await localStream.startCapture()
-print("recording to \(outDir.path)"); fflush(stdout)
+var callStream: SCStream?, localStream: SCStream?
+// While there is no display to capture, this flag tells the menu bar (via `ozen health`) that recording is on hold.
+let noDisplayFlag = URL(fileURLWithPath: "no-display")
+
+// (Re)build both streams on the current displays, meeting apps and default input. A missing display is
+// reported as false (retry later); any other error, e.g. the recording permission, is thrown.
+@MainActor func startStreams(_ why: String) async throws -> Bool {
+    print("starting capture: \(why)"); fflush(stdout)
+    for s in [callStream, localStream].compactMap({ $0 }) { try? await s.stopCapture() }
+    callStream = nil; localStream = nil
+    callRec.finishAll(); localRec.finishAll()
+    let f: (call: SCContentFilter, local: SCContentFilter)
+    do { f = try await filters() } catch is NoDisplay {
+        FileManager.default.createFile(atPath: noDisplayFlag.path, contents: nil)
+        return false
+    }
+    let c = SCStream(filter: f.call, configuration: config(mic: true), delegate: callRec)
+    let l = SCStream(filter: f.local, configuration: config(mic: false), delegate: localRec)
+    try c.addStreamOutput(callRec, type: .audio, sampleHandlerQueue: q)
+    try c.addStreamOutput(callRec, type: .microphone, sampleHandlerQueue: q)
+    try l.addStreamOutput(localRec, type: .audio, sampleHandlerQueue: q)
+    try await c.startCapture()
+    try await l.startCapture()
+    callStream = c; localStream = l
+    callRec.clearStopped(); localRec.clearStopped()
+    callRec.resetMic()
+    try? FileManager.default.removeItem(at: noDisplayFlag)
+    print("recording to \(outDir.path)"); fflush(stdout)
+    return true
+}
 
 signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
 for sig in [SIGINT, SIGTERM] {
     let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-    src.setEventHandler { callRec.finishAll(); localRec.finishAll(); exit(0) }
+    src.setEventHandler {
+        callRec.finishAll(); localRec.finishAll()
+        try? FileManager.default.removeItem(at: noDisplayFlag)
+        exit(0)
+    }
     src.resume()
     _ = Unmanaged.passRetained(src)
 }
-// If the mic stream stops delivering (its device disappeared, e.g. AirPods/iPhone mic, or capture was
-// interrupted), rebuild it on the current default input. A live mic delivers silence too, so a gap = dead.
-@MainActor func restartMic(_ why: String) async {
-    print("restarting mic stream: \(why)"); fflush(stdout)
-    try? await callStream.stopCapture()
-    callRec.finishAll()
-    guard let nf = try? await filters() else { return }
-    let s = SCStream(filter: nf.call, configuration: config(mic: true), delegate: callRec)
-    try? s.addStreamOutput(callRec, type: .audio, sampleHandlerQueue: q)
-    try? s.addStreamOutput(callRec, type: .microphone, sampleHandlerQueue: q)
-    if (try? await s.startCapture()) != nil { callStream = s }
-    callRec.resetMic()
-}
+
+var live = try await startStreams("start")
 
 // Meeting apps opened after start must join the call filter, so refresh the filters periodically.
-// A mic that delivers only zeros gets one restart per silent spell; if that doesn't bring it back,
-// the mic-silent flag tells the menu bar (via `ozen health`) to ask the user to check the input device.
+// If the mic stops delivering (its device disappeared, e.g. AirPods/iPhone mic) or capture stopped, rebuild.
+// A live mic delivers silence too, so a gap = dead. A mic that delivers only zeros gets one restart per
+// silent spell; if that doesn't bring it back, the mic-silent flag tells the menu bar to ask the user to
+// check the input device.
 let silentFlag = URL(fileURLWithPath: "mic-silent")
 var retriedSilence = false
 var tick = 0
 while true {
     try await Task.sleep(for: .seconds(2))
+    tick += 1
+    let stopped = callRec.isStopped || localRec.isStopped
+    if !live || stopped {
+        if tick % 5 == 0 || stopped { live = try await startStreams(live ? "capture stopped" : "waiting for a display") }
+        continue
+    }
     if callRec.micAge > 30 {
-        await restartMic("no mic audio for 30s")
+        live = try await startStreams("no mic audio for 30s")
+        continue
     }
     let silence = callRec.micSilence
     if silence < 30 {
@@ -139,14 +168,14 @@ while true {
         try? FileManager.default.removeItem(at: silentFlag)
     } else if !retriedSilence {
         retriedSilence = true
-        await restartMic("mic delivered only silence for 30s")
+        live = try await startStreams("mic delivered only silence for 30s")
+        continue
     } else if silence > 60 {
         let device = AVCaptureDevice.default(for: .audio)?.localizedName ?? "the input device"
         FileManager.default.createFile(atPath: silentFlag.path, contents: Data(device.utf8))
     }
-    tick += 1
     if tick % 5 == 0, let nf = try? await filters() {
-        try? await callStream.updateContentFilter(nf.call)
-        try? await localStream.updateContentFilter(nf.local)
+        try? await callStream?.updateContentFilter(nf.call)
+        try? await localStream?.updateContentFilter(nf.local)
     }
 }

@@ -12,7 +12,7 @@ ozen control: start | pause | resume | stop | status | health | app | bar
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
   status        prints recording | paused | stopping | stopped
-  health        prints one line per problem (recording blocked, silent mic, transcriber down or behind)
+  health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
@@ -217,6 +217,11 @@ fn main() {
                     );
                 }
                 return;
+            }
+            if Path::new("no-display").exists() {
+                println!(
+                    "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
+                );
             }
             if let Ok(device) = fs::read_to_string("mic-silent") {
                 println!(
