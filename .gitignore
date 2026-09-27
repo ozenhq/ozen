@@ -18,6 +18,7 @@ lines.jsonl
 tags.json
 labels.json
 stats.json
+ignore.json
 
 # voiceprints live in their own private repo (tupe12334/voices-embedding-registry)
 voices/
