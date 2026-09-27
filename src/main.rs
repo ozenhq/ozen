@@ -28,7 +28,8 @@ ozen control: start | pause | resume | stop | status | health | look | fix | mee
 const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
 // macOS lists a bare binary under its file name in Privacy & Security, so run a copy named ozen.
 const REC_BIN: &str = "target/recorder/ozen";
-const REC: &str = r"^target/recorder/ozen chunks"; // anchored so pgrep never matches shells that merely mention the command
+// The old path too, so pause/stop still reach a recorder started before the rename.
+const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
