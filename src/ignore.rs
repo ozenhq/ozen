@@ -85,8 +85,8 @@ fn registry() -> (Vec<Vec<f32>>, f32) {
     (people, threshold)
 }
 
-/// Run after train.py retrains: rewrite ignore.json, label lines that sound like an ignored voice, and take
-/// them out of the review queue.
+/// Run after train.py retrains: rewrite ignore.json and label lines that sound like an ignored voice (never
+/// unsure, so Review skips them).
 pub fn apply() {
     let tags = read(TAGS);
     // Keyed by id like train.py: a line written twice (two transcribers on one chunk) counts once.
@@ -121,9 +121,6 @@ pub fn apply() {
             id.clone(),
             json!({"spk": IGNORE, "sim": sim, "margin": 0, "unsure": false}),
         );
-    }
-    if let Some(Value::Array(review)) = stats.get_mut("review") {
-        review.retain(|id| !found.iter().any(|(f, _)| Some(f.as_str()) == id.as_str()));
     }
     stats.insert("ignored".into(), json!(ignored.len()));
     fs::write(LABELS, Value::Object(labels).to_string()).expect("write labels.json");
