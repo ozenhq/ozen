@@ -50,6 +50,7 @@ MODEL = cached("mlx-community/whisper-large-v3-turbo")  # English + language det
 # Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
 MODELS = {"he": cached("mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"), "en": MODEL}
 VOCAB = HERE / "vocab.txt"  # names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
+LEARNED = HERE / "learned.json"  # from your transcript fixes (train.py fix): words to hint, corrections to apply
 NOISE = {  # what Whisper invents on noise, per language
     "en": {"thank you", "thanks", "you", "bye"},
     "he": {"תודה", "תודה רבה", "רבה", "תודה לכם", "ביי"},
@@ -157,10 +158,19 @@ last_lang: dict[str, str] = {}  # per source; short clips reuse it
 last_text: dict[str, str] = {}  # per source; previous line, given to Whisper as context
 
 
+def learned() -> dict:
+    try:
+        return json.loads(LEARNED.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def hint(tag: str) -> str:
-    """Prompt with the vocabulary + known people's names + the previous line, so Whisper spells them."""
+    """Prompt with the vocabulary + known people's names + words from your fixes + the previous line,
+    so Whisper spells them."""
     words = [w.strip() for w in re.split(r"[,\n]", VOCAB.read_text()) if w.strip()] if VOCAB.exists() else []
     words += [s[0] for s in speakers if not anon(s[0])]
+    words += learned().get("vocab", [])
     return (", ".join(dict.fromkeys(words)) + ". " + last_text.get(tag, "")[-200:]).strip()
 
 
@@ -195,6 +205,8 @@ def transcribe(clip: np.ndarray, tag: str) -> str:
     ).strip()
     if noise(text):
         return ""
+    for wrong, right in learned().get("replace", {}).items():  # corrections you made repeatedly
+        text = re.sub(rf"(?<!\w){re.escape(wrong)}(?!\w)", right, text)
     last_text[tag] = text
     return text
 
