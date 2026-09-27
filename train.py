@@ -64,7 +64,20 @@ def load_lines() -> dict:
     return {r["id"]: r for r in map(json.loads, LINES.read_text().splitlines()) if r.get("e")}
 
 
-def retrain() -> None:
+def git(*a: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:  # offline: a sync failure must never lose the tag
+        return subprocess.CompletedProcess(a, 1)
+
+
+def retrain(retry: bool = True) -> None:
+    # Start from the newest registry. Local registry state is disposable: this machine's tags live in
+    # tags.json and lines.jsonl (append-only), so rebuilding re-applies them on top of everyone else's.
+    if git("fetch", "-q").returncode == 0:
+        git("reset", "-q", "--hard", "@{u}")
+    else:
+        print("registry fetch failed; training on the local copy", file=sys.stderr)
     lines, tags = load_lines(), read(TAGS, {})
     (REPO / "voices").mkdir(parents=True, exist_ok=True)
     (REPO / "samples").mkdir(exist_ok=True)
@@ -150,13 +163,14 @@ def retrain() -> None:
     stats["accuracy_first"] = first
     STATS.write_text(json.dumps(stats, ensure_ascii=False, indent=1))
 
-    git = lambda *a: subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True)
     git("add", "-A", "voices", "samples", "config.json", "history.jsonl")
     if git("diff", "--cached", "--quiet").returncode:
         git("commit", "-m", f"Retrain voiceprints: {stats['tagged']} tagged lines, accuracy {stats['accuracy']}, "
                             f"threshold {threshold}")
-        if git("push", "-q").returncode:
-            print("registry push failed; committed locally", file=sys.stderr)
+    if git("push", "-q").returncode:
+        if retry:  # another machine pushed since the fetch: rebuild on top of it, once
+            return retrain(retry=False)
+        print("registry push failed; committed locally, rebuilt and pushed on the next retrain", file=sys.stderr)
     print(json.dumps({k: v for k, v in stats.items() if k != "review"}, ensure_ascii=False))
 
 
