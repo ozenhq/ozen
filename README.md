@@ -11,7 +11,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   lists it as ozen) uses ScreenCaptureKit to record three streams in 15s chunks:
   - `call`: audio from meeting apps only (Zoom, Chrome, Teams, Slack, FaceTime, Discord)
   - `mic`: your microphone
-  - `local`: every other app, e.g. macOS Speak Selection reading text aloud. Never transcribed; it only
+  - `local`: every other app, e.g. a video or the `say` command. Never transcribed; it only
     tells the transcriber when the computer itself is talking.
 - **Transcribes Hebrew and English.** On-device Whisper (MLX) per utterance, language picked between `he` and `en`
   for each one: Hebrew goes to [ivrit.ai's Hebrew-trained turbo](https://huggingface.co/mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx),
@@ -140,6 +140,8 @@ with `--real` once you have a few dozen fixes.
 - Lines arrive ~15–30s after speech (chunked, not streaming).
 - English terms spoken inside Hebrew are the weakest spot; add them to `vocab.txt`. Distant voices in the room are hard to hear.
 - You talking over the computer voice or a remote speaker can be dropped as echo.
+- macOS Speak Selection isn't heard on `local` (ScreenCaptureKit doesn't capture that system voice), so text it reads
+  aloud is transcribed as a room speaker. Marking that voice with **Ignore this voice** can drop it.
 - Overlapping speakers are merged into one line; utterances under 1s inherit the previous speaker.
 - Live speaker matching is online (no re-clustering); tagging a few lines fixes past and future labels.
 

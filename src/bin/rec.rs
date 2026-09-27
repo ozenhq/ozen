@@ -1,7 +1,8 @@
 //! Captures three audio sources via ScreenCaptureKit, as 15s WAV chunks <epoch_ms>-<tag>.wav:
 //!   call  = meeting apps only (the other participants), transcribed
 //!   mic   = your microphone, transcribed unless it is just echo of call/local audio
-//!   local = every other app (e.g. Speak Selection reading text aloud), used only for echo detection
+//!   local = every other app (e.g. a video, `say`), used only for echo detection. Speak Selection's
+//!           system voice isn't captured by ScreenCaptureKit, so it isn't here.
 use screencapturekit::error::SCStreamErrorCode;
 use screencapturekit::prelude::*;
 use screencapturekit::stream::delegate_trait::SCStreamDelegateTrait;
