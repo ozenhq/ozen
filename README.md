@@ -109,8 +109,21 @@ permissions survive rebuilds. The Whisper and ECAPA models download on first use
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
+| `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
 | `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
+
+## Tuning how fixes teach
+
+`ozen eval` learns from half of a fixed set of lines (as if you had fixed them) and scores each setting on the
+other half: word error rate, English terms spelled right, word error rate on plain Hebrew, and words invented on
+quiet noise. The lines are in `eval/cases.jsonl`, spoken by macOS's Hebrew voice (Carmit); `--real` uses your own
+fixes instead (`fixes/dataset.jsonl`). It's deterministic: Whisper runs through `asr.py` (the live transcriber's
+code) seeded per clip, and results are cached by audio, prompt and `asr.py`, so a rerun prints the same table and
+a sweep only transcribes new prompts. Once a setting wins, set it as `LEARN` in `src/fixes.rs`.
+
+The synthetic lines are few and in one voice. Treat a small gap between settings as noise, and confirm a winner
+with `--real` once you have a few dozen fixes.
 
 ## Limits
 
