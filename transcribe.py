@@ -4,10 +4,11 @@
 # ///
 """Watch the chunk dir; transcribe call + mic chunks with local Whisper, drop mic echo of
 call/local (computer) audio, label each line by speaker,
-append to transcript.txt. Rename speakers via names.json, e.g. {"S1": "Ofek"}."""
+append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
 import json
 import pathlib
+import re
 import sys
 import time
 
@@ -35,49 +36,63 @@ MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never cre
 SHORT_MATCH = 0.5  # stricter similarity a short clip needs to take an existing label (else "?")
 
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
-REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry; see enroll.py
-SESSION = HERE / "session_speakers.json"  # this run's voiceprints, read by enroll.py
+REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
+LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
 # ponytail: online nearest-centroid clustering, no re-clustering; a voice split early stays split.
-speakers: list[list] = []  # [label, centroid, count]
-for p in sorted(REGISTRY.glob("voices/*.json")):
-    v = json.loads(p.read_text())
-    if v.get("model") == ECAPA:
+speakers: list[list] = []  # [label, centroid, count]; named ones come from the registry
+registry_mtime = 0.0
+
+
+def anon(label: str) -> bool:
+    return re.fullmatch(r"S\d+", label) is not None  # session label, not a person's name
+
+
+def load_registry() -> None:
+    """(Re)load named voiceprints; train.py rewrites them after every tag, so pick up changes live."""
+    global registry_mtime
+    files = sorted(REGISTRY.glob("voices/*.json"))
+    mtime = max((f.stat().st_mtime for f in files), default=0.0)
+    if mtime == registry_mtime:
+        return
+    registry_mtime = mtime
+    named = {s[0]: s for s in speakers if not anon(s[0])}
+    for f in files:
+        v = json.loads(f.read_text())
+        if v.get("model") != ECAPA:
+            continue
         e = np.array(v["embedding"], dtype=np.float32)
-        speakers.append([v["name"], e / np.linalg.norm(e), v.get("count", 1)])
-print(f"known voices: {[s[0] for s in speakers]}", flush=True)
+        e /= np.linalg.norm(e)
+        if v["name"] in named:
+            named[v["name"]][1:] = [e, v.get("count", 1)]
+        else:
+            speakers.append([v["name"], e, v.get("count", 1)])
+    print(f"known voices: {[s[0] for s in speakers if not anon(s[0])]}", flush=True)
+
+
+load_registry()
 unknown = 0
 
 
-def who(clip: np.ndarray) -> str:
+def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
     e = encoder.encode_batch(torch.from_numpy(clip)[None]).squeeze().numpy()
     e /= np.linalg.norm(e)
     if clip.size < MIN_EMBED_SEC * SR:
         # A short clip's print is too noisy to found or reshape a voice: label it only on a strong match.
         best = max(speakers, key=lambda s: float(s[1] @ e), default=None)
-        return best[0] if best is not None and float(best[1] @ e) >= SHORT_MATCH else "?"
+        return (best[0] if best is not None and float(best[1] @ e) >= SHORT_MATCH else "?"), e
     if speakers:
         best = max(speakers, key=lambda s: float(s[1] @ e))
         if float(best[1] @ e) >= SAME_SPEAKER:
-            c = best[1] * best[2] + e
-            best[1], best[2] = c / np.linalg.norm(c), best[2] + 1
-            return best[0]
+            if anon(best[0]):  # named prints change only through tagging (train.py)
+                c = best[1] * best[2] + e
+                best[1], best[2] = c / np.linalg.norm(c), best[2] + 1
+            return best[0], e
     global unknown
     unknown += 1
     speakers.append([f"S{unknown}", e, 1])
-    return speakers[-1][0]
-
-
-def save_session() -> None:
-    SESSION.write_text(json.dumps({s[0]: {"embedding": s[1].tolist(), "count": s[2]} for s in speakers}))
-
-
-def names() -> dict:
-    try:
-        return json.loads((HERE / "names.json").read_text())
-    except (OSError, ValueError):
-        return {}
+    return speakers[-1][0], e
 
 
 def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
@@ -152,25 +167,28 @@ while True:
                     text = transcribe(clip, tag)
                     if not text:
                         continue
-                    spk = who(clip)
+                    spk, e = who(clip)
                     if spk == "?" and prev is not None:
                         spk = prev  # short clip mid-turn: most likely the same person continuing
+                    w = len(clip) / SR if len(clip) >= MIN_EMBED_SEC * SR else 0.01  # short clips barely count
                     if lines and lines[-1][1] == spk:
                         lines[-1][2] += " " + text
+                        lines[-1][3] += w * e
                     else:
-                        lines.append([start, spk, text])
+                        lines.append([start, spk, text, w * e])
                     prev = spk
-                n = names()
-                with out.open("a") as fh:
-                    for start, spk, text in lines:
+                with out.open("a") as fh, LINES.open("a") as lj:
+                    for i, (start, spk, text, esum) in enumerate(lines):
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
-                        line = f"[{ts}] {n.get(spk, spk)} ({SOURCE.get(tag, tag)}): {text}"
+                        line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
                         fh.write(line + "\n")
                         print(line, flush=True)
-                if lines:
-                    save_session()
+                        rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "src": SOURCE.get(tag, tag),
+                               "spk": spk, "text": text, "e": (esum / np.linalg.norm(esum)).round(5).tolist()}
+                        lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
         f.unlink(missing_ok=True)
     active = [(a, b) for a, b in active if b > time.time() - 120]
+    load_registry()
     time.sleep(1)

@@ -19,6 +19,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 - **Knows who's speaking.** Each utterance gets an ECAPA voiceprint (speechbrain) and is matched against voices
   already heard, so a person keeps one label for the whole meeting. Known people come from the
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
+- **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
+  Each tag runs `train.py`: every person's voiceprint becomes the average of all lines tagged as them
+  (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
+  prints, and the live transcriber reloads them. The panel footer shows leave-one-out accuracy over your
+  tags, so you can watch it improve.
 
 - **Shows the transcript in the menu bar.** `ozen-bar` puts an ear icon in the top menu bar; click it for the live
   transcript (updates every 2s, Hebrew lines right-to-left). Right-click to quit. `start.sh` launches it.
@@ -51,7 +56,9 @@ on first use.
 | `./start.sh` | Start recording and transcribing (Ctrl-C stops). Run detached: `nohup ./start.sh > start.log 2>&1 &` |
 | `./ozen-bar [dir] [--open]` | Menu bar transcript viewer (started by `start.sh`); `--open` shows the panel at launch |
 | `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
-| `python3 enroll.py S3 "Dana Levi"` | Save S3's voiceprint to the registry under that name and push it. Repeat to add more samples |
+| `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
+| `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |
+| `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
 
 Stop a detached run: `pkill -f "rec chunks"; pkill -f transcribe.py`.
 
@@ -60,7 +67,7 @@ Stop a detached run: `pkill -f "rec chunks"; pkill -f transcribe.py`.
 - Lines arrive ~15–30s after speech (chunked, not streaming).
 - You talking over the computer voice or a remote speaker can be dropped as echo.
 - Overlapping speakers are merged into one line; utterances under 1s inherit the previous speaker.
-- Speaker matching is online (no re-clustering), so a voice that was split early stays split. Enroll to fix it.
+- Live speaker matching is online (no re-clustering); tagging a few lines fixes past and future labels.
 
 ## Privacy
 
