@@ -43,11 +43,15 @@ Requires macOS 15+ on Apple Silicon, Xcode command line tools (`swiftc`), [`uv`]
 ```sh
 git clone https://github.com/tupe12334/ozen ~/ozen
 git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
-~/ozen/ozen.sh bar     # ear icon appears in the menu bar; press Start there
+~/ozen/ozen.sh app     # builds ~/Applications/Ozen.app
 ```
 
-On first run macOS asks your terminal for **Screen & System Audio Recording** and **Microphone** access;
-grant both (System Settings > Privacy & Security), then press Start again. The Whisper and ECAPA models download
+Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
+press Start there. After pulling new code, run `./ozen.sh app` again to rebuild it.
+
+On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** and **Microphone** access;
+grant both (System Settings > Privacy & Security), then press Start again. The app is ad-hoc signed, so after
+a rebuild macOS may ask again. The Whisper and ECAPA models download
 on first use.
 
 ## Use
@@ -56,7 +60,8 @@ on first use.
 |---|---|
 | `./ozen.sh start` / `pause` / `resume` / `stop` | Same as the menu bar buttons. Pause keeps the transcriber loaded; stop finishes transcribing queued audio first |
 | `./ozen.sh status` | `recording`, `paused`, `stopping` or `stopped` |
-| `./ozen.sh bar` | Launch the menu bar app |
+| `./ozen.sh app` | Build and install `~/Applications/Ozen.app` |
+| `./ozen.sh bar` | Build if needed and open Ozen.app |
 | `./look.sh [N]` | Screenshot to `screen-small.png` and print the last N transcript lines. Use it to answer "what's on screen / what was just said" |
 | `uv run train.py tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
 | `uv run train.py retrain` | Rebuild voiceprints, relabels and accuracy from all tags |

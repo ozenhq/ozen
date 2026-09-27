@@ -1,17 +1,45 @@
 #!/bin/bash
-# ozen control: start | pause | resume | stop | status | bar
+# ozen control: start | pause | resume | stop | status | app | bar
 #   start/resume  record + transcribe (builds binaries if sources changed)
 #   pause         stop recording; transcriber stays loaded so resume is instant
 #   stop          stop recording, finish transcribing what's queued, then exit
 #   status        prints recording | paused | stopping | stopped
-#   bar           launch the menu bar app (which calls this script for its buttons)
+#   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
+#   bar           build if needed and open Ozen.app (its buttons call this script)
 cd "$(dirname "$0")"
 REC='^\./rec chunks'  # anchored so pgrep never matches shells that merely mention the command
 TR='uv run transcribe\.py chunks|python3 transcribe\.py chunks'
+APP="$HOME/Applications/Ozen.app"
 
 build() {
     [ rec -nt rec.swift ] || swiftc -O rec.swift -o rec
-    [ ozen-bar -nt menubar.swift ] || swiftc -O menubar.swift -o ozen-bar
+}
+
+build_app() {
+    local bin="$APP/Contents/MacOS/Ozen"
+    [ "$bin" -nt menubar.swift ] && [ "$bin" -nt icon.swift ] && return
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+    swiftc -O menubar.swift -o "$bin" || return 1
+    swift icon.swift "$APP/Contents/Resources" || echo "icon build failed; app still works" >&2
+    cat >"$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Ozen</string>
+  <key>CFBundleDisplayName</key><string>Ozen</string>
+  <key>CFBundleIdentifier</key><string>com.tupe12334.ozen</string>
+  <key>CFBundleExecutable</key><string>Ozen</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleShortVersionString</key><string>$(git rev-parse --short HEAD 2>/dev/null || echo dev)</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Ozen transcribes what you say in meetings, on this Mac only.</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Ozen transcribes the meeting audio, on this Mac only.</string>
+</dict></plist>
+PLIST
+    codesign --force --deep -s - "$APP" 2>/dev/null  # ad-hoc: required for macOS to grant it permissions
+    touch "$APP"  # refresh Finder/Spotlight
 }
 
 case "$1" in
@@ -41,9 +69,12 @@ status)
     else rm -f .stopping; echo stopped
     fi
     ;;
+app)
+    build_app && echo "installed $APP"
+    ;;
 bar)
-    build || exit 1
-    pgrep -qx ozen-bar || nohup ./ozen-bar "$PWD" >/dev/null 2>&1 </dev/null &
+    build_app || exit 1
+    open "$APP"
     ;;
 *)
     sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'

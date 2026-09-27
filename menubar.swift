@@ -2,11 +2,12 @@
 // right-click offers the same controls plus Quit. Controls call ozen.sh.
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag.
-// Usage: ozen-bar [dir] [--open]
+// Built into ~/Applications/Ozen.app by `ozen.sh app`. Direct use: Ozen [dir] [--open]
 import AppKit
 
 let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
-let dir = URL(fileURLWithPath: args.first ?? FileManager.default.currentDirectoryPath)
+// Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
+let dir = URL(fileURLWithPath: args.first ?? NSString(string: "~/ozen").expandingTildeInPath)
 let maxLines = 400
 
 func json(_ name: String) -> Any? {
