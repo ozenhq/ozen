@@ -7,7 +7,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 
 ## What it does
 
-- **Hears the call and the room.** `rec` uses ScreenCaptureKit to record three streams in 15s chunks:
+- **Hears the call and the room.** The recorder (`src/bin/rec.rs`, run as `target/recorder/ozen` so macOS
+  lists it as ozen) uses ScreenCaptureKit to record three streams in 15s chunks:
   - `call`: audio from meeting apps only (Zoom, Chrome, Teams, Slack, FaceTime, Discord)
   - `mic`: your microphone
   - `local`: every other app, e.g. macOS Speak Selection reading text aloud. Never transcribed; it only
