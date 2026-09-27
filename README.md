@@ -62,6 +62,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   - *Meetings*: starts by itself when a meeting app (Zoom, Chrome/Meet, Teams, Slack, FaceTime, Discord) is using
     the microphone, and stops 20s after it releases it. Detected through Core Audio's per-process state, so it
     works for any call in those apps. Pausing or stopping by hand holds until the next meeting starts or ends.
+    Relaunching the app never stops a recording in progress, and right after launch it waits for your location
+    before a place decides anything.
 - **Switches by place.** **Places…** (in the panel and the right-click menu) lists labeled places, each set to
   *Auto record*, *Record meetings only* or *Auto off*. While you're inside a place's radius, its setting replaces
   Always / Meetings; arriving or leaving applies right away, and a manual pause or start holds until then. Locate a
