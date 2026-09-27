@@ -274,6 +274,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var meetings: [[String]] = []  // `ozen meetings` rows: id, start, minutes, lines, first words
     let gatherButton = NSButton(title: "Open", target: nil, action: nil)
     let kevButton = NSButton(title: "Auto add with Kev", target: nil, action: nil)
+    let askButton = NSButton(title: "Ask about now", target: nil, action: nil)
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -302,7 +303,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         modeControl.controlSize = .small
         modeControl.selectedSegment = mode == "meetings" ? 1 : 0
         modeControl.toolTip = "Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls."
-        let controls = NSStackView(views: [status, NSView(), modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton])
+        askButton.target = self
+        askButton.action = #selector(askMenu(_:))
+        askButton.bezelStyle = .rounded
+        askButton.controlSize = .small
+        askButton.toolTip = "Start Claude Code or Hermes on the meeting happening now (ozen live)"
+        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         viewControl.target = self
         viewControl.action = #selector(switchView)
@@ -828,21 +834,44 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             self.kevButton.title = "Auto add with Kev"
             let alert = NSAlert()
             NSApp.activate()
-            guard code == 0, let folder = out.split(separator: "\n").last.map(String.init) else {
-                alert.messageText = "Couldn't gather the transcripts"
-                alert.informativeText = err
-                alert.runModal()
-                return
-            }
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: folder).filter { $0.hasPrefix("2") }.sorted()) ?? []
+            let lines = out.split(separator: "\n").map(String.init)  // files written, then the folder
+            guard code == 0, let folder = lines.last else { return self.fail("Couldn't gather the transcripts", err) }
+            let files = lines.dropLast()
             alert.messageText = "\(files.count) transcript\(files.count == 1 ? "" : "s") ready"
             alert.informativeText = files.joined(separator: "\n") + (kev ? "\n\nKev's scores:\n" + err : "") + "\n\n" + folder
             for b in ["Claude Code", "Hermes", "Show in Finder"] { alert.addButton(withTitle: b) }
-            switch alert.runModal() {
-            case .alertFirstButtonReturn: NSWorkspace.shared.open(URL(fileURLWithPath: folder + "/claude.command"))
-            case .alertSecondButtonReturn: NSWorkspace.shared.open(URL(fileURLWithPath: folder + "/hermes.command"))
-            default: NSWorkspace.shared.open(URL(fileURLWithPath: folder))
-            }
+            let what = [NSApplication.ModalResponse.alertFirstButtonReturn: "claude", .alertSecondButtonReturn: "hermes"][alert.runModal()] ?? "finder"
+            self.run(["open", folder, what]) { _, err, code in if code != 0 { self.fail("Couldn't open \(what)", err) } }
+        }
+    }
+
+    func fail(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        NSApp.activate()
+        alert.runModal()
+    }
+
+    // MARK: ask about the meeting happening now
+
+    @objc func askMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        for (title, tool) in [("Claude Code", "claude"), ("Hermes", "hermes")] {
+            let mi = NSMenuItem(title: title, action: #selector(askNow(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = tool
+            menu.addItem(mi)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    @objc func askNow(_ sender: NSMenuItem) {
+        guard let tool = sender.representedObject as? String else { return }
+        askButton.isEnabled = false
+        run(["live", "--open", tool]) { _, err, code in
+            self.askButton.isEnabled = true
+            if code != 0 { self.fail("Couldn't start \(sender.title) on this meeting", err) }
         }
     }
 

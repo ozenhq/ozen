@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 const GAP: f64 = 600.0; // this much silence ends a meeting
@@ -207,8 +208,8 @@ fn ask(url: &str, body: &Value) -> Result<Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("Kev reply: {e}"))
 }
 
-/// Write the picked meetings (plus Kev's related ones) into context/<now>/ and return that folder.
-pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
+/// Write the picked meetings (plus Kev's related ones) into context/<now>/; returns the folder and the files.
+pub fn gather(ids: &[String], kev: bool) -> Result<(String, Vec<String>), String> {
     let all = all();
     let by_id: HashMap<&str, &Meeting> = all.iter().map(|m| (m.id.as_str(), m)).collect();
     let picked: Vec<&Meeting> = ids
@@ -239,8 +240,55 @@ pub fn gather(ids: &[String], kev: bool) -> Result<String, String> {
         env!("CARGO_MANIFEST_DIR"),
         Local::now().format("%Y-%m-%d-%H%M%S")
     );
-    write_folder(&dir, &picked, kev.then_some(&added[..]))?;
+    write_folder(&dir, &picked, kev.then_some(&added[..]), "")?;
+    let files = picked
+        .iter()
+        .chain(added.iter().map(|(m, _)| m))
+        .map(|m| m.file())
+        .collect();
+    Ok((dir, files))
+}
+
+/// The meeting still going at `now`: the latest one, if its last line is within `GAP`.
+fn current(all: &[Meeting], now: f64) -> Option<&Meeting> {
+    all.last()
+        .filter(|m| now - m.lines.last().unwrap().t <= GAP)
+}
+
+/// Write the meeting happening now to context/live/ and return that folder. Each call refreshes the same
+/// folder, so an agent started there can rerun it for the latest lines.
+pub fn live(now: f64) -> Result<String, String> {
+    let all = all();
+    let m = current(&all, now).ok_or(
+        "No meeting in the last 10 minutes. Start recording, or pick a past meeting in the Meetings tab",
+    )?;
+    let dir = format!("{}/context/live", env!("CARGO_MANIFEST_DIR"));
+    let ozen = std::env::current_exe().map_err(|e| e.to_string())?;
+    let ozen = ozen.display();
+    let note = format!(
+        "\n\nThis meeting is still going, so its file is a snapshot. Run `{ozen} live` to refresh this folder \
+with the latest lines, and `{ozen} look` for a screenshot of the user's screen plus the last lines."
+    );
+    write_folder(&dir, &[m], None, &note)?;
     Ok(dir)
+}
+
+/// Start `what` (claude, hermes, or finder) in a folder `gather` or `live` wrote.
+pub fn open(dir: &str, what: &str) -> Result<(), String> {
+    let target = match what {
+        "claude" | "hermes" => format!("{dir}/{what}.command"),
+        "finder" => dir.to_string(),
+        _ => return Err(format!("can't open {what}: use claude, hermes or finder")),
+    };
+    if !Path::new(&target).exists() {
+        return Err(format!(
+            "{target} doesn't exist; run `ozen gather` or `ozen live` first"
+        ));
+    }
+    match Command::new("open").arg(&target).status() {
+        Ok(s) if s.success() => Ok(()),
+        r => Err(format!("open {target} failed: {r:?}")),
+    }
 }
 
 /// The folder an agent starts in: one file per meeting, AGENTS.md/CLAUDE.md saying what they are, launchers.
@@ -248,8 +296,16 @@ fn write_folder(
     dir: &str,
     picked: &[&Meeting],
     added: Option<&[(&Meeting, f64)]>,
+    note: &str,
 ) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // Refreshing a folder (live) replaces its transcripts; the folder itself stays, since an agent may be running in it.
+    for e in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".md") && name.starts_with(|c: char| c.is_ascii_digit()) {
+            fs::remove_file(e.path()).map_err(|e| e.to_string())?;
+        }
+    }
     for m in picked
         .iter()
         .chain(added.unwrap_or_default().iter().map(|(m, _)| m))
@@ -280,7 +336,7 @@ fn write_folder(
         "# Meeting transcripts\n\nTranscripts recorded by ozen, one meeting per `.md` file. Each line is \
 `[time] speaker (source): text`. Source `room` is this Mac's microphone, `call` is the meeting app's audio. \
 Speakers come from voiceprints: ✓ means the user confirmed it, ? means ozen is unsure.\n\n\
-Picked by the user: {}{kev_line}\n\nRead these transcripts before answering questions about the meetings.\n",
+Picked by the user: {}{kev_line}{note}\n\nRead these transcripts before answering questions about the meetings.\n",
         list(picked.iter().map(|m| format!("`{}`", m.file())).collect()),
     )).map_err(|e| e.to_string())?;
     fs::write(format!("{dir}/CLAUDE.md"), "@AGENTS.md\n").map_err(|e| e.to_string())?; // Claude Code reads CLAUDE.md, Hermes AGENTS.md
@@ -339,7 +395,7 @@ mod tests {
             meeting(1e9, &["[x] A (room): hi"]),
             meeting(2e9, &["[y] B (call): yo"]),
         );
-        write_folder(d, &[&a], Some(&[(&b, 0.87)])).unwrap();
+        write_folder(d, &[&a], Some(&[(&b, 0.87)]), "").unwrap();
         let agents = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
         assert!(agents.contains(&format!("Picked by the user: `{}`", a.file())));
         assert!(agents.contains(&format!("`{}` (0.87)", b.file())));
@@ -357,6 +413,50 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o111, 0o111, "launchers must be executable");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_a_meeting_with_a_recent_line_is_live() {
+        let ms = vec![meeting(100.0, &["old"]), meeting(5000.0, &["now"])];
+        assert_eq!(
+            current(&ms, 5000.0 + GAP).map(|m| m.id.as_str()),
+            Some("5000")
+        );
+        assert!(current(&ms, 5001.0 + GAP).is_none());
+        assert!(current(&[], 0.0).is_none());
+    }
+
+    #[test]
+    fn refreshing_a_folder_replaces_its_transcripts_but_keeps_the_folder() {
+        let dir = std::env::temp_dir().join(format!("ozen-live-test-{}", std::process::id()));
+        let d = dir.to_str().unwrap();
+        let (old, new) = (meeting(1e9, &["old"]), meeting(2e9, &["new"]));
+        write_folder(d, &[&old], None, "").unwrap();
+        fs::write(dir.join("notes.txt"), "the agent's own file").unwrap();
+        write_folder(d, &[&new], None, "\n\nStill going.").unwrap();
+        assert!(!dir.join(old.file()).exists());
+        assert_eq!(fs::read_to_string(dir.join(new.file())).unwrap(), "new\n");
+        assert!(dir.join("notes.txt").exists());
+        assert!(
+            fs::read_to_string(dir.join("AGENTS.md"))
+                .unwrap()
+                .contains("Still going.")
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn open_refuses_unknown_targets_and_missing_launchers() {
+        assert!(
+            open("/nonexistent", "vim")
+                .unwrap_err()
+                .contains("use claude, hermes or finder")
+        );
+        assert!(
+            open("/nonexistent", "claude")
+                .unwrap_err()
+                .contains("doesn't exist")
+        );
     }
 
     #[test]
