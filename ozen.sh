@@ -76,7 +76,7 @@ status)
     ;;
 health)
     if ! pgrep -qf "$REC"; then  # a rebuild re-signs rec ad hoc, which can revoke the permission
-        tail -1 start.log 2>/dev/null | grep -q 'declined TCCs' &&
+        grep -E 'declined TCCs|^recording to' start.log 2>/dev/null | tail -1 | grep -q 'declined TCCs' &&
             echo "Recording blocked: allow Ozen in System Settings > Privacy & Security > Screen & System Audio Recording, then press Start"
         exit 0
     fi
