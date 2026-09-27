@@ -61,12 +61,56 @@ fn ok(c: &mut Command) -> bool {
     c.status().is_ok_and(|s| s.success())
 }
 
+/// PIDs from `lsof -Fpn -d cwd` output whose working directory is `dir`.
+fn pids_in(lsof: &str, dir: &Path) -> Vec<String> {
+    let mut pid = "";
+    let mut ours = Vec::new();
+    for l in lsof.lines() {
+        if let Some(p) = l.strip_prefix('p') {
+            pid = p;
+        } else if let Some(n) = l.strip_prefix('n')
+            && fs::canonicalize(n).is_ok_and(|n| n == dir)
+        {
+            ours.push(pid.to_string());
+        }
+    }
+    ours
+}
+
+/// Processes matching `pattern` that run in this checkout. The same commands run from another checkout,
+/// worktree or test copy (`uv run transcribe.py chunks` anywhere) are someone else's: never count or kill them.
+fn ours(pattern: &str) -> Vec<String> {
+    let Ok(found) = cmd("pgrep").args(["-f", pattern]).output() else {
+        return Vec::new();
+    };
+    let pids: Vec<&str> = std::str::from_utf8(&found.stdout)
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    let Ok(cwd) = cmd("lsof")
+        .args(["-a", "-d", "cwd", "-Fpn", "-p", &pids.join(",")])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let here = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .unwrap_or_default();
+    pids_in(&String::from_utf8_lossy(&cwd.stdout), &here)
+}
+
 fn running(pattern: &str) -> bool {
-    ok(cmd("pgrep").args(["-qf", pattern]))
+    !ours(pattern).is_empty()
 }
 
 fn signal(sig: &str, pattern: &str) {
-    let _ = cmd("pkill").args([sig, "-f", pattern]).status();
+    let pids = ours(pattern);
+    if !pids.is_empty() {
+        let _ = cmd("kill").arg(sig).args(pids).status();
+    }
 }
 
 /// Keep start.log bounded: at `start`, move a log past 1 MiB aside to start.log.1 (one generation kept).
@@ -509,6 +553,22 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keeps_only_processes_in_this_checkout() {
+        let tmp = std::env::temp_dir().canonicalize().unwrap();
+        let here = tmp.join(format!("ozen-pids-{}", std::process::id()));
+        let other = tmp.join(format!("ozen-pids-other-{}", std::process::id()));
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let out = format!(
+            "p10\nfcwd\nn{}\np11\nfcwd\nn{}\np12\nfcwd\nn/gone\n",
+            here.display(),
+            other.display()
+        );
+        assert_eq!(super::pids_in(&out, &here), ["10"]);
+        let _ = (std::fs::remove_dir(&here), std::fs::remove_dir(&other));
+    }
+
     #[test]
     fn rotates_only_a_log_past_one_mib() {
         let dir = std::env::temp_dir().join(format!("ozen-rotate-{}", std::process::id()));
