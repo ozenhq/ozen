@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import re
+import socket
 import sys
 import time
 
@@ -19,15 +20,27 @@ import numpy as np
 import torch
 from mlx_whisper.audio import load_audio, log_mel_spectrogram, pad_or_trim
 from mlx_whisper.decoding import detect_language
+from huggingface_hub import snapshot_download
 from mlx_whisper.transcribe import ModelHolder
 from speechbrain.inference.speaker import EncoderClassifier
 
 HERE = pathlib.Path(__file__).parent
 chunks = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
-MODEL = "mlx-community/whisper-large-v3-turbo"  # English + language detection
+socket.setdefaulttimeout(60)  # a stalled download must fail, not hang the transcriber forever
+
+
+def cached(repo: str) -> str:
+    """The local copy once downloaded, so loading never waits on the Hub's update check."""
+    try:
+        return snapshot_download(repo, local_files_only=True)
+    except Exception:
+        return repo  # not downloaded yet: fetch on first use
+
+
+MODEL = cached("mlx-community/whisper-large-v3-turbo")  # English + language detection
 # Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
-MODELS = {"he": "mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx", "en": MODEL}
+MODELS = {"he": cached("mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"), "en": MODEL}
 VOCAB = HERE / "vocab.txt"  # names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
 NOISE = {  # what Whisper invents on noise, per language
     "en": {"thank you", "thanks", "you", "bye"},
@@ -178,9 +191,19 @@ def echo_fraction(t0: float, t1: float) -> float:
     return sum(max(0.0, min(t1, b + ECHO_PAD) - max(t0, a - ECHO_PAD)) for a, b in active) / max(t1 - t0, 1e-6)
 
 
+def start_ms(f: pathlib.Path) -> int:
+    return int(f.stem.split("-")[0])
+
+
+def pending() -> list[pathlib.Path]:
+    """Newest first, so the live meeting is transcribed before any backlog. The mic chunk of a 15s window
+    sorts after that window's call/local chunks (started ms apart), which its echo check needs."""
+    return sorted(chunks.glob("*.wav"), key=lambda f: start_ms(f) - (1000 if f.stem.endswith("-mic") else 0), reverse=True)
+
+
 print(f"transcribing {chunks} -> {out}", flush=True)
 while True:
-    for f in sorted(chunks.glob("*.wav")):
+    for f in pending():
         ms, tag = f.stem.split("-")
         t_chunk = int(ms) / 1000
         # Mic echo check needs the call/local audio for the same time window first.
@@ -228,12 +251,16 @@ while True:
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
-        if KEEP_AUDIO and tag != "local" and f.exists():  # recent audio for comparing models (./ozen.sh eval)
+        if KEEP_AUDIO and tag != "local" and f.exists():  # recent audio for comparing models (uv run eval.py)
             RECENT.mkdir(exist_ok=True)
             f.replace(RECENT / f.name)
             for old in sorted(RECENT.glob("*.wav"))[:-KEEP_AUDIO]:
                 old.unlink()
         f.unlink(missing_ok=True)
-    active = [(a, b) for a, b in active if b > time.time() - 120]
+        if any(start_ms(g) > int(ms) for g in chunks.glob("*.wav")):
+            break  # newer audio arrived: transcribe it before going further back
+    # Keep echo windows as far back as the oldest chunk still waiting, so backlog mic chunks keep theirs.
+    oldest = min((start_ms(g) / 1000 for g in chunks.glob("*.wav")), default=time.time())
+    active = [(a, b) for a, b in active if b > min(oldest, time.time()) - 120]
     load_registry()
     time.sleep(1)
