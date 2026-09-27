@@ -9,7 +9,7 @@
 import AppKit
 import CoreAudio
 import CoreLocation
-import MapKit  // Apple Maps: free in native apps, no API key
+import WebKit  // hosts map.html (Leaflet + OpenStreetMap), the same map any OS can show
 
 let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
@@ -36,15 +36,25 @@ struct Place: Codable {
 let placeRadius: CLLocationDistance = 150  // meters; ponytail: one radius for every place, make it per-place if needed
 let placeActions = [("record", "Auto record"), ("off", "Auto off")]
 
+// places.json in the ozen dir: plain JSON any platform or tool can read, not macOS-only preferences.
+let placesFile = dir.appendingPathComponent("places.json")
+
 func loadPlaces() -> [Place] {
-    guard let d = UserDefaults.standard.data(forKey: "places"),
+    // Older builds kept places in UserDefaults: read them once, then they move to places.json on the next save.
+    guard let d = (try? Data(contentsOf: placesFile)) ?? UserDefaults.standard.data(forKey: "places"),
           let p = try? JSONDecoder().decode([Place].self, from: d) else {
         return [Place(label: "Home", action: "off"), Place(label: "Work", action: "record")]
     }
     return p
 }
 
-func savePlaces(_ p: [Place]) { UserDefaults.standard.set(try? JSONEncoder().encode(p), forKey: "places") }
+func savePlaces(_ p: [Place]) {
+    let enc = JSONEncoder()
+    enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let d = try? enc.encode(p), (try? d.write(to: placesFile, options: .atomic)) != nil {
+        UserDefaults.standard.removeObject(forKey: "places")  // migrated
+    }
+}
 
 /// Name of a meeting app currently capturing the microphone, via Core Audio's per-process objects (macOS 14.2+).
 /// ozen's own capture shows up as com.apple.replayd, so it never counts as a meeting.
@@ -207,7 +217,7 @@ final class TimelineView: NSView, NSViewToolTipOwner {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, MKMapViewDelegate {
+final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocationManagerDelegate, WKNavigationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let popover = NSPopover()
     let scroll = NSTextView.scrollableTextView()
@@ -242,7 +252,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var settingPlace: Int?  // row waiting for a location fix after "Use current location"
     var placesWindow: NSWindow?
     let placesStack = NSStackView()
-    let placesMap = MKMapView()
+    let placesMap = WKWebView()
     let placesNote = NSTextField(wrappingLabelWithString: "")
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -504,8 +514,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             placesNote.font = .systemFont(ofSize: 11)
             placesNote.textColor = .secondaryLabelColor
             w.contentView = placesStack
-            placesMap.delegate = self
+            placesMap.navigationDelegate = self
+            placesMap.customUserAgent = "Ozen (https://github.com/tupe12334/ozen)"  // OSM tile policy: identify the app
             placesMap.heightAnchor.constraint(equalToConstant: 280).isActive = true
+            // Bundled by `ozen app`; a checkout run (Ozen [dir]) falls back to the repo copy.
+            let page = Bundle.main.url(forResource: "map", withExtension: "html") ?? dir.appendingPathComponent("map.html")
+            placesMap.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
             placesWindow = w
         }
         buildPlaces()
@@ -562,46 +576,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         placesWindow?.setContentSize(placesStack.fittingSize)
     }
 
-    /// A pin and a radius circle per located place; red records, gray turns recording off.
+    /// Hand the places to map.html, which draws each located one with its radius; red records, gray turns it off.
     func showPlacesOnMap() {
-        placesMap.removeAnnotations(placesMap.annotations.filter { !($0 is MKUserLocation) })
-        placesMap.removeOverlays(placesMap.overlays)
-        let located = loadPlaces().compactMap { p in p.lat.flatMap { lat in p.lon.map { (p, CLLocationCoordinate2D(latitude: lat, longitude: $0)) } } }
-        placesMap.showsUserLocation = !located.isEmpty  // never ask for location before a place uses it
-        for (p, c) in located {
-            let pin = MKPointAnnotation()
-            pin.coordinate = c
-            pin.title = p.label
-            pin.subtitle = placeActions.first { $0.0 == p.action }?.1
-            placesMap.addAnnotation(pin)
-            let circle = MKCircle(center: c, radius: placeRadius)
-            circle.title = p.action
-            placesMap.addOverlay(circle)
-        }
-        if !located.isEmpty {
-            let rect = placesMap.overlays.reduce(MKMapRect.null) { $0.union($1.boundingMapRect) }
-            placesMap.setVisibleMapRect(rect, edgePadding: NSEdgeInsets(top: 40, left: 40, bottom: 40, right: 40), animated: false)
-        } else if let here {
-            placesMap.setRegion(MKCoordinateRegion(center: here.coordinate, latitudinalMeters: 2000, longitudinalMeters: 2000), animated: false)
-        }
+        struct Here: Encodable { let lat: Double, lon: Double }
+        let enc = JSONEncoder()
+        guard let places = try? enc.encode(loadPlaces()), let places = String(data: places, encoding: .utf8) else { return }
+        let here = self.here.flatMap { try? enc.encode(Here(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude)) }
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        placesMap.evaluateJavaScript("show(\(places), \(placeRadius), \(here))")  // before the page loads this is a no-op
     }
 
-    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-        guard !(annotation is MKUserLocation) else { return nil }
-        let v = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: nil)
-        v.markerTintColor = annotation.subtitle == placeActions[0].1 ? .systemRed : .systemGray
-        v.glyphImage = NSImage(systemSymbolName: annotation.subtitle == placeActions[0].1 ? "ear.fill" : "ear", accessibilityDescription: nil)
-        return v
-    }
-
-    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-        let r = MKCircleRenderer(overlay: overlay)
-        let color: NSColor = (overlay as? MKCircle)?.title == "record" ? .systemRed : .systemGray
-        r.fillColor = color.withAlphaComponent(0.15)
-        r.strokeColor = color
-        r.lineWidth = 1.5
-        return r
-    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { showPlacesOnMap() }
 
     func editPlaces(_ change: (inout [Place]) -> Void) {
         var places = loadPlaces()
