@@ -37,7 +37,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
      different-person similarities), which the live transcriber picks up immediately;
   2. scores every untagged line and queues the ones it's least sure about (near the threshold, or nearly tied
      between two people). They show an orange **?**, and **Review N** jumps to the most uncertain one and asks
-     who said it;
+     who said it. Review only asks about the last 10 minutes: past that, nobody remembers who said what;
   3. logs leave-one-out accuracy to the registry's `history.jsonl`; the footer shows it with the starting value.
 
   Answering Review is the fastest way to improve it: in a simulation with four similar voices, 12 tags picked by
