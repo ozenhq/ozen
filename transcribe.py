@@ -34,6 +34,11 @@ ECHO_OVERLAP = 0.6  # mic turn mostly overlapping speaker output = echo, not a p
 ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
 SR = asr.SR
 SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
+# A frame counts as speech only above -38 dBFS. The per-chunk relative threshold alone let steady room noise
+# (measured -47 dB median, -41.7 dB max frame) through as one 15s "utterance" per chunk, and on it the Hebrew
+# model hallucinates Knesset openers ("אדוני היושב-ראש…") and "Okay. Okay.". Speech from ~0.5m measured -31 dB
+# at its 10th percentile frame, so the floor sits between the two.
+SPEECH_RMS = 0.0125
 SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one train.py calibrates from your tags
 MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
 SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing label (else "?")
@@ -143,7 +148,7 @@ def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
     if len(audio) < n:
         return  # shorter than one frame (a fragment cut off at stop): nothing to split, and no rms to rank
     rms = np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
-    voiced = np.flatnonzero(rms > max(SILENCE_RMS, 0.15 * np.percentile(rms, 95)))
+    voiced = np.flatnonzero(rms > max(SPEECH_RMS, 0.15 * np.percentile(rms, 95)))
     if not voiced.size:
         return
     groups = np.split(voiced, np.flatnonzero(np.diff(voiced) * frame > max_gap) + 1)
