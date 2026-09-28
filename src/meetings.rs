@@ -40,13 +40,28 @@ fn read_json(path: &str) -> Value {
 
 /// Every transcript line, time ordered, rendered like `ozen show`: speakers corrected by your tags.
 fn lines() -> Vec<Line> {
-    let (tags, labels) = (read_json("tags.json"), read_json("labels.json"));
     let raw = fs::read_to_string("lines.jsonl").unwrap_or_default();
+    let (tags, labels) = (read_json("tags.json"), read_json("labels.json"));
+    render(&raw, &tags, &labels, &read_json("junk.json"))
+}
+
+/// `lines()` on given contents. Skips the old Whisper echoes the transcriber listed in junk.json (the panel hides
+/// them too), so an agent asked about a meeting doesn't read them as things people said.
+fn render(raw: &str, tags: &Value, labels: &Value, junk: &Value) -> Vec<Line> {
+    let junk: Vec<&str> = junk
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
     let mut out: Vec<Line> = raw
         .lines()
         .filter_map(|row| serde_json::from_str::<Value>(row).ok())
         .filter_map(|r| {
             let (id, t) = (r["id"].as_str()?, r["t"].as_f64()?);
+            if junk.contains(&id) {
+                return None;
+            }
             let tag = tags[id].as_str().filter(|s| !s.is_empty());
             let spk = tag
                 .or(labels[id]["spk"].as_str())
@@ -472,6 +487,23 @@ mod tests {
             err.contains("Kev isn't answering") && err.contains("kev.serve"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn junk_lines_stay_out_of_the_export() {
+        let raw = concat!(
+            r#"{"id": "a", "t": 2, "spk": "S1", "src": "room", "text": "real"}"#,
+            "\n",
+            r#"{"id": "b", "t": 1, "spk": "S1", "src": "room", "text": "אורן דן, תודה רבה."}"#,
+            "\n",
+        );
+        let out = render(raw, &Value::Null, &Value::Null, &serde_json::json!(["b"]));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].text.ends_with("S1 (room): real"));
+        assert_eq!(
+            render(raw, &Value::Null, &Value::Null, &Value::Null).len(),
+            2
+        ); // no junk.json: all lines
     }
 
     #[test]
