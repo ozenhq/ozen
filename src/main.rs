@@ -35,13 +35,15 @@ ozen control: start | pause | resume | stop | record | process | status | health
                 Hebrew model and Hebrew + vocab.txt, to judge a model or prompt change on your own speech
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
   tag ID [NAME] set who said a transcript line (empty clears), then retrain
-  ignore ID...  tag transcript lines as a voice to ignore (a video playing nearby), then retrain
+  ignore ID...  tag transcript lines as a new voice to ignore (a video playing nearby: Ignored, Ignored 2...),
+                then retrain; `tag ID 'Ignored 2'` adds a line to one you already ignore
   voices        JSON: people, this run's unnamed speakers and ignored voices, with line counts and recent lines
   name NAME ID...
                 tag those lines as NAME (an unnamed speaker's lines, from `voices`), then retrain
   rename FROM TO
-                move every line tagged FROM to TO (an existing TO merges them), then retrain
-  forget NAME   clear every tag NAME on this Mac, then retrain; `forget Ignored` stops ignoring every voice
+                move every line tagged FROM to TO (an existing TO merges them), then retrain; TO Ignored
+                makes FROM a new ignored voice
+  forget NAME   clear every tag NAME on this Mac, then retrain; `forget 'Ignored 2'` stops ignoring that voice
   retrain       rebuild voiceprints, labels and the ignored voices from all tags
   show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
@@ -742,7 +744,7 @@ fn main() {
                 println!("{USAGE}");
                 exit(2);
             }
-            ignore::tag(&ids, ignore::IGNORE);
+            ignore::tag(&ids, &ignore::fresh(&fixes::read("tags.json")));
             retrain();
         }
         "retrain" => retrain(),
@@ -774,6 +776,12 @@ fn main() {
                 println!("{USAGE}");
                 exit(2);
             }
+            // Ignoring a person starts a voice of its own rather than merging into the other ignored ones.
+            let to = if to == ignore::IGNORE && from != to {
+                ignore::fresh(&fixes::read("tags.json"))
+            } else {
+                to
+            };
             match voices::retag(&from, &to) {
                 Ok(n) => println!("retagged {n} lines"),
                 Err(e) => {

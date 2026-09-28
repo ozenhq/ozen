@@ -5,7 +5,7 @@
 //! Renaming onto an existing name merges the two; forgetting clears the tags on this Mac only (the
 //! shared registry drops the person when no Mac tags them any more).
 use crate::fixes::{lines, read, write};
-use crate::ignore::IGNORE;
+use crate::ignore::is_ignored;
 use serde_json::{Map, Value, json};
 
 const TAGS: &str = "tags.json";
@@ -38,7 +38,7 @@ fn summarize(rows: &[Row], tags: &Row, labels: &Row, fixes: &Row) -> Vec<Value> 
         let name = speaker(r, tags, labels);
         let kind = match name {
             "?" => continue,
-            n if n == IGNORE => "ignored",
+            n if is_ignored(n) => "ignored",
             // S1 in an earlier run was a different voice: only this run's unnamed speakers are listed.
             n if anon(n) && (run.is_none() || r.get("run").and_then(Value::as_i64) != run) => {
                 continue;
@@ -113,6 +113,7 @@ pub fn retag(from: &str, to: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ignore::IGNORE;
 
     fn row(id: &str, t: f64, spk: &str, run: Option<i64>) -> Row {
         let mut r = json!({"id": id, "t": t, "spk": spk, "text": format!("said {id}")});
@@ -131,10 +132,11 @@ mod tests {
             row("d", 4.0, "S2", Some(2)), // this run's S2
             row("e", 5.0, "S2", Some(2)),
             row("f", 6.0, "S3", Some(2)), // ignored
+            row("i", 6.5, "S4", Some(2)), // a second ignored voice, listed apart
             row("g", 7.0, "?", Some(2)),  // too short to say
             row("h", 8.0, "S1", Some(2)), // tagged Dana
         ];
-        let tags = json!({"a": "Dana", "f": IGNORE, "h": "Dana"})
+        let tags = json!({"a": "Dana", "f": IGNORE, "h": "Dana", "i": "Ignored 2"})
             .as_object()
             .unwrap()
             .clone();
@@ -156,7 +158,8 @@ mod tests {
             [
                 ("Dana", "person", 3),
                 ("S2", "unnamed", 2),
-                (IGNORE, "ignored", 1)
+                (IGNORE, "ignored", 1),
+                ("Ignored 2", "ignored", 1)
             ]
         );
         assert_eq!(v[0]["recent"][0]["text"], "fixed text"); // newest first, with your fix

@@ -4,12 +4,32 @@
 //! those lines' voiceprints into ignore.json (local only, never pushed to the voices registry), which the
 //! transcriber reads live to drop that voice, and labels earlier untagged lines that sound like it.
 //! Ignored prints are matched one by one, not averaged: a video has many voices.
+//! Each ignore starts its own voice (IGNORE, "Ignored 2", "Ignored 3"...) so you can stop ignoring one alone.
 use crate::fixes::{lines, read, write};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 
 pub const IGNORE: &str = "Ignored"; // reserved tag, same in transcribe.py, src/train.rs and menubar.swift
+
+/// IGNORE or one of its numbered voices ("Ignored 2"), same as menubar.swift's isIgnored.
+pub fn is_ignored(name: &str) -> bool {
+    name == IGNORE
+        || name
+            .strip_prefix(IGNORE)
+            .and_then(|n| n.strip_prefix(' '))
+            .is_some_and(|n| n.parse::<u32>().is_ok())
+}
+
+/// The first ignored voice name no line is tagged with yet: IGNORE, then "Ignored 2", "Ignored 3"...
+pub fn fresh(tags: &Map<String, Value>) -> String {
+    let used = |n: &str| tags.values().any(|v| v.as_str() == Some(n));
+    (2..)
+        .map(|i| format!("{IGNORE} {i}"))
+        .find(|n| !used(n))
+        .filter(|_| used(IGNORE))
+        .unwrap_or_else(|| IGNORE.into())
+}
 /// Ignoring needs the same-voice threshold plus this: dropping someone's speech costs more than keeping noise.
 /// At the bare threshold a different voice (0.43) was dropped; the ignored voice itself scores 0.87-0.90.
 pub const MARGIN: f32 = 0.1; // same as transcribe.py
@@ -49,20 +69,24 @@ fn best(prints: &[Vec<f32>], e: &[f32]) -> f32 {
 }
 
 /// Untagged lines that sound like an ignored line: at least threshold + MARGIN, and closer to it than to
-/// any person. Returns (line id, similarity).
-fn matches(
+/// any person. Returns (line id, the nearest ignored line's voice, similarity).
+fn matches<'a>(
     lines: &[(String, Vec<f32>)],
     tags: &Map<String, Value>,
-    ignored: &[Vec<f32>],
+    ignored: &[(&'a str, Vec<f32>)],
     people: &[Vec<f32>],
     threshold: f32,
-) -> Vec<(String, f32)> {
+) -> Vec<(String, &'a str, f32)> {
     lines
         .iter()
         .filter(|(id, _)| !tags.contains_key(id))
         .filter_map(|(id, e)| {
-            let near = best(ignored, e);
-            (near >= threshold + MARGIN && near > best(people, e)).then(|| (id.clone(), near))
+            let (voice, near) = ignored
+                .iter()
+                .map(|(v, p)| (*v, dot(p, e)))
+                .max_by(|a, b| a.1.total_cmp(&b.1))?;
+            (near >= threshold + MARGIN && near > best(people, e))
+                .then(|| (id.clone(), voice, near))
         })
         .collect()
 }
@@ -96,18 +120,21 @@ pub fn apply() {
         .collect::<BTreeMap<_, _>>()
         .into_iter()
         .collect();
-    let ignored: Vec<Vec<f32>> = lines
+    // The transcriber only drops these, so ignore.json keeps bare prints; labels name the voice.
+    let ignored: Vec<(&str, Vec<f32>)> = lines
         .iter()
-        .filter(|(id, _)| tags.get(id).and_then(Value::as_str) == Some(IGNORE))
-        .map(|(_, e)| e.clone())
+        .filter_map(|(id, e)| Some((tags.get(id)?.as_str().filter(|n| is_ignored(n))?, e.clone())))
         .collect();
-    write(IGNORES, &json!(ignored));
+    write(
+        IGNORES,
+        &json!(ignored.iter().map(|(_, e)| e).collect::<Vec<_>>()),
+    );
     let (people, threshold) = registry();
     let found = matches(&lines, &tags, &ignored, &people, threshold);
 
     let mut labels = read(LABELS);
     let mut stats = read(STATS);
-    for (id, sim) in &found {
+    for (id, voice, sim) in &found {
         let was_unsure = labels
             .get(id)
             .and_then(|l| l.get("unsure"))
@@ -119,7 +146,7 @@ pub fn apply() {
         let sim = (sim * 1000.0).round() / 1000.0;
         labels.insert(
             id.clone(),
-            json!({"spk": IGNORE, "sim": sim, "margin": 0, "unsure": false}),
+            json!({"spk": voice, "sim": sim, "margin": 0, "unsure": false}),
         );
     }
     stats.insert("ignored".into(), json!(ignored.len()));
@@ -148,11 +175,47 @@ mod tests {
         let tags: Map<String, Value> = [("tagged".to_string(), json!("Dana Levi"))]
             .into_iter()
             .collect();
-        let ids: Vec<String> = matches(&lines, &tags, &[video.to_vec()], &[me.to_vec()], 0.4)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
+        let ids: Vec<String> = matches(
+            &lines,
+            &tags,
+            &[(IGNORE, video.to_vec())],
+            &[me.to_vec()],
+            0.4,
+        )
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
         assert_eq!(ids, ["video-again"]);
         assert!(matches(&lines, &tags, &[], &[me.to_vec()], 0.4).is_empty());
+    }
+
+    #[test]
+    fn each_ignored_voice_keeps_its_own_name() {
+        let lines = [
+            line("tv", &[0.95, 0.1, 0.0]),
+            line("radio", &[0.0, 0.1, 0.95]),
+        ];
+        let ignored = [
+            ("Ignored", vec![1.0, 0.0, 0.0]),
+            ("Ignored 2", vec![0.0, 0.0, 1.0]),
+        ];
+        let voices: Vec<&str> = matches(&lines, &Map::new(), &ignored, &[], 0.4)
+            .into_iter()
+            .map(|(_, v, _)| v)
+            .collect();
+        assert_eq!(voices, ["Ignored", "Ignored 2"]);
+    }
+
+    #[test]
+    fn fresh_names_the_next_free_ignored_voice() {
+        let tags = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(fresh(&tags(json!({"a": "Dana"}))), "Ignored");
+        assert_eq!(fresh(&tags(json!({"a": "Ignored"}))), "Ignored 2");
+        assert_eq!(
+            fresh(&tags(json!({"a": "Ignored", "b": "Ignored 2"}))),
+            "Ignored 3"
+        );
+        assert!(is_ignored("Ignored") && is_ignored("Ignored 12"));
+        assert!(!is_ignored("Ignored TV") && !is_ignored("Ignoredx") && !is_ignored("Dana"));
     }
 }
