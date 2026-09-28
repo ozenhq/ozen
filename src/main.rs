@@ -638,6 +638,9 @@ fn main() {
                 exit(1);
             }
             println!("installed {app}");
+            if !ok(cmd("uv").args(["sync", "-q"])) {
+                eprintln!("uv sync failed: the transcriber will set up its env on first start");
+            }
             drop_script_envs();
         }
         "bar" => {
