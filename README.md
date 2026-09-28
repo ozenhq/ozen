@@ -18,11 +18,19 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   English to stock large-v3-turbo. Each call is hinted with `vocab.txt` (terms and names to spell right, e.g. Kev,
   PR, code review; edit freely), the known people's names, and the previous line. Known filler that Whisper invents
   on noise ("Thank you.", "תודה רבה") is dropped.
-- **Drops echo.** A mic utterance that mostly overlaps call or local audio is speaker bleed, not a person in
-  the room, so it's discarded. That covers the computer reading text aloud and remote voices leaking into the mic.
+- **Drops echo.** A mic utterance that mostly overlaps call or local audio, in the voice that was playing then,
+  is speaker bleed, not a person in the room, so it's discarded. That covers the computer reading text aloud and
+  remote voices leaking into the mic. Someone in the room talking over the call keeps their line: their voice
+  doesn't match what was playing.
 - **Knows who's speaking.** Each utterance gets an ECAPA voiceprint (speechbrain) and is matched against voices
   already heard, so a person keeps one label for the whole meeting. Known people come from the
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
+- **Hears people talking at once.** In the room, on the call, or both: when voiceprints across an utterance
+  disagree (two people at once, or one cutting in without a pause), `overlap.py` separates it into one track per
+  voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), on the GPU), splits each track where its
+  voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
+  the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
+  `uv run overlap.py` checks it on macOS voices.
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
   Each tag runs `ozen tag`, which retrains with `train.py`: every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
@@ -108,7 +116,8 @@ On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** 
 grant both (System Settings > Privacy & Security), then press Start again. **Location Services** is asked for
 only when you first locate a place; without it, places never match and recording follows Always / Meetings. The build signs the app and recorder
 with a local self-signed certificate (created once in `~/Library/Keychains/ozen-signing.keychain-db`), so the
-permissions survive rebuilds. The Whisper and ECAPA models download on first use.
+permissions survive rebuilds. The Whisper and ECAPA models download on first use. The MossFormer2 separator (~640MB) downloads in the
+background on the first start; until it's ready, people talking at once stay merged in one line.
 
 ## Use
 
@@ -149,10 +158,11 @@ with `--real` once you have a few dozen fixes.
 
 - Lines arrive ~15–30s after speech (chunked, not streaming).
 - English terms spoken inside Hebrew are the weakest spot; add them to `vocab.txt`. Distant voices in the room are hard to hear.
-- You talking over the computer voice or a remote speaker can be dropped as echo.
+- You talking over the computer voice or a remote speaker can be dropped as echo when your voices sound alike.
 - macOS Speak Selection isn't heard on `local` (ScreenCaptureKit doesn't capture that system voice), so text it reads
   aloud is transcribed as a room speaker. Marking that voice with **Ignore this voice** can drop it.
-- Overlapping speakers are merged into one line; utterances under 1s inherit the previous speaker.
+- Up to two voices at once are separated; a third merges into one of them. Overlaps in utterances under ~2s
+  aren't detected, and utterances under 1s inherit the previous speaker.
 - Live speaker matching is online (no re-clustering); tagging a few lines fixes past and future labels.
 
 ## Privacy

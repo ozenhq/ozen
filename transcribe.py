@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mlx-whisper", "speechbrain", "torchaudio"]
+# dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
 # ///
 """Watch the chunk dir; transcribe call + mic chunks with local Whisper, drop mic echo of
 call/local (computer) audio, label each line by speaker,
@@ -21,6 +21,7 @@ from mlx_whisper.audio import load_audio
 from speechbrain.inference.speaker import EncoderClassifier
 
 import asr  # Whisper setup shared with the eval (asr.py)
+import overlap  # several people in one utterance (overlap.py)
 
 HERE = pathlib.Path(__file__).parent
 chunks = pathlib.Path(sys.argv[1])
@@ -33,12 +34,7 @@ SOURCE = {"call": "call", "mic": "room"}
 ECHO_OVERLAP = 0.6  # mic turn mostly overlapping speaker output = echo, not a person in the room
 ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
 SR = asr.SR
-SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
-# A frame counts as speech only above -38 dBFS. The per-chunk relative threshold alone let steady room noise
-# (measured -47 dB median, -41.7 dB max frame) through as one 15s "utterance" per chunk, and on it the Hebrew
-# model hallucinates Knesset openers ("אדוני היושב-ראש…") and "Okay. Okay.". Speech from ~0.5m measured -31 dB
-# at its 10th percentile frame, so the floor sits between the two.
-SPEECH_RMS = 0.0125
+SILENCE_RMS = overlap.SILENCE_RMS
 SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one train.py calibrates from your tags
 MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
 SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing label (else "?")
@@ -47,12 +43,16 @@ ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
 RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks (computer audio in recent/local), local only
 KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
+# Separating people talking at once costs ~0.75x real time per such utterance (overlap.py): skip it while more than
+# this many chunks wait (two 15s windows), so it never makes the transcript fall behind; those lines stay merged
+SEPARATE_BACKLOG = int(os.environ.get("OZEN_SEPARATE_BACKLOG", "6"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); `ozen retrain` (src/ignore.rs) writes their prints
 IGNORES = HERE / "ignore.json"
 IGNORE_MARGIN = 0.1  # same as src/ignore.rs MARGIN: dropping someone's speech costs more than keeping noise
 ignored = np.zeros((0, 192), dtype=np.float32)
 
+overlap.preload()
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
 # ponytail: online nearest-centroid clustering, no re-clustering; a voice split early stays split.
 speakers: list[list] = []  # [label, centroid, count]; named ones come from the registry
@@ -109,28 +109,31 @@ unknown = 0
 RUN = int(time.time())  # S1, S2... are per run: lines carry it so the panel can group a label's lines
 
 
-def who(clip: np.ndarray) -> tuple[str, np.ndarray]:
-    e = encoder.encode_batch(torch.from_numpy(clip)[None]).squeeze().numpy()
-    e /= np.linalg.norm(e)
+def embed(clip: np.ndarray) -> np.ndarray:
+    e = encoder.encode_batch(torch.from_numpy(clip.astype(np.float32))[None]).squeeze().numpy()
+    return e / np.linalg.norm(e)
+
+
+def who(clip: np.ndarray, e: np.ndarray) -> str:
     # ponytail: nearest ignored line, O(ignored lines) per utterance; fine for thousands
     near = float((ignored @ e).max()) if len(ignored) else -1.0
     if near >= SAME_SPEAKER + IGNORE_MARGIN and near > max((float(s[1] @ e) for s in speakers if not anon(s[0])), default=-1.0):
-        return IGNORE, e  # closer to a voice you ignored than to anyone you know
+        return IGNORE  # closer to a voice you ignored than to anyone you know
     if clip.size < MIN_EMBED_SEC * SR:
         # A short clip's print is too noisy to found or reshape a voice: label it only on a strong match.
         best = max(speakers, key=lambda s: float(s[1] @ e), default=None)
-        return (best[0] if best is not None and float(best[1] @ e) >= SAME_SPEAKER + SHORT_MARGIN else "?"), e
+        return best[0] if best is not None and float(best[1] @ e) >= SAME_SPEAKER + SHORT_MARGIN else "?"
     if speakers:
         best = max(speakers, key=lambda s: float(s[1] @ e))
         if float(best[1] @ e) >= SAME_SPEAKER:
             if anon(best[0]):  # named prints change only through tagging (train.py)
                 c = best[1] * best[2] + e
                 best[1], best[2] = c / np.linalg.norm(c), best[2] + 1
-            return best[0], e
+            return best[0]
     global unknown
     unknown += 1
     speakers.append([f"S{unknown}", e, 1])
-    return speakers[-1][0], e
+    return speakers[-1][0]
 
 
 def doubt(e: np.ndarray) -> float | None:
@@ -140,22 +143,6 @@ def doubt(e: np.ndarray) -> float | None:
         return None
     margin = sims[0] - sims[1] if len(sims) > 1 else sims[0] - SAME_SPEAKER
     return round(min(abs(sims[0] - SAME_SPEAKER), margin), 3)
-
-
-def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
-    """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes."""
-    n = int(frame * SR)
-    if len(audio) < n:
-        return  # shorter than one frame (a fragment cut off at stop): nothing to split, and no rms to rank
-    rms = np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
-    voiced = np.flatnonzero(rms > max(SPEECH_RMS, 0.15 * np.percentile(rms, 95)))
-    if not voiced.size:
-        return
-    groups = np.split(voiced, np.flatnonzero(np.diff(voiced) * frame > max_gap) + 1)
-    for g in groups:
-        start, end = max(0, g[0] - 3) * n, min(len(audio), (g[-1] + 4) * n)  # ~0.1s padding
-        if (end - start) / SR >= min_len:
-            yield start / SR, audio[start:end]
 
 
 last_lang: dict[str, str] = {}  # per source; short clips reuse it
@@ -185,12 +172,19 @@ def transcribe(clip: np.ndarray, tag: str) -> str:
     return text
 
 
-active: list[tuple[float, float]] = []  # absolute times when call or local (computer) audio played
+# absolute times when call or local (computer) audio played, with its voiceprint (None under MIN_EMBED_SEC)
+active: list[tuple[float, float, np.ndarray | None]] = []
 covered = {"call": 0.0, "local": 0.0}  # end time of the latest chunk seen per reference stream
 
 
-def echo_fraction(t0: float, t1: float) -> float:
-    return sum(max(0.0, min(t1, b + ECHO_PAD) - max(t0, a - ECHO_PAD)) for a, b in active) / max(t1 - t0, 1e-6)
+def echo(t0: float, t1: float, e: np.ndarray | None) -> tuple[float, float | None]:
+    """How much of a mic turn the call/computer audio overlaps, and how close the turn's voice is to the voices
+    playing then (None when none of them has a print). Echo sounds like its source (~0.8 on speaker bleed);
+    you talking over a remote speaker doesn't."""
+    hits = [(max(0.0, min(t1, b + ECHO_PAD) - max(t0, a - ECHO_PAD)), p) for a, b, p in active]
+    prints = [p for d, p in hits if d > 0 and p is not None]
+    return (sum(d for d, _ in hits) / max(t1 - t0, 1e-6),
+            max(float(p @ e) for p in prints) if prints and e is not None else None)
 
 
 def start_ms(f: pathlib.Path) -> int:
@@ -217,25 +211,31 @@ while True:
                 covered[tag] = max(covered[tag], t_chunk + len(audio) / SR)
             if audio.size and np.sqrt(np.mean(audio**2)) > SILENCE_RMS:
                 lines, prev = [], None  # [start, speaker, text, print sum, end], merged while speaker repeats
-                for start, clip in utterances(audio):
+                separate = tag != "local" and sum(1 for _ in chunks.glob("*.wav")) <= SEPARATE_BACKLOG
+                turns = ((u + o, p) for u, c in overlap.utterances(audio)
+                         for o, p in (overlap.voices(c, embed, SAME_SPEAKER) if separate else [(0.0, c)]))
+                for start, clip in turns:
                     t0, t1 = t_chunk + start, t_chunk + start + len(clip) / SR
+                    long = len(clip) >= MIN_EMBED_SEC * SR  # shorter prints are too noisy to judge echo by
+                    e = embed(clip) if long or tag != "local" else None
                     if tag != "mic":
-                        active.append((t0, t1))
+                        active.append((t0, t1, e if long else None))
                     if tag == "local":
                         continue  # computer's own audio: reference only, never transcribed
                     if tag == "mic":
-                        overlap = echo_fraction(t0, t1)
-                        if overlap >= ECHO_OVERLAP:
+                        share, near = echo(t0, t1, e if long else None)
+                        if share >= ECHO_OVERLAP and (near is None or near >= SAME_SPEAKER):
                             print(f"echo dropped {t1 - t0:.1f}s", flush=True)
                             continue  # speakers leaking into the mic
-                        # Evidence for a missed echo: how much computer audio overlapped, and whether the
-                        # local reference even reached this far (negative = it hadn't been read yet).
-                        print(f"mic kept {t1 - t0:.1f}s in {f.name}: echo overlap {overlap:.2f}, "
-                              f"local reference {covered['local'] - t1:+.1f}s past it", flush=True)
+                        # Evidence for a missed echo: how much computer audio overlapped, how close its voice was,
+                        # and whether the local reference even reached this far (negative = it hadn't been read yet).
+                        print(f"mic kept {t1 - t0:.1f}s in {f.name}: echo overlap {share:.2f}, voice similarity "
+                              f"{'-' if near is None else f'{near:.2f}'}, local reference {covered['local'] - t1:+.1f}s "
+                              f"past it", flush=True)
                     text = transcribe(clip, tag)
                     if not text:
                         continue
-                    spk, e = who(clip)
+                    spk = who(clip, e)
                     if spk == IGNORE:
                         print(f"ignored voice dropped {t1 - t0:.1f}s", flush=True)
                         continue
@@ -280,6 +280,6 @@ while True:
             break  # newer audio arrived: transcribe it before going further back
     # Keep echo windows as far back as the oldest chunk still waiting, so backlog mic chunks keep theirs.
     oldest = min((start_ms(g) / 1000 for g in chunks.glob("*.wav")), default=time.time())
-    active = [(a, b) for a, b in active if b > min(oldest, time.time()) - 120]
+    active = [x for x in active if x[1] > min(oldest, time.time()) - 120]
     load_registry()
     time.sleep(1)
