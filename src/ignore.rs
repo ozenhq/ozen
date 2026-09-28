@@ -218,4 +218,19 @@ mod tests {
         assert!(is_ignored("Ignored") && is_ignored("Ignored 12"));
         assert!(!is_ignored("Ignored TV") && !is_ignored("Ignoredx") && !is_ignored("Dana"));
     }
+
+    proptest::proptest! {
+        /// A new ignored voice never lands on a name already in use, and is always an ignored name.
+        #[test]
+        fn fresh_never_reuses_a_name(used in proptest::collection::vec(0u32..12, 0..10)) {
+            let tags: Map<String, Value> = used
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (i.to_string(), json!(if *n < 2 { IGNORE.to_string() } else { format!("{IGNORE} {n}") })))
+                .collect();
+            let name = fresh(&tags);
+            proptest::prop_assert!(is_ignored(&name));
+            proptest::prop_assert!(!tags.values().any(|v| v.as_str() == Some(name.as_str())));
+        }
+    }
 }

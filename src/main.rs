@@ -7,6 +7,7 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod panel;
 mod places;
 mod separate;
 mod text;
@@ -23,7 +24,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | tag-menu | unsure | controls | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -41,6 +42,10 @@ ozen control: start | pause | resume | stop | record | process | status | health
   tag ID [NAME] set who said a transcript line (empty clears), then retrain
   ignore ID...  tag transcript lines as a new voice to ignore (a video playing nearby: Ignored, Ignored 2...),
                 then retrain; `tag ID 'Ignored 2'` adds a line to one you already ignore
+  tag-menu ID   JSON: the panel's menu for tagging that line (people, new person, ignore, clear)
+  unsure        JSON: untagged lines ozen isn't sure who said, most uncertain first, and when each leaves Review
+  controls STATE [split]
+                JSON: the panel's Start/Pause/Stop/Process buttons for that recorder state
   voices        JSON: people, this run's unnamed speakers and ignored voices, with line counts and recent lines
   name NAME ID...
                 tag those lines as NAME (an unnamed speaker's lines, from `voices`), then retrain
@@ -90,6 +95,11 @@ const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the reco
 /// The checkout holding the sources, chunks and logs: the one this binary sits in (`<root>/target/release/ozen`),
 /// so a prebuilt release unpacked anywhere works; else the one it was built from (`cargo test`, odd layouts).
 pub fn root() -> String {
+    if let Ok(dir) = std::env::var("OZEN_DIR")
+        && !dir.is_empty()
+    {
+        return dir; // the bar app sets it; tests point it at a sample folder
+    }
     std::env::current_exe()
         .and_then(|e| e.canonicalize()) // through a symlink like ~/.local/bin/ozen
         .ok()
@@ -869,6 +879,19 @@ fn main() {
         "retrain" => retrain(),
         "voices" => println!("{}", serde_json::Value::from(voices::list())),
         "timebar" => println!("{}", timebar::json()),
+        "tag-menu" => match std::env::args().nth(2) {
+            Some(id) => println!("{}", panel::tag_menu_json(&id)),
+            None => {
+                println!("{USAGE}");
+                exit(2);
+            }
+        },
+        "unsure" => println!("{}", panel::unsure_json()),
+        "controls" => {
+            let state = std::env::args().nth(2).unwrap_or_default();
+            let split = std::env::args().nth(3).as_deref() == Some("split");
+            println!("{}", panel::controls_json(&state, split));
+        }
         "name" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             match args.split_first() {

@@ -15,12 +15,12 @@ const RECENT: usize = 3; // lines shown per voice, newest first
 
 type Row = Map<String, Value>;
 
-fn anon(name: &str) -> bool {
+pub(crate) fn anon(name: &str) -> bool {
     name.len() > 1 && name.starts_with('S') && name[1..].bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Who a line is shown as: your tag, else its voiceprint match, else the transcriber's label.
-fn speaker<'a>(r: &'a Row, tags: &'a Row, labels: &'a Row) -> &'a str {
+pub(crate) fn speaker<'a>(r: &'a Row, tags: &'a Row, labels: &'a Row) -> &'a str {
     let id = r.get("id").and_then(Value::as_str).unwrap_or("");
     tags.get(id)
         .and_then(Value::as_str)

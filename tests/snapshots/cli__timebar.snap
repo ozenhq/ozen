@@ -1,0 +1,32 @@
+---
+source: tests/cli.rs
+expression: out
+---
+{
+  "chunks": [
+    {
+      "done": 1060.0,
+      "lines": 1,
+      "sec": 15.0,
+      "state": "done",
+      "t": 1.0,
+      "tag": "mic",
+      "took": 3.0
+    },
+    {
+      "done": 2080.0,
+      "error": "bad wav",
+      "lines": 0,
+      "sec": 0.0,
+      "state": "error",
+      "t": 2.0,
+      "tag": "call",
+      "took": 0.1
+    },
+    {
+      "state": "waiting",
+      "t": 3.0,
+      "tag": "local"
+    }
+  ]
+}

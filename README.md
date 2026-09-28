@@ -187,10 +187,8 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
-| `./check-split.sh` | Check the Advanced split toggle: off by default, and on it swaps Start/Pause for Record and Process (opens the bar app's panel, no recording) |
 | `uv run --group eval eval_overlap.py [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`overlap.py`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
-| `./check-timebar.sh` | Check the Timebar window: presses **Timebar…** in the bar app's panel and checks the page drew what a stubbed `ozen timebar` returned |
-| `./check-review.sh` | Check what Review asks about: unsure lines from the last 10 minutes, most uncertain first (opens the bar app's panel on sample lines) |
+| `cargo nextest run` | Every test: Rust unit tests, `tests/cli.rs` running the CLI on sample folders (`OZEN_DIR`) the way the panel calls it, and `insta` snapshots (`cargo insta review` after an intended change) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 
 ## Tuning how fixes teach

@@ -42,20 +42,12 @@ jobs:
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
       - run: cargo clippy --release --all-targets -- -D warnings
-      - run: cargo test --release
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --release
       - name: Swift menu bar and icon type-check
         run: swiftc -typecheck menubar.swift && swiftc -typecheck icon.swift && swiftc -typecheck dmg.swift
       - name: Python scripts compile
         run: python3 -m py_compile transcribe.py overlap.py eval_overlap.py asr.py
-      - name: Review panel check
-        timeout-minutes: 5
-        run: ./check-review.sh
-      - name: Timebar window check
-        timeout-minutes: 5
-        run: ./check-timebar.sh
-      - name: Ignored voices check
-        timeout-minutes: 5
-        run: ./check-ignore.sh
       - uses: astral-sh/setup-uv@v6
       - name: Transcript filter doctests
         run: uv run -q --with mlx-whisper python -m doctest asr.py < /dev/null
