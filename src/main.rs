@@ -2,6 +2,7 @@
 mod eval;
 mod fixes;
 mod ignore;
+mod low_disk_alert;
 mod mcp;
 mod meetings;
 mod train;
@@ -454,6 +455,9 @@ fn main() {
                     );
                 }
                 return;
+            }
+            if let Some(alert) = low_disk_alert::check() {
+                println!("{alert}");
             }
             if Path::new("no-display").exists() {
                 println!(

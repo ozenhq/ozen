@@ -6,11 +6,13 @@
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
+import errno
 import fcntl
 import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -226,6 +228,7 @@ def pending() -> list[pathlib.Path]:
 
 
 print(f"transcribing {chunks} -> {out}", flush=True)
+disk_full = False  # logged once per full-disk spell, not on every retry
 while True:
     for f in pending():
         ms, tag = f.stem.split("-")
@@ -278,6 +281,8 @@ while True:
                     else:
                         lines.append([start, spk, text, w * e, end])
                     prev = spk
+                if shutil.disk_usage(out.parent).free < 16 << 20:  # room for every line or none, so a retry never repeats one
+                    raise OSError(errno.ENOSPC, "less than 16 MB free", str(out))
                 with out.open("a") as fh, open_lines() as lj:
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
                         if asr.loop(heard):
@@ -296,15 +301,26 @@ while True:
                             rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
+            if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                # Disk full: keep the audio and try again once there's room, rather than drop it.
+                if not disk_full:
+                    print(f"disk full, keeping {f.name} and the rest for later: {e}", file=sys.stderr, flush=True)
+                disk_full = True
+                time.sleep(10)
+                break
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
+        disk_full = False
         if KEEP_AUDIO and f.exists():
             # mic/call: recent audio for comparing models (uv run eval.py). local: computer audio only,
             # kept apart so a missed echo can be replayed with the reference the transcriber had.
             keep = RECENT / "local" if tag == "local" else RECENT
-            keep.mkdir(parents=True, exist_ok=True)
-            f.replace(keep / f.name)
-            for old in sorted(keep.glob("*.wav"))[:-KEEP_AUDIO]:
-                old.unlink()
+            try:
+                keep.mkdir(parents=True, exist_ok=True)
+                f.replace(keep / f.name)
+                for old in sorted(keep.glob("*.wav"))[:-KEEP_AUDIO]:
+                    old.unlink()
+            except OSError as e:  # e.g. disk full: the copy is optional, the transcriber must keep going
+                print(f"not keeping {f.name} in recent/: {e}", file=sys.stderr, flush=True)
         f.unlink(missing_ok=True)
         if any(start_ms(g) > int(ms) for g in chunks.glob("*.wav")):
             break  # newer audio arrived: transcribe it before going further back
