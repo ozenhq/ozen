@@ -70,10 +70,12 @@ def noise(text: str) -> bool:
 
 def hint_echo(text: str, hint: list[str]) -> bool:
     """"אורן דן. אורן דן. אורן דן." on noise: Whisper repeats names and terms from its own prompt. A line made
-    only of hint words (and filler) that repeats itself is that echo. A single "אורן דן." can be real speech
-    (someone addressed by name), so it stays."""
+    only of hint words (and filler) that repeats itself, or lists two or more of them, is that echo. A single
+    "אורן דן." can be real speech (someone addressed by name), so it stays."""
     words = words_of(text)
-    return len(words) > len(set(words)) and hint_only(text, hint)
+    # A list of two or more names/terms is the prompt read back ("אורן דן, בן נחושתן, תודה רבה." on clicks)
+    entries = sum(1 for h in dict.fromkeys(hint) if (hw := words_of(h)) and set(hw) <= set(words))
+    return (len(words) > len(set(words)) or entries >= 2) and hint_only(text, hint)
 
 
 def hint_only(text: str, hint: list[str]) -> bool:
