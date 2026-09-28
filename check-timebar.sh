@@ -14,12 +14,13 @@ app.delegate = a
 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
     a.timebarButton.performClick(nil)
     precondition(a.timebarWindow?.isVisible == true, "Timebar… didn't open its window")
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {  // page loaded, then fed `ozen timebar`
-        a.timebarView.evaluateJavaScript("[...document.querySelectorAll('.stat b')].slice(0, 4).map(b => b.textContent).join()") { r, e in
-            // recorded, done, waiting, skipped
-            precondition(r as? String == "3,1,1,1", "stats: \(r ?? e ?? "none")")
-            print("ok")
-            exit(0)
+    // Wait for the page to load and be fed `ozen timebar` (slow on a busy machine), then check what it drew.
+    let deadline = Date().addingTimeInterval(30)
+    Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+        a.timebarView.evaluateJavaScript("[...document.querySelectorAll('.stat b')].slice(0, 4).map(b => b.textContent).join()") { r, _ in
+            let stats = r as? String ?? ""  // recorded, done, waiting, skipped
+            if stats == "3,1,1,1" { print("ok"); exit(0) }
+            precondition(Date() < deadline, "stats: \(stats)")
         }
     }
 }
