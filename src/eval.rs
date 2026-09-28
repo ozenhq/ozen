@@ -144,7 +144,7 @@ fn real() -> Result<Vec<Case>, String> {
 }
 
 /// Runs asr.py once over all rows (one model load), in order.
-fn worker(rows: &[Value]) -> Result<Vec<Value>, String> {
+pub(crate) fn worker(rows: &[Value]) -> Result<Vec<Value>, String> {
     if rows.is_empty() {
         return Ok(vec![]);
     }

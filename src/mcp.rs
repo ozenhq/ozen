@@ -256,7 +256,7 @@ fn save_places(p: &[Value]) -> Reply {
 }
 
 /// vocab.txt is words one per line or comma separated; it's written back comma separated.
-fn vocab() -> Vec<String> {
+pub(crate) fn vocab() -> Vec<String> {
     fs::read_to_string(VOCAB)
         .unwrap_or_default()
         .split([',', '\n'])

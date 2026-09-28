@@ -1,4 +1,5 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
+mod compare;
 mod eval;
 mod fixes;
 mod ignore;
@@ -16,7 +17,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | voices | name | rename | forget | retrain | show | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -24,6 +25,8 @@ ozen control: start | pause | resume | stop | status | health | look | fix | eva
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   eval [--vocab 0,10,30,60] [--repeat 0,1,2,3] [--real] [--fresh]
                 score learning settings on a fixed set of spoken lines (see src/eval.rs)
+  compare [N]   transcribe the last N chunks with speech in recent/ (default 6) with stock Whisper, the
+                Hebrew model and Hebrew + vocab.txt, to judge a model or prompt change on your own speech
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
   tag ID [NAME] set who said a transcript line (empty clears), then retrain
   ignore ID...  tag transcript lines as a voice to ignore (a video playing nearby), then retrain
@@ -545,6 +548,13 @@ fn main() {
         "eval" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             if let Err(e) = eval::run(&args) {
+                eprintln!("{e}");
+                exit(1);
+            }
+        }
+        "compare" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if let Err(e) = compare::run(&args) {
                 eprintln!("{e}");
                 exit(1);
             }

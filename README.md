@@ -161,7 +161,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget Ignored` stops ignoring. Retrains |
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
-| `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
+| `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
 | `./check-review.sh` | Check what Review asks about: unsure lines from the last 10 minutes, most uncertain first (opens the bar app's panel on sample lines) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 

@@ -3,7 +3,8 @@ share, so a configuration measured by the eval is the one that runs in meetings.
 
     uv run asr.py    # eval worker: JSON lines on stdin -> JSON lines on stdout, same order
 
-Request: {"audio": path, "start": s, "duration": s, "words": [hint words], "replace": {wrong: right}, "lang": "he"}
+Request: {"audio": path, "start": s, "duration": s, "words": [hint words], "replace": {wrong: right}, "lang": "he",
+          "model": "stock" | "hebrew" (optional: that model in `lang`, no language detection; `ozen compare`)}
          or {"heard": text, "replace": {...}} to only apply corrections (no audio, no model)
 Reply:   {"heard": Whisper's text, "text": after replace, "lang": language used}
 The worker seeds MLX before every clip, so its output depends only on the request.
@@ -85,16 +86,17 @@ def loop(text: str) -> bool:
     return bool(top) and top[0][1] >= 3 and top[0][1] / len(phrases) >= 0.6
 
 
-def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = ()) -> tuple[str, str]:
+def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = (), model: str | None = None) -> tuple[str, str]:
     """(text, language). `lang` is used for clips under ~1.5s, where detection is unreliable ("שלום" came out
     as "Shalom"); longer clips pick between the languages actually spoken, since open detection on short
     noisy audio picks random languages and invents words."""
-    if clip.size >= 1.5 * SR:
-        model = ModelHolder.get_model(MODEL, mx.float16)
-        mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=model.dims.n_mels)
-        _, probs = detect_language(model, mel)
+    if model is None and clip.size >= 1.5 * SR:
+        detector = ModelHolder.get_model(MODEL, mx.float16)
+        mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=detector.dims.n_mels)
+        _, probs = detect_language(detector, mel)
         lang = max(LANGS, key=lambda l: probs.get(l, 0))
-    r = mlx_whisper.transcribe(clip, path_or_hf_repo=MODELS[lang], language=lang, initial_prompt=prompt,
+    repo = {"stock": MODEL, "hebrew": MODELS["he"]}.get(model, MODELS[lang])
+    r = mlx_whisper.transcribe(clip, path_or_hf_repo=repo, language=lang, initial_prompt=prompt,
                                condition_on_previous_text=False)
     # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
     text = " ".join(
@@ -129,6 +131,6 @@ if __name__ == "__main__":
         clip = audio[s: s + int(q["duration"] * SR)] if q.get("duration") else audio[s:]
         mx.random.seed(0)  # temperature fallback samples; seeded, the same request always gives the same text
         words = q.get("words", [])
-        heard, lang = recognize(clip, prompt(words), q.get("lang", LANGS[0]), words)
+        heard, lang = recognize(clip, prompt(words), q.get("lang", LANGS[0]), words, q.get("model"))
         print(json.dumps({"heard": heard, "text": corrected(heard, q.get("replace", {})), "lang": lang},
                          ensure_ascii=False), flush=True)
