@@ -165,6 +165,14 @@ fn newer(a: &str, b: &str) -> bool {
     matches!((mtime(a), mtime(b)), (Some(x), Some(y)) if x > y)
 }
 
+const LOW_DISK_GB: f64 = 2.0; // ~15 min of chunks is ~0.1 GB, so this leaves hours, but other apps fill disks fast
+
+/// Free space in GB from `df -k` output (second line, fourth column: available 1K blocks).
+fn free_gb(df: &str) -> Option<f64> {
+    let kb: f64 = df.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()?;
+    Some(kb / 1024.0 / 1024.0)
+}
+
 fn chunks_waiting() -> usize {
     fs::read_dir("chunks").map_or(0, |d| {
         d.flatten()
@@ -455,6 +463,17 @@ fn main() {
                 }
                 return;
             }
+            if let Some(gb) = cmd("df")
+                .args(["-k", "."])
+                .output()
+                .ok()
+                .and_then(|o| free_gb(&String::from_utf8_lossy(&o.stdout)))
+                && gb < LOW_DISK_GB
+            {
+                println!(
+                    "Disk almost full ({gb:.1} GB free): recording and transcription stop when it runs out"
+                );
+            }
             if Path::new("no-display").exists() {
                 println!(
                     "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
@@ -620,6 +639,15 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_free_space_from_df() {
+        let df = "Filesystem 1024-blocks Used Available Capacity iused ifree %iused Mounted on\n\
+                  /dev/disk3s1s1 482797652 20046436 5347328 79% 459k 54M 1% /\n";
+        let gb = super::free_gb(df).unwrap();
+        assert!((gb - 5.1).abs() < 0.01, "{gb}");
+        assert_eq!(super::free_gb(""), None);
+    }
+
     #[test]
     fn keeps_only_processes_in_this_checkout() {
         let tmp = std::env::temp_dir().canonicalize().unwrap();

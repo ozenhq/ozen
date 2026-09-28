@@ -298,10 +298,13 @@ while True:
             # mic/call: recent audio for comparing models (uv run eval.py). local: computer audio only,
             # kept apart so a missed echo can be replayed with the reference the transcriber had.
             keep = RECENT / "local" if tag == "local" else RECENT
-            keep.mkdir(parents=True, exist_ok=True)
-            f.replace(keep / f.name)
-            for old in sorted(keep.glob("*.wav"))[:-KEEP_AUDIO]:
-                old.unlink()
+            try:
+                keep.mkdir(parents=True, exist_ok=True)
+                f.replace(keep / f.name)
+                for old in sorted(keep.glob("*.wav"))[:-KEEP_AUDIO]:
+                    old.unlink()
+            except OSError as e:  # e.g. disk full: the copy is optional, the transcriber must keep going
+                print(f"not keeping {f.name} in recent/: {e}", file=sys.stderr, flush=True)
         f.unlink(missing_ok=True)
         if any(start_ms(g) > int(ms) for g in chunks.glob("*.wav")):
             break  # newer audio arrived: transcribe it before going further back
