@@ -137,15 +137,11 @@ git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
 cd ~/ozen && cargo run --release -- app   # builds the ozen CLI and ~/Applications/Ozen.app
 ```
 
-Or, without Rust: unpack a prebuilt release (built by [release.yml](.github/workflows/release.yml) for each `v*` tag
-on main) into `~/ozen`, then build the app from it. Download with `curl`, not a browser, so macOS doesn't quarantine
-the binaries:
-
-```sh
-curl -L "$OZEN_DOWNLOAD_URL" | tar xz -C ~   # the link you were given; unpacks ~/ozen
-git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
-~/ozen/target/release/ozen app
-```
+Or, without Rust: download the DMG (built by [release.yml](.github/workflows/release.yml) for each `v*` tag on
+main), open it and drag **Ozen** onto **Applications**. It isn't notarized, so the first open is blocked: go to System
+Settings > Privacy & Security and press **Open Anyway**. On launch it unpacks its prebuilt CLI and scripts into `~/ozen`
+(a git checkout there is left alone). It still needs `uv` and `ffmpeg`. The same release as a tarball, for scripts:
+`curl -L <tarball link> | tar xz -C ~` unpacks `~/ozen`.
 
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.

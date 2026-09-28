@@ -1,6 +1,6 @@
 name: release
 # A version tag (v1.2.3) on a commit in main: build the CLI and recorder, pack them with the sources ozen runs from
-# (the Python transcriber, the Swift menu bar), and upload the tarball to R2 under its version and as latest.
+# (the Python transcriber, the Swift menu bar), and upload a DMG and a tarball to R2 under their version and as latest.
 on:
   push:
     tags: ["v*"]
@@ -20,14 +20,21 @@ jobs:
       - run: cargo build --release
       - name: Package
         # ozen/ holds the tagged sources plus target/release/{ozen,rec}: unpacked in ~ it is the ~/ozen checkout.
+        # The DMG holds Ozen.app with that checkout inside (menubar.swift copies it to ~/ozen on launch), next to an
+        # Applications link to drag it onto. Signed ad hoc: not notarized, so the first open needs Open Anyway.
         run: |
-          name="ozen-$GITHUB_REF_NAME-macos-arm64.tar.gz"
-          git archive --prefix=ozen/ -o ozen.tar HEAD
-          mkdir -p pkg/ozen/target/release
+          v="$GITHUB_REF_NAME"
+          mkdir -p pkg/ozen/target/release dmg
+          git archive HEAD | tar -x -C pkg/ozen
           cp target/release/ozen target/release/rec pkg/ozen/target/release/
-          tar -rf ozen.tar -C pkg ozen/target
-          gzip -9 < ozen.tar > "$name"
-          echo "NAME=$name" >> "$GITHUB_ENV"
+          echo "$v" > pkg/ozen/.version
+          tar -czf "ozen-$v-macos-arm64.tar.gz" -C pkg ozen
+          target/release/ozen app
+          cp -R ~/Applications/Ozen.app dmg/
+          cp -R pkg/ozen dmg/Ozen.app/Contents/Resources/
+          codesign --force --deep -s - dmg/Ozen.app
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Ozen -srcfolder dmg -format UDZO "ozen-$v-macos-arm64.dmg"
       - name: Upload to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -39,7 +46,10 @@ jobs:
           BUCKET: ${{ vars.R2_BUCKET }}
           PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
         run: |
-          aws s3 cp "$NAME" "s3://$BUCKET/$NAME" --endpoint-url "$ENDPOINT"
-          aws s3 cp "$NAME" "s3://$BUCKET/ozen-latest-macos-arm64.tar.gz" --endpoint-url "$ENDPOINT" \
-            --cache-control "no-cache"
-          echo "Download: $PUBLIC_URL/$NAME (latest: $PUBLIC_URL/ozen-latest-macos-arm64.tar.gz)" >> "$GITHUB_STEP_SUMMARY"
+          for ext in dmg tar.gz; do
+            name="ozen-$GITHUB_REF_NAME-macos-arm64.$ext"
+            aws s3 cp "$name" "s3://$BUCKET/$name" --endpoint-url "$ENDPOINT"
+            aws s3 cp "$name" "s3://$BUCKET/ozen-latest-macos-arm64.$ext" --endpoint-url "$ENDPOINT" \
+              --cache-control "no-cache"
+            echo "Download: $PUBLIC_URL/$name (latest: $PUBLIC_URL/ozen-latest-macos-arm64.$ext)" >> "$GITHUB_STEP_SUMMARY"
+          done
