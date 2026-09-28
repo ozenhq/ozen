@@ -193,6 +193,14 @@ if __name__ == "__main__":
         return np.array(load_audio(str(f)))
 
     a = say("Samantha", "The launch is moved to next Tuesday because the payments team needs more time for testing.")
+    # Steady room noise on SPEECH_RMS (fans under load) is no speech; the same noise with a voice 6 dB over it is
+    room = np.random.default_rng(0).normal(0, SPEECH_RMS, 15 * SR).astype(np.float32)
+    floor = float(np.percentile(frame_rms(room), 10))
+    assert not list(utterances(room, floor)), "room noise passed as speech"
+    talk = room.copy()
+    talk[3 * SR: 3 * SR + len(a)] += a * (2 * SPEECH_RMS / rms(a))
+    got = list(utterances(talk, floor))
+    assert got and got[0][0] >= 2.9 and sum(len(c) for _, c in got) >= 0.8 * len(a), "voice over room noise lost"
     b = say("Daniel", "I think we should tell the customers today, before they hear about it from someone else.")
     c = say("Fred", "Can everyone see my screen now?")
     at = lambda x, s, n: np.pad(x, (int(s * SR), max(0, n - len(x) - int(s * SR))))[:n]  # noqa: E731
