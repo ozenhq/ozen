@@ -137,6 +137,16 @@ git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
 cd ~/ozen && cargo run --release -- app   # builds the ozen CLI and ~/Applications/Ozen.app
 ```
 
+Or, without Rust: unpack a prebuilt release (built by [release.yml](.github/workflows/release.yml) for each `v*` tag
+on main) into `~/ozen`, then build the app from it. Download with `curl`, not a browser, so macOS doesn't quarantine
+the binaries:
+
+```sh
+curl -L "$OZEN_DOWNLOAD_URL" | tar xz -C ~   # the link you were given; unpacks ~/ozen
+git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
+~/ozen/target/release/ozen app
+```
+
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
 On another Mac, run the same three commands; voices tagged on either one reach the other within a few minutes.

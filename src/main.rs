@@ -74,6 +74,19 @@ const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current whil
 static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
 
+/// The checkout holding the sources, chunks and logs: the one this binary sits in (`<root>/target/release/ozen`),
+/// so a prebuilt release unpacked anywhere works; else the one it was built from (`cargo test`, odd layouts).
+pub fn root() -> String {
+    std::env::current_exe()
+        .and_then(|e| e.canonicalize()) // through a symlink like ~/.local/bin/ozen
+        .ok()
+        .and_then(|e| Some(e.parent()?.parent()?.parent()?.to_path_buf()))
+        .filter(|r| r.join("Cargo.toml").exists())
+        .map_or(env!("CARGO_MANIFEST_DIR").into(), |r| {
+            r.display().to_string()
+        })
+}
+
 fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
@@ -467,7 +480,7 @@ fn retrain() {
 
 fn main() {
     // The repo is where the sources, chunks and logs live, wherever this is called from.
-    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("cd to the ozen checkout");
+    std::env::set_current_dir(root()).expect("cd to the ozen checkout");
     let app = format!("{}/Applications/Ozen.app", home());
     match std::env::args().nth(1).as_deref().unwrap_or("") {
         "start" | "resume" => {
@@ -624,7 +637,7 @@ fn main() {
                     .args(["-Z", "1280", "screen.png", "--out", "screen-small.png"])
                     .stdout(Stdio::null()))
             {
-                println!("screen: {}/screen-small.png", env!("CARGO_MANIFEST_DIR"));
+                println!("screen: {}/screen-small.png", root());
             }
             fixes::show(n.parse().unwrap_or(40)); // speakers corrected by your tags, text by your fixes
         }

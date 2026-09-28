@@ -256,7 +256,7 @@ pub fn gather(ids: &[String], kev: bool) -> Result<(String, Vec<String>), String
     }
     let dir = format!(
         "{}/context/{}",
-        env!("CARGO_MANIFEST_DIR"),
+        crate::root(),
         Local::now().format("%Y-%m-%d-%H%M%S")
     );
     write_folder(&dir, &picked, kev.then_some(&added[..]), "")?;
@@ -281,7 +281,7 @@ pub fn live(now: f64) -> Result<String, String> {
     let m = current(&all, now).ok_or(
         "No meeting in the last 10 minutes. Start recording, or pick a past meeting in the Meetings tab",
     )?;
-    let dir = format!("{}/context/live", env!("CARGO_MANIFEST_DIR"));
+    let dir = format!("{}/context/live", crate::root());
     let ozen = std::env::current_exe().map_err(|e| e.to_string())?;
     let ozen = ozen.display();
     let note = format!(
