@@ -12,19 +12,23 @@ redundant_closure_for_method_calls = "warn"  # CI runs clippy with -D warnings
 strip = true
 
 [dependencies]
+alias_record = "0.3.0"  # imported as dmg_layout
 base64 = "0.23.1"
 candle-core = { version = "0.11.0", features = ["accelerate", "metal"] }
 candle-metal-kernels = "0.11.0"
 candle-nn = { version = "0.11.0", features = ["metal", "accelerate"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+ds_parser = "0.4.0"
 flate2 = "1.1.10"
 hound = "3.5.1"
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
 objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSFont", "NSFontDescriptor", "NSGradient", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSParagraphStyle", "NSShadow", "NSStringDrawing", "NSText", "NSAttributedString", "objc2-core-foundation"] }
 objc2-core-location = { version = "0.3.2", features = ["CLLocation", "CLLocationManager"] }
-objc2-foundation = { version = "0.3.2", features = ["NSRunLoop", "NSDate"] }
+objc2-foundation = { version = "0.3.2", features = ["NSRunLoop", "NSDate", "NSAttributedString", "NSDictionary", "NSData", "NSGeometry", "NSString", "NSValue"] }
 objc2-metal = "0.3.2"
+plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
 screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }
