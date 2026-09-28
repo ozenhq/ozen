@@ -17,6 +17,7 @@ mic-fallback
 .transcriber-started
 *.png
 lines.jsonl
+junk.json
 tags.json
 labels.json
 stats.json
