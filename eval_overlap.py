@@ -9,8 +9,10 @@ asr.recognize (the live transcriber's Whisper) with utterances kept whole vs sep
 
 Each set downloads once to eval/data/ (250-450MB). Prints word recall and extra words vs the reference text per
 set: separation should raise recall on overlaps and leave solos alone. Whisper is seeded per clip, so a rerun
-prints the same table.
+prints the same table, and its text is cached per clip (eval/data/asr-cache.jsonl), so a rerun after tuning
+overlap.py only transcribes the pieces that changed (and MossFormer2's tracks are cached in eval/data/separated/).
 """
+import hashlib
 import io
 import json
 import pathlib
@@ -134,9 +136,39 @@ def windows(name: str, n: int) -> tuple[list, list]:
     return pairs, solos
 
 
+CACHE = DATA / "asr-cache.jsonl"  # Whisper's text per clip: a rerun after tuning overlap.py only transcribes new pieces
+CONTEXT = f"{VOCAB}|{hashlib.sha1((HERE / 'asr.py').read_bytes()).hexdigest()}"
+cache = {}
+if CACHE.exists():
+    for line in CACHE.read_text().splitlines():
+        cache.update([json.loads(line)])
+
+
+SEPARATED = DATA / "separated"  # MossFormer2's raw tracks per clip; overlap.py's checks and splitting still run live
+separate = overlap.separate
+
+
+def cached_separate(clip: np.ndarray) -> list[np.ndarray]:
+    f = SEPARATED / f"{hashlib.sha1(clip.astype(np.float32).tobytes()).hexdigest()}.npy"
+    if not f.exists():
+        SEPARATED.mkdir(parents=True, exist_ok=True)
+        np.save(f, np.stack(separate(clip)))
+    return list(np.load(f))
+
+
+overlap.separate = cached_separate
+
+
 def recognize(clip: np.ndarray, lang: str) -> str:
-    mx.random.seed(0)  # as asr.py's worker: the same clip always gives the same text
-    return asr.recognize(clip, asr.prompt(VOCAB), lang, VOCAB)[0] if len(clip) >= 0.3 * SR else ""
+    if len(clip) < 0.3 * SR:
+        return ""
+    key = hashlib.sha1(clip.astype(np.float32).tobytes() + f"{lang}|{CONTEXT}".encode()).hexdigest()
+    if key not in cache:
+        mx.random.seed(0)  # as asr.py's worker: the same clip always gives the same text
+        cache[key] = asr.recognize(clip, asr.prompt(VOCAB), lang, VOCAB)[0]
+        with CACHE.open("a") as f:
+            f.write(json.dumps([key, cache[key]], ensure_ascii=False) + "\n")
+    return cache[key]
 
 
 def words(s: str) -> Counter:
