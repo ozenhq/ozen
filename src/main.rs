@@ -353,11 +353,21 @@ fn prepare(built: &str, bin: &str) -> bool {
         return false;
     }
     if !newer(bin, built) {
-        if let Some(dir) = Path::new(bin).parent() {
-            let _ = fs::create_dir_all(dir);
+        // Copy and sign in a private dir, then rename into place: concurrent callers (the panel polls `place`)
+        // never run or sign a half-copied file. Same file name, since codesign names an unbundled binary by it.
+        let bin_path = Path::new(bin);
+        let staging = bin_path.with_file_name(format!(".staging-{}", std::process::id()));
+        let staged = staging.join(bin_path.file_name().unwrap_or_default());
+        let _ = fs::create_dir_all(&staging);
+        let copied = fs::copy(built, &staged);
+        if let Err(e) = &copied {
+            eprintln!("copy {built} to {}: {e}", staged.display());
+        } else {
+            sign(&staged.to_string_lossy(), false);
+            let _ = fs::rename(&staged, bin);
         }
-        if let Err(e) = fs::copy(built, bin) {
-            eprintln!("copy {built} to {bin}: {e}");
+        let _ = fs::remove_dir_all(&staging);
+        if copied.is_err() {
             return false;
         }
     }
@@ -578,6 +588,12 @@ fn main() {
             println!("{state}");
         }
         "health" => {
+            // Place switching doesn't depend on recording: say why it can't see where you are.
+            if places::tracked(&places::load(places::FILE))
+                && let Ok(why) = fs::read_to_string(format!("{}.error", places::HERE))
+            {
+                println!("Place switching is off: {}", why.trim());
+            }
             if !running(REC) {
                 if recorder_blocked(&String::from_utf8_lossy(
                     &fs::read("start.log").unwrap_or_default(),
@@ -670,6 +686,7 @@ fn main() {
             if !places::tracked(&ps) {
                 signal("-TERM", LOCATE);
                 let _ = fs::remove_file(places::HERE);
+                let _ = fs::remove_file(format!("{}.error", places::HERE));
                 return println!(r#"{{"here":null,"place":null}}"#);
             }
             // After sleep the Mac may have moved: a new watcher sends a fresh fix; here.json holds the old one till then.
@@ -678,7 +695,12 @@ fn main() {
                 sleep(Duration::from_millis(200));
             }
             let _ = File::create(format!("{}.asked", places::HERE)); // the watcher's heartbeat
-            if !running(LOCATE) && prepare(LOCATE_BUILT, LOCATE_BIN) {
+            // A watcher that stopped on a permission problem (FILE.error) is retried each minute, not each poll.
+            let error = format!("{}.error", places::HERE);
+            let backing_off = fs::metadata(&error)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|e| e.as_secs() < 60));
+            if !backing_off && !running(LOCATE) && prepare(LOCATE_BUILT, LOCATE_BIN) {
                 spawn_detached(
                     cmd(LOCATE_BIN).args(["watch", places::HERE]),
                     Stdio::null(),
