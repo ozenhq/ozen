@@ -1,15 +1,35 @@
 name: ci
-# Runs on pull requests only. A squash merge lands code that already passed on its PR head, so re-running
-# on every push to main billed a third of this private repo's macOS minutes (10x rate) for no new signal.
-# Check main by hand from the Actions tab when needed.
+# Pull requests, plus main once a day. A squash merge lands code that already passed on its PR head, so
+# re-running on every push to main billed a third of this private repo's macOS minutes (10x rate); the daily
+# run still catches two PRs that pass alone but break together, at one run per day however many merges land.
 on:
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changed:
+    # Linux, billed 1x: lets the daily run skip the macOS job when main has not moved since yesterday.
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.c.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+      - id: c
+        run: |
+          if [ "${{ github.event_name }}" != schedule ] || [ -n "$(git log -1 --since='25 hours ago' --format=%H)" ]; then
+            echo run=true >> "$GITHUB_OUTPUT"
+          else
+            echo run=false >> "$GITHUB_OUTPUT"
+          fi
   check:
+    needs: changed
+    if: needs.changed.outputs.run == 'true'
     # The recorder needs ScreenCaptureKit mic capture (macOS 15 SDK), and screencapturekit's Metal bridge
     # compiles against macOS 26 APIs, so build with the newest Xcode the image has.
     runs-on: macos-15
