@@ -7,6 +7,7 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod text;
 mod timebar;
 mod train;
 mod voices;
@@ -317,6 +318,7 @@ fn start_transcriber() {
         );
     }
     let _ = File::create(TR_STARTED);
+    text::mark_junk();
     spawn_detached(
         cmd("uv").args(["run", "transcribe.py", "chunks", "transcript.txt"]),
         log().into(),

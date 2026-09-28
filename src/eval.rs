@@ -390,7 +390,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .collect();
     let test_heard = whisper.hear(&jobs)?;
 
-    // Corrections only rewrite text: apply each setting's through asr.py (the live code), no Whisper needed.
+    // Corrections only rewrite text: apply each setting's with the transcriber's own code (src/text.rs), no Whisper needed.
     let grid: Vec<(usize, usize, Learn)> = vocabs
         .iter()
         .enumerate()
@@ -407,19 +407,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
             })
         })
         .collect();
-    let mut rows = vec![];
+    let mut texts: Vec<String> = vec![];
     for &(vi, _, cfg) in &grid {
-        let replace = rules(&pairs, cfg)["replace"].clone();
-        rows.extend(
+        let rules = rules(&pairs, cfg);
+        let replace = rules["replace"].as_object().cloned().unwrap_or_default();
+        texts.extend(
             test_heard[vi * test.len()..(vi + 1) * test.len()]
                 .iter()
-                .map(|h| json!({"heard": h, "replace": replace})),
+                .map(|h| crate::text::corrected(h, &replace)),
         );
     }
-    let texts: Vec<String> = worker(&rows)?
-        .iter()
-        .map(|r| r["text"].as_str().unwrap_or_default().to_string())
-        .collect();
 
     let n = |k: Kind| test.iter().filter(|c| c.kind == k).count();
     println!(
