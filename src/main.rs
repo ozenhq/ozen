@@ -45,7 +45,7 @@ const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so 
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current while the meeting goes on
-const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
+const BLOCKED: &str = "declined TCCs"; // the old ScreenCaptureKit recorder's error when the permission was missing
 
 fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
@@ -447,11 +447,6 @@ fn main() {
                     );
                 }
                 return;
-            }
-            if Path::new("no-display").exists() {
-                println!(
-                    "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
-                );
             }
             if let Ok(names) = fs::read_to_string("mic-fallback")
                 && let Some((using, silent)) = names.split_once('\n')
