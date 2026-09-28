@@ -48,3 +48,7 @@ eval/data/
 
 # per-chunk processing log for the Timebar
 pace.jsonl
+
+# kept current by the locate watcher while some place has coordinates (ozen place)
+here.json
+here.json.*
