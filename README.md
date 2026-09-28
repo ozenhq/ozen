@@ -48,7 +48,12 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
   Those lines, and earlier ones that sound like them, turn grey and leave the timeline, and the transcriber stops
   writing that voice from then on. Ignored prints stay on this Mac (`ignore.json`), never in the registry. To undo,
-  tag the line as a person or **Clear tag**.
+  tag the line as a person or **Clear tag**, or use **Stop ignoring** in **Voices…**.
+- **Manages voices in one place.** **Voices…** in the panel (or the right-click menu) lists everyone ozen has heard:
+  people with their line counts and last few lines, this run's unnamed speakers (S1, S2…), and the ignored voices.
+  Rename a person (an existing name merges the two), name or ignore an unnamed speaker in one go, ignore or forget a
+  person, or stop ignoring. Forget and merge ask first; forgetting clears the tags on this Mac only. Click a line to
+  see it in the transcript.
 - **Improves itself: the loop.** Every retrain also
   1. calibrates the same-voice threshold from your tags (the cutoff that best separates same-person from
      different-person similarities), which the live transcriber picks up immediately;
@@ -151,6 +156,9 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
 | `target/release/ozen tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
+| `target/release/ozen voices` | JSON list of people, this run's unnamed speakers and ignored voices (what **Voices…** shows) |
+| `target/release/ozen name "Dana Levi" <line-id>...` | Tag those lines as a person, e.g. an unnamed speaker's lines. Retrains |
+| `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget Ignored` stops ignoring. Retrains |
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |

@@ -6,6 +6,7 @@ mod low_disk_alert;
 mod mcp;
 mod meetings;
 mod train;
+mod voices;
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::process::CommandExt;
@@ -15,7 +16,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | show | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | voices | name | rename | forget | retrain | show | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -26,6 +27,12 @@ ozen control: start | pause | resume | stop | status | health | look | fix | eva
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
   tag ID [NAME] set who said a transcript line (empty clears), then retrain
   ignore ID...  tag transcript lines as a voice to ignore (a video playing nearby), then retrain
+  voices        JSON: people, this run's unnamed speakers and ignored voices, with line counts and recent lines
+  name NAME ID...
+                tag those lines as NAME (an unnamed speaker's lines, from `voices`), then retrain
+  rename FROM TO
+                move every line tagged FROM to TO (an existing TO merges them), then retrain
+  forget NAME   clear every tag NAME on this Mac, then retrain; `forget Ignored` stops ignoring every voice
   retrain       rebuild voiceprints, labels and the ignored voices from all tags
   show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
@@ -633,6 +640,42 @@ fn main() {
             retrain();
         }
         "retrain" => retrain(),
+        "voices" => println!("{}", serde_json::Value::from(voices::list())),
+        "name" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            match args.split_first() {
+                Some((name, ids)) if !name.trim().is_empty() && !ids.is_empty() => {
+                    ignore::tag(ids, name)
+                }
+                _ => {
+                    println!("{USAGE}");
+                    exit(2);
+                }
+            }
+            retrain();
+        }
+        "rename" | "forget" => {
+            let from = std::env::args().nth(2).unwrap_or_default();
+            let to = if std::env::args().nth(1).as_deref() == Some("forget") {
+                String::new()
+            } else {
+                std::env::args().nth(3).unwrap_or_default()
+            };
+            if from.is_empty()
+                || (to.trim().is_empty() && std::env::args().nth(1).as_deref() == Some("rename"))
+            {
+                println!("{USAGE}");
+                exit(2);
+            }
+            match voices::retag(&from, &to) {
+                Ok(n) => println!("retagged {n} lines"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    exit(1);
+                }
+            }
+            retrain();
+        }
         "show" => fixes::show(
             std::env::args()
                 .nth(2)

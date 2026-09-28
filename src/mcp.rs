@@ -2,7 +2,7 @@
 //!
 //! Edits ozen already knows how to make (fix, tag, retrain, start/stop) run this binary as a subprocess:
 //! their side effects stay in one place and their prints never land in the protocol stream on stdout.
-use crate::fixes::{read, write};
+use crate::fixes::read;
 use crate::meetings;
 use rmcp::{
     ServerHandler, ServiceExt,
@@ -235,16 +235,7 @@ fn delete(ids: &[String]) -> Reply {
 
 /// Replace every tag `from` with `to` (empty clears them), then retrain.
 fn retag(from: &str, to: &str) -> Reply {
-    let mut tags = read(TAGS);
-    let mut n = 0;
-    for v in tags.values_mut().filter(|v| v.as_str() == Some(from)) {
-        *v = json!(to.trim());
-        n += 1;
-    }
-    if n == 0 {
-        return Err(format!("no lines are tagged {from:?}"));
-    }
-    write(TAGS, &Value::Object(tags));
+    let n = crate::voices::retag(from, to)?;
     retrain()?;
     Ok(format!("retagged {n} lines"))
 }

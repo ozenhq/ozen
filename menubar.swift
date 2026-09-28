@@ -97,6 +97,9 @@ func meetingUsingMic() -> String? {
 
 struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int?, doubt: Double? }
 
+/// Scroll content that starts at the top.
+final class FlippedView: NSView { override var isFlipped: Bool { true } }
+
 // MARK: timeline
 
 struct Segment { let id: String, t: Double, d: Double, speaker: String, text: String, unsure: Bool }
@@ -259,6 +262,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let zoomOut = NSButton(title: "−", target: nil, action: nil)
     let zoomIn = NSButton(title: "+", target: nil, action: nil)
     let placesButton = NSButton(title: "Places…", target: nil, action: nil)
+    let voicesButton = NSButton(title: "Voices…", target: nil, action: nil)
     let location = CLLocationManager()
     var here: CLLocation?
     var placeLabel: String?  // label of the place we're in; a change re-applies auto control
@@ -266,6 +270,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var pickingPlace: Int?  // row waiting for a map click after "Pick on map"
     var rebuilding = false  // removing a focused field fires its action; ignore those echoes
     var placesWindow: NSWindow?
+    var voicesWindow: NSWindow?
+    let voicesStack = NSStackView()
+    var voices: [[String: Any]] = []  // `ozen voices`: people, this run's unnamed speakers, ignored
     let placesStack = NSStackView()
     let placesMap = WKWebView()
     let placesNote = NSTextField(wrappingLabelWithString: "")
@@ -290,7 +297,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         text.linkTextAttributes = [.cursor: NSCursor.pointingHand]  // links keep their own colors: names, unsure, text
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (quitButton, #selector(quitOzen))] {
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (voicesButton, #selector(showVoices)), (quitButton, #selector(quitOzen))] {
             b.target = self
             b.action = cmd
             b.bezelStyle = .rounded
@@ -311,7 +318,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         askButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI")  // the usual mark for AI features
         askButton.imagePosition = .imageLeading
         askButton.toolTip = "Start Claude Code or Hermes on the meeting happening now (ozen live)"
-        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton, quitButton])
+        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, voicesButton, reviewButton, startButton, pauseButton, stopButton, quitButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         viewControl.target = self
         viewControl.action = #selector(switchView)
@@ -400,6 +407,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let places = NSMenuItem(title: "Places…", action: #selector(showPlaces), keyEquivalent: "")
             places.target = self
             menu.addItem(places)
+            let voicesItem = NSMenuItem(title: "Voices…", action: #selector(showVoices), keyEquivalent: "")
+            voicesItem.target = self
+            menu.addItem(voicesItem)
             menu.addItem(.separator())
             let quit = NSMenuItem(title: "Quit ozen", action: #selector(quitOzen), keyEquivalent: "q")
             quit.target = self
@@ -589,6 +599,153 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             here = nil
             placesNote.stringValue = "Location access is off. Turn on Ozen in System Settings → Privacy & Security → Location Services."
         }
+    }
+
+    // MARK: voices
+
+    /// Everyone ozen has heard, to rename, merge, name, ignore or forget in bulk. A window, not the popover:
+    /// the popover closes on every alert, and this is cleanup work between meetings.
+    @objc func showVoices() {
+        if voicesWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520), styleMask: [.titled, .closable, .resizable],
+                             backing: .buffered, defer: false)
+            w.title = "Ozen Voices"
+            w.isReleasedWhenClosed = false
+            voicesStack.orientation = .vertical
+            voicesStack.alignment = .leading
+            voicesStack.spacing = 10
+            voicesStack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+            let flipped = FlippedView()
+            flipped.addSubview(voicesStack)
+            voicesStack.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                voicesStack.topAnchor.constraint(equalTo: flipped.topAnchor),
+                voicesStack.leadingAnchor.constraint(equalTo: flipped.leadingAnchor),
+                voicesStack.trailingAnchor.constraint(equalTo: flipped.trailingAnchor),
+                voicesStack.bottomAnchor.constraint(equalTo: flipped.bottomAnchor),
+            ])
+            let scroll = NSScrollView()
+            scroll.hasVerticalScroller = true
+            scroll.documentView = flipped
+            flipped.translatesAutoresizingMaskIntoConstraints = false
+            flipped.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+            w.contentView = scroll
+            voicesWindow = w
+            w.center()
+        }
+        loadVoices()
+        NSApp.activate()
+        voicesWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func loadVoices(note: String? = nil) {
+        run(["voices"]) { out, err, code in
+            self.voices = (try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [[String: Any]]) ?? []
+            self.buildVoices(note: code == 0 ? note : "Couldn't list voices: \(err)")
+        }
+    }
+
+    func buildVoices(note: String? = nil) {
+        voicesStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let intro = NSTextField(wrappingLabelWithString: note ?? "Rename or merge people, name this run's unnamed speakers, "
+            + "and ignore voices that aren't in the meeting. Changes retrain the voiceprints.")
+        intro.font = .systemFont(ofSize: 12)
+        intro.textColor = .secondaryLabelColor
+        voicesStack.addArrangedSubview(intro)
+        if voices.isEmpty { voicesStack.addArrangedSubview(NSTextField(labelWithString: "No voices yet.")) }
+        let hints = ["person": "", "unnamed": " · unnamed, this run", "ignored": " · not transcribed"]
+        for v in voices {
+            let name = v["name"] as? String ?? "?", kind = v["kind"] as? String ?? ""
+            let title = NSTextField(labelWithString: "\(name == ignoreTag ? "Ignored voices" : name) · \(v["lines"] ?? 0) lines\(hints[kind] ?? "")")
+            title.font = .boldSystemFont(ofSize: 13)
+            let actions: [(String, Selector)] = kind == "person" ? [("Rename…", #selector(renameVoice(_:))), ("Ignore…", #selector(ignoreVoice(_:))), ("Forget…", #selector(forgetVoice(_:)))]
+                : kind == "unnamed" ? [("Name…", #selector(renameVoice(_:))), ("Ignore", #selector(ignoreVoice(_:)))]
+                : [("Stop ignoring…", #selector(forgetVoice(_:)))]
+            let buttons = actions.map { t, sel -> NSButton in
+                let b = NSButton(title: t, target: self, action: sel)
+                b.bezelStyle = .rounded
+                b.controlSize = .small
+                b.identifier = NSUserInterfaceItemIdentifier(name)
+                return b
+            }
+            voicesStack.addArrangedSubview(NSStackView(views: [title, NSView()] + buttons))
+            for line in v["recent"] as? [[String: Any]] ?? [] {
+                // Click a line to see it in the transcript.
+                let b = NSButton(title: "  “\(line["text"] as? String ?? "")”", target: self, action: #selector(showVoiceLine(_:)))
+                b.isBordered = false
+                b.font = .systemFont(ofSize: 11)
+                b.contentTintColor = .secondaryLabelColor
+                b.lineBreakMode = .byTruncatingTail
+                b.identifier = NSUserInterfaceItemIdentifier(line["id"] as? String ?? "")
+                voicesStack.addArrangedSubview(b)
+            }
+        }
+        voicesWindow?.contentView?.needsLayout = true
+    }
+
+    func voice(_ sender: NSButton) -> [String: Any]? { voices.first { $0["name"] as? String == sender.identifier?.rawValue } }
+
+    func confirm(_ message: String, _ info: String, _ action: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = info
+        alert.addButton(withTitle: action)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Runs a voices command, then refreshes this window and the transcript.
+    func changeVoices(_ args: [String]) {
+        buildVoices(note: "Retraining…")
+        voicesStack.arrangedSubviews.forEach { ($0 as? NSStackView)?.views.forEach { ($0 as? NSButton)?.isEnabled = false } }
+        run(args) { _, err, code in
+            self.signature = ""
+            self.reload()
+            self.loadVoices(note: code == 0 ? nil : "That didn't work: \(err.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+    }
+
+    @objc func renameVoice(_ sender: NSButton) {
+        guard let v = voice(sender), let name = v["name"] as? String else { return }
+        let unnamed = v["kind"] as? String == "unnamed"
+        let alert = NSAlert()
+        alert.messageText = unnamed ? "Who is \(name)?" : "Rename \(name)"
+        alert.informativeText = "Use an existing name to merge the two voices."
+        alert.addButton(withTitle: unnamed ? "Name" : "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSComboBox(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
+        let people = voices.filter { $0["kind"] as? String == "person" }.compactMap { $0["name"] as? String }.filter { $0 != name }
+        field.addItems(withObjectValues: people)
+        field.placeholderString = "Full name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let to = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !to.isEmpty, to != name, to != ignoreTag else { return }
+        if people.contains(to), !confirm("Merge \(name) into \(to)?", "All of \(name)'s lines become \(to)'s, and one voiceprint is built from both.", "Merge") { return }
+        changeVoices(unnamed ? ["name", to] + (v["ids"] as? [String] ?? []) : ["rename", name, to])
+    }
+
+    @objc func ignoreVoice(_ sender: NSButton) {
+        guard let v = voice(sender), let name = v["name"] as? String else { return }
+        if v["kind"] as? String == "unnamed" { return changeVoices(["ignore"] + (v["ids"] as? [String] ?? [])) }
+        guard confirm("Ignore \(name)?", "Their lines stop being a person and their voice stops being transcribed.", "Ignore") else { return }
+        changeVoices(["rename", name, ignoreTag])
+    }
+
+    @objc func forgetVoice(_ sender: NSButton) {
+        guard let v = voice(sender), let name = v["name"] as? String else { return }
+        let ignored = name == ignoreTag
+        guard confirm(ignored ? "Stop ignoring every ignored voice?" : "Forget \(name) on this Mac?",
+                      ignored ? "Their speech is transcribed again from now on." : "Clears every tag of \(name) here. Other Macs keep theirs.",
+                      ignored ? "Stop ignoring" : "Forget") else { return }
+        changeVoices(["forget", name])
+    }
+
+    @objc func showVoiceLine(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        if !popover.isShown { clicked() }
+        jump(to: id)
     }
 
     @objc func showPlaces() {
