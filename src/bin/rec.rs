@@ -9,9 +9,7 @@
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2_core_audio::*;
-use objc2_core_audio_types::{
-    AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp,
-};
+use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::{CFDictionary, CFRetained, CFString};
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSObject, NSString};
 use std::collections::HashMap;
@@ -22,7 +20,7 @@ use std::mem::MaybeUninit;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::ptr::{NonNull, null};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
@@ -49,17 +47,35 @@ const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
 const GLOBAL: u32 = kAudioObjectPropertyScopeGlobal;
 
 type Wav = hound::WavWriter<BufWriter<File>>;
-type Samples = (&'static str, u32, Vec<f32>); // tag, sample rate, mono samples
+type Samples = (&'static str, u64, Vec<f32>); // tag, stream id, mono samples
+// Rates a device can run at; the measured rate snaps to the nearest one.
+const RATES: [u32; 10] = [
+    8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000,
+];
+const MEASURE: Duration = Duration::from_secs(1);
+static STREAM_IDS: AtomicU64 = AtomicU64::new(0);
 
 struct Chunk {
     wav: Wav,
     path: PathBuf,
-    rate: u32,
-    start: Instant,
+    samples: u64,
+}
+
+/// One stream's audio for a tag. Core Audio's reported rates can't be trusted: with a Bluetooth headset in its
+/// call profile, a tap's aggregate device reported 44.1 kHz and the tap's format 48 kHz while 16 kHz arrived, and
+/// a wrong rate plays the audio back sped up. So the first second is held back and the rate measured from it.
+struct Track {
+    id: u64,
+    first: SystemTime, // when the stream's first buffer arrived: the chunk names count from it
+    arrived: Instant,
+    pending: Vec<f32>,
+    rate: Option<u32>,
+    written: u64, // samples written so far, which place each chunk's start time
 }
 
 struct State {
     files: HashMap<&'static str, Chunk>,
+    tracks: HashMap<&'static str, Track>,
     last: HashMap<&'static str, Instant>, // devices deliver buffers continuously (silence too), so a gap means it died
     last_mic_sound: Instant, // a real mic always has a noise floor; all-zero samples mean a dead input (e.g. AirPods)
 }
@@ -70,6 +86,18 @@ struct Recorder {
     state: Mutex<State>,
 }
 
+fn snap(rate: f64) -> u32 {
+    *RATES
+        .iter()
+        .min_by(|a, b| {
+            (rate / **a as f64)
+                .ln()
+                .abs()
+                .total_cmp(&(rate / **b as f64).ln().abs())
+        })
+        .unwrap()
+}
+
 impl Recorder {
     fn new(out: &Path) -> Arc<Self> {
         Arc::new(Recorder {
@@ -77,53 +105,90 @@ impl Recorder {
             tmp: out.join(".partial"),
             state: Mutex::new(State {
                 files: HashMap::new(),
+                tracks: HashMap::new(),
                 last: HashMap::new(),
                 last_mic_sound: Instant::now(),
             }),
         })
     }
 
-    fn write(&self, (tag, rate, samples): Samples) {
+    fn write(&self, (tag, id, samples): Samples) {
         let mut st = self.state.lock().unwrap();
         st.last.insert(tag, Instant::now());
         if tag == "mic" && samples.iter().any(|&x| x != 0.0) {
             st.last_mic_sound = Instant::now();
         }
-        if st
-            .files
-            .get(tag)
-            .is_some_and(|c| c.start.elapsed() >= CHUNK || c.rate != rate)
-        {
+        if st.tracks.get(tag).is_none_or(|t| t.id != id) {
             self.finish(&mut st, tag);
-        }
-        if !st.files.contains_key(tag) {
-            let ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let path = self.tmp.join(format!("{ms}-{tag}.wav"));
-            let spec = hound::WavSpec {
-                channels: 1,
-                sample_rate: rate,
-                bits_per_sample: 32,
-                sample_format: hound::SampleFormat::Float,
-            };
-            let Ok(wav) = hound::WavWriter::create(&path, spec) else {
-                return;
-            };
-            st.files.insert(
+            st.tracks.insert(
                 tag,
-                Chunk {
-                    wav,
-                    path,
-                    rate,
-                    start: Instant::now(),
+                Track {
+                    id,
+                    first: SystemTime::now(),
+                    arrived: Instant::now(),
+                    pending: vec![],
+                    rate: None,
+                    written: 0,
                 },
             );
         }
-        let wav = &mut st.files.get_mut(tag).unwrap().wav;
+        let track = st.tracks.get_mut(tag).unwrap();
+        if track.rate.is_none() {
+            track.pending.extend(samples);
+            let elapsed = track.arrived.elapsed();
+            if elapsed < MEASURE {
+                return;
+            }
+            let rate = snap(track.pending.len() as f64 / elapsed.as_secs_f64());
+            println!("{tag}: {rate} Hz (measured)");
+            track.rate = Some(rate);
+            let held = std::mem::take(&mut track.pending);
+            self.append(&mut st, tag, held);
+        } else {
+            self.append(&mut st, tag, samples);
+        }
+    }
+
+    /// Write into the tag's current chunk, starting a new one every CHUNK of audio. A chunk is named by the time
+    /// its first sample was heard.
+    fn append(&self, st: &mut State, tag: &'static str, samples: Vec<f32>) {
+        let track = &st.tracks[tag];
+        let (rate, first) = (track.rate.unwrap(), track.first);
+        let per_chunk = CHUNK.as_secs() * rate as u64;
         for s in samples {
-            let _ = wav.write_sample(s);
+            if st.files.get(tag).is_some_and(|c| c.samples >= per_chunk) {
+                self.finish(st, tag);
+            }
+            if !st.files.contains_key(tag) {
+                let at =
+                    first + Duration::from_secs_f64(st.tracks[tag].written as f64 / rate as f64);
+                let ms = at
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                let path = self.tmp.join(format!("{ms}-{tag}.wav"));
+                let spec = hound::WavSpec {
+                    channels: 1,
+                    sample_rate: rate,
+                    bits_per_sample: 32,
+                    sample_format: hound::SampleFormat::Float,
+                };
+                let Ok(wav) = hound::WavWriter::create(&path, spec) else {
+                    return;
+                };
+                st.files.insert(
+                    tag,
+                    Chunk {
+                        wav,
+                        path,
+                        samples: 0,
+                    },
+                );
+            }
+            let chunk = st.files.get_mut(tag).unwrap();
+            let _ = chunk.wav.write_sample(s);
+            chunk.samples += 1;
+            st.tracks.get_mut(tag).unwrap().written += 1;
         }
     }
 
@@ -290,7 +355,7 @@ fn meeting_processes() -> Vec<AudioObjectID> {
 
 struct Source {
     tag: &'static str,
-    rate: u32,
+    id: u64,
     last_only: bool, // an aggregate device lists its sub-device's inputs first; the (mono) tap is the last buffer
     tx: Sender<Samples>,
 }
@@ -337,7 +402,7 @@ unsafe extern "C-unwind" fn io_proc(
                     / channels as f32
             })
             .collect();
-        let _ = src.tx.send((src.tag, src.rate, mono));
+        let _ = src.tx.send((src.tag, src.id, mono));
     }
     0
 }
@@ -382,13 +447,11 @@ fn run(
     tag: &'static str,
     last_only: bool,
     tap: Option<(AudioObjectID, AudioObjectID)>,
-    rate: u32,
     tx: &Sender<Samples>,
 ) -> Result<Stream, String> {
-    println!("{tag}: {rate} Hz");
     let source = Box::new(Source {
         tag,
-        rate,
+        id: STREAM_IDS.fetch_add(1, Ordering::Relaxed),
         last_only,
         tx: tx.clone(),
     });
@@ -494,12 +557,7 @@ fn tap(
         unsafe { AudioHardwareDestroyProcessTap(tap_id) };
         return Err(e);
     }
-    // The aggregate device's nominal rate can differ from what it delivers (44.1 kHz reported while a 16 kHz
-    // headset clocked it), and a wrong rate plays the audio back sped up. The tap's own format is the rate its
-    // buffers arrive at.
-    let format = get::<AudioStreamBasicDescription>(tap_id, kAudioTapPropertyFormat, GLOBAL);
-    let rate = format.map_or(48000.0, |f| f.mSampleRate) as u32;
-    run(aggregate, tag, true, Some((tap_id, aggregate)), rate, tx)
+    run(aggregate, tag, true, Some((tap_id, aggregate)), tx)
 }
 
 fn flag(name: &str, contents: Option<&str>) {
@@ -561,9 +619,7 @@ impl Capture {
             None => default_device(kAudioHardwarePropertyDefaultInputDevice),
         };
         if let Some(d) = input {
-            let rate =
-                get::<f64>(d.id, kAudioDevicePropertyNominalSampleRate, GLOBAL).unwrap_or(48000.0);
-            self.mic = Some(run(d.id, "mic", false, None, rate as u32, &self.tx)?);
+            self.mic = Some(run(d.id, "mic", false, None, &self.tx)?);
         }
         self.start_taps(why)
     }
@@ -710,5 +766,57 @@ fn main() {
                 ),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measured_rates_snap_to_device_rates() {
+        assert_eq!(snap(15758.0), 16000); // a mic's first second, measured live
+        assert_eq!(snap(16003.0), 16000); // a tap that claimed 48 kHz
+        assert_eq!(snap(44000.0), 44100);
+        assert_eq!(snap(47100.0), 48000);
+    }
+
+    #[test]
+    fn chunks_hold_15s_and_are_named_by_their_first_sample() {
+        let dir = std::env::temp_dir().join(format!("ozen-rec-test-{}", std::process::id()));
+        fs::create_dir_all(dir.join(".partial")).unwrap();
+        let rec = Recorder::new(&dir);
+        let first = UNIX_EPOCH + Duration::from_millis(1_000_000);
+        let mut st = rec.state.lock().unwrap();
+        st.tracks.insert(
+            "call",
+            Track {
+                id: 0,
+                first,
+                arrived: Instant::now(),
+                pending: vec![],
+                rate: Some(16000),
+                written: 0,
+            },
+        );
+        rec.append(&mut st, "call", vec![0.0; 16000 * 20]);
+        rec.finish(&mut st, "call");
+        drop(st);
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, [".partial", "1000000-call.wav", "1015000-call.wav"]);
+        let secs = |n: &str| {
+            let r = hound::WavReader::open(dir.join(n)).unwrap();
+            r.duration() as f64 / r.spec().sample_rate as f64
+        };
+        assert_eq!(
+            (secs("1000000-call.wav"), secs("1015000-call.wav")),
+            (15.0, 5.0)
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
