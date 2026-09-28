@@ -1,7 +1,8 @@
 //! `ozen compare [N]`: transcribe the last N chunks with speech kept in recent/ (OZEN_KEEP_AUDIO) with stock
 //! Whisper, the Hebrew model, and the Hebrew model with the vocab.txt hint, so a model or prompt change is
 //! judged on your own speech, not on synthetic audio. Whisper runs through asr.py with the live transcriber's
-//! filters, so each setup shows what would land in the transcript: a blank means it only hallucinated.
+//! filters, so each setup shows what would land in the transcript, or "(dropped: …)" with Whisper's raw text
+//! when the filters threw all of it away (usually a hallucination).
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,10 +46,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
     for (p, r) in speech.iter().zip(replies.chunks(SETUPS.len())) {
         println!("== {}", p.file_name().unwrap_or_default().to_string_lossy());
         for ((label, ..), reply) in SETUPS.iter().zip(r) {
-            println!("  {label:13}{}", reply["heard"].as_str().unwrap_or(""));
+            println!("  {label:13}{}", line(reply));
         }
     }
     Ok(())
+}
+
+/// What the transcript would get, or what the filters dropped when that's nothing.
+fn line(reply: &Value) -> String {
+    let (heard, raw) = (
+        reply["heard"].as_str().unwrap_or(""),
+        reply["raw"].as_str().unwrap_or(""),
+    );
+    if heard.is_empty() && !raw.is_empty() {
+        format!("(dropped: {raw})")
+    } else {
+        heard.to_string()
+    }
 }
 
 /// Root mean square of a chunk's samples, float or 16-bit, as the recorder writes them.
@@ -101,6 +115,16 @@ mod tests {
         assert!((super::rms(&float).unwrap() - 0.5).abs() < 1e-9);
         assert!((super::rms(&int).unwrap() - 0.5).abs() < 1e-9);
         assert_eq!(super::rms(&dir.join("missing.wav")), None);
+        use serde_json::json;
+        assert_eq!(
+            super::line(&json!({"heard": "שלום", "raw": "שלום."})),
+            "שלום"
+        );
+        assert_eq!(
+            super::line(&json!({"heard": "", "raw": "תודה רבה."})),
+            "(dropped: תודה רבה.)"
+        );
+        assert_eq!(super::line(&json!({"heard": ""})), "");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

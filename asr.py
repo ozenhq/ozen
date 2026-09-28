@@ -6,7 +6,8 @@ share, so a configuration measured by the eval is the one that runs in meetings.
 Request: {"audio": path, "start": s, "duration": s, "words": [hint words], "replace": {wrong: right}, "lang": "he",
           "model": "stock" | "hebrew" (optional: that model in `lang`, no language detection; `ozen compare`)}
          or {"heard": text, "replace": {...}} to only apply corrections (no audio, no model)
-Reply:   {"heard": Whisper's text, "text": after replace, "lang": language used}
+Reply:   {"heard": Whisper's text, "text": after replace, "lang": language used,
+          "raw": Whisper's text before any filter (only with "model")}
 The worker seeds MLX before every clip, so its output depends only on the request.
 """
 import collections
@@ -86,6 +87,9 @@ def loop(text: str) -> bool:
     return bool(top) and top[0][1] >= 3 and top[0][1] / len(phrases) >= 0.6
 
 
+last_raw = ""
+
+
 def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = (), model: str | None = None) -> tuple[str, str]:
     """(text, language). `lang` is used for clips under ~1.5s, where detection is unreliable ("שלום" came out
     as "Shalom"); longer clips pick between the languages actually spoken, since open detection on short
@@ -98,6 +102,8 @@ def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = (), mo
     repo = {"stock": MODEL, "hebrew": MODELS["he"]}.get(model, MODELS[lang])
     r = mlx_whisper.transcribe(clip, path_or_hf_repo=repo, language=lang, initial_prompt=prompt,
                                condition_on_previous_text=False)
+    global last_raw
+    last_raw = r["text"].strip()  # before any filter, for `ozen compare` to show what was dropped
     # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
     text = " ".join(
         s["text"].strip()
@@ -132,5 +138,7 @@ if __name__ == "__main__":
         mx.random.seed(0)  # temperature fallback samples; seeded, the same request always gives the same text
         words = q.get("words", [])
         heard, lang = recognize(clip, prompt(words), q.get("lang", LANGS[0]), words, q.get("model"))
-        print(json.dumps({"heard": heard, "text": corrected(heard, q.get("replace", {})), "lang": lang},
-                         ensure_ascii=False), flush=True)
+        reply = {"heard": heard, "text": corrected(heard, q.get("replace", {})), "lang": lang}
+        if q.get("model"):
+            reply["raw"] = last_raw
+        print(json.dumps(reply, ensure_ascii=False), flush=True)
