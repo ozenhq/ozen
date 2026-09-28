@@ -1,13 +1,16 @@
-//! Free disk space, for `ozen health`: warn while there's still room, before recording and
+//! Low-disk alert for `ozen health`: warn while there's still room, before recording and
 //! transcription start failing on a full disk.
 use std::process::Command;
 
 const LOW_GB: f64 = 2.0; // ~15 min of chunks is ~0.1 GB, so this leaves hours, but other apps fill disks fast
 
-/// Free GB on the disk holding the working directory, when it is below `LOW_GB`.
-pub fn low() -> Option<f64> {
+/// The alert, when the disk holding the working directory has less than `LOW_GB` free.
+pub fn check() -> Option<String> {
     let out = Command::new("df").args(["-k", "."]).output().ok()?;
-    free_gb(&String::from_utf8_lossy(&out.stdout)).filter(|gb| *gb < LOW_GB)
+    let gb = free_gb(&String::from_utf8_lossy(&out.stdout)).filter(|gb| *gb < LOW_GB)?;
+    Some(format!(
+        "Disk almost full ({gb:.1} GB free): recording and transcription stop when it runs out"
+    ))
 }
 
 /// Free space in GB from `df -k` output (second line, fourth column: available 1K blocks).

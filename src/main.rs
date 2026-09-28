@@ -1,8 +1,8 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
-mod disk;
 mod eval;
 mod fixes;
 mod ignore;
+mod low_disk_alert;
 mod mcp;
 mod meetings;
 mod train;
@@ -456,10 +456,8 @@ fn main() {
                 }
                 return;
             }
-            if let Some(gb) = disk::low() {
-                println!(
-                    "Disk almost full ({gb:.1} GB free): recording and transcription stop when it runs out"
-                );
+            if let Some(alert) = low_disk_alert::check() {
+                println!("{alert}");
             }
             if Path::new("no-display").exists() {
                 println!(
