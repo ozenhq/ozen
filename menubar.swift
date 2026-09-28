@@ -19,6 +19,33 @@ import WebKit  // hosts map.html (Leaflet + OpenStreetMap), the same map any OS 
 let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
 // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout.
 let dir = URL(fileURLWithPath: args.first ?? NSString(string: "~/ozen").expandingTildeInPath)
+
+// Ozen.app from the DMG carries a prebuilt checkout in Resources/ozen (.github/workflows/release.yml): copy it into
+// ~/ozen on first launch and after an update. Only the files it ships are overwritten; recordings and tags stay.
+// A git checkout there is a developer's, built with `ozen app`: leave it alone.
+func installBundled(from src: URL, to dest: URL) {
+    let fm = FileManager.default
+    let version = { (d: URL) in try? String(contentsOf: d.appendingPathComponent(".version"), encoding: .utf8) }
+    guard let v = version(src), !fm.fileExists(atPath: dest.appendingPathComponent(".git").path),
+          version(dest) != v else { return }
+    try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
+    // A downloaded app's files are quarantined, which would block its CLI; .version goes last, so a copy cut
+    // short is retried on the next launch.
+    for (tool, a) in [("/usr/bin/rsync", ["-a", "--exclude=.version", src.path + "/", dest.path + "/"]),
+                      ("/usr/bin/xattr", ["-dr", "com.apple.quarantine", dest.appendingPathComponent("target").path])] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = a
+        guard (try? p.run()) != nil else { return }
+        p.waitUntilExit()
+        if tool.hasSuffix("rsync") && p.terminationStatus != 0 { return }
+    }
+    try? v.write(to: dest.appendingPathComponent(".version"), atomically: true, encoding: .utf8)
+}
+if args.isEmpty, let res = Bundle.main.resourceURL {
+    installBundled(from: res.appendingPathComponent("ozen"), to: dir)
+}
+
 let maxLines = 400
 let ignoreTag = "Ignored"  // reserved tag, same as src/ignore.rs / transcribe.py
 
