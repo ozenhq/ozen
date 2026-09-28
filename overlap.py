@@ -11,6 +11,8 @@ voices; MossFormer2 kept single voices whole and recovered both voices in every 
 
     uv run overlap.py   # self-check on macOS voices: one voice stays whole; overlap and quick turns give each voice
 """
+import threading
+
 import numpy as np
 import torch
 
@@ -21,7 +23,7 @@ SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
 # model hallucinates Knesset openers ("אדוני היושב-ראש…") and "Okay. Okay.". Speech from ~0.5m measured -31 dB
 # at its 10th percentile frame, so the floor sits between the two.
 SPEECH_RMS = 0.0125
-MODEL = "MossFormer2_SS_16K"  # ~640MB, downloaded to models/ on first overlap
+MODEL = "MossFormer2_SS_16K"  # ~640MB, downloaded to models/ by preload()
 WINDOW, HOP = 1.5, 0.75  # seconds; voiceprints this short are noisy, but only decide whether to try separating
 # Both checks measured on real voices (LibriSpeech mixes, and pairs played into a room and recorded by ozen):
 MIN_SOURCE = 0.25  # the quieter track's share of the clip vs the louder one's, below which it's residue of one voice
@@ -33,23 +35,38 @@ _separator = None
 
 def separator():
     global _separator
-    if _separator is None:  # loaded on first need; runs on the GPU (MPS) when there is one
-        import os
+    if _separator is None:  # runs on the GPU (MPS) when there is one
         import pathlib
 
-        from clearvoice import ClearVoice
-        cwd = os.getcwd()
-        os.chdir(pathlib.Path(__file__).parent / "models")  # clearvoice keeps checkpoints under ./checkpoints
-        try:
-            _separator = ClearVoice(task="speech_separation", model_names=[MODEL])
-        finally:
-            os.chdir(cwd)
+        from clearvoice.network_wrapper import network_wrapper
+        from clearvoice.networks import CLS_MossFormer2_SS_16K
+        # Built by hand rather than through ClearVoice(), whose config keeps checkpoints under a cwd-relative path
+        w = network_wrapper()
+        w.model_name = MODEL
+        w.load_args_ss()
+        w.args.task, w.args.network = "speech_separation", MODEL
+        w.args.checkpoint_dir = str(pathlib.Path(__file__).parent / "models/checkpoints" / MODEL)
+        # Its default decodes in 2s windows whose track order can flip (turns() splits those). Decoding whole clips
+        # keeps the order but merged more real room pairs into one voice: word recall 0.67 vs 0.73 on the room set
+        _separator = CLS_MossFormer2_SS_16K(w.args)
     return _separator
+
+
+def preload() -> None:
+    """Download and load the separator in the background. Until it's ready, clips stay whole: a first run's
+    download takes minutes, and the live transcript must not wait for it."""
+    def load():
+        try:
+            separator()
+        except Exception as e:  # offline on first run: keep transcribing without separating
+            print(f"voice separation unavailable: {e}", flush=True)
+    threading.Thread(target=load, daemon=True).start()
 
 
 def separate(clip: np.ndarray) -> list[np.ndarray]:
     with torch.no_grad():
-        return [np.asarray(t, dtype=np.float32).reshape(-1)[: len(clip)] for t in separator()(clip[None].astype(np.float32))]
+        out = separator().decode_data(clip[None].astype(np.float32))
+    return [np.asarray(t, dtype=np.float32).reshape(-1)[: len(clip)] for t in out]
 
 
 def rms(x: np.ndarray) -> float:
@@ -70,8 +87,8 @@ def mixed(clip: np.ndarray, embed, same: float) -> bool:
 def tracks(clip: np.ndarray, embed, same: float) -> list[np.ndarray]:
     """The clip's voices as separate full-length tracks, or just [clip] when it's one voice.
     embed(audio) -> unit voiceprint; same: the same-voice similarity cutoff."""
-    if not mixed(clip, embed, same):
-        return [clip]
+    if _separator is None or not mixed(clip, embed, same):
+        return [clip]  # not loaded yet (see preload), or one voice
     ts = separate(clip)
     # Output levels are normalized, so measure each track's share of the clip: fit clip ~ a*t1 + b*t2
     share = np.linalg.lstsq(np.stack(ts, 1), clip, rcond=None)[0]
@@ -145,6 +162,7 @@ if __name__ == "__main__":
         return e / np.linalg.norm(e)
 
     tmp = pathlib.Path(tempfile.mkdtemp())
+    separator()
 
     def say(voice, text):
         f = tmp / f"{voice}.aiff"

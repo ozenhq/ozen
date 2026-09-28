@@ -116,7 +116,8 @@ On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** 
 grant both (System Settings > Privacy & Security), then press Start again. **Location Services** is asked for
 only when you first locate a place; without it, places never match and recording follows Always / Meetings. The build signs the app and recorder
 with a local self-signed certificate (created once in `~/Library/Keychains/ozen-signing.keychain-db`), so the
-permissions survive rebuilds. The Whisper and ECAPA models download on first use, and the MossFormer2 separator (~640MB) on the first overlap.
+permissions survive rebuilds. The Whisper and ECAPA models download on first use. The MossFormer2 separator (~640MB) downloads in the
+background on the first start; until it's ready, people talking at once stay merged in one line.
 
 ## Use
 

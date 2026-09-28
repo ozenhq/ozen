@@ -52,6 +52,7 @@ IGNORES = HERE / "ignore.json"
 IGNORE_MARGIN = 0.1  # same as src/ignore.rs MARGIN: dropping someone's speech costs more than keeping noise
 ignored = np.zeros((0, 192), dtype=np.float32)
 
+overlap.preload()
 encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
 # ponytail: online nearest-centroid clustering, no re-clustering; a voice split early stays split.
 speakers: list[list] = []  # [label, centroid, count]; named ones come from the registry
