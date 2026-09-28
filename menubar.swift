@@ -303,7 +303,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let timebarView = WKWebView()
     var timebarTimer: Timer?
     let location = CLLocationManager()
-    var here: CLLocation?
+    var here: (lat: Double, lon: Double)?  // from `ozen place`; nil until the first fix
+    var placeNow: Place?  // the place you're in, from `ozen place`
+    var supplyingLocation = false  // the app is writing here.json because the locate binary can't (see supplyLocationIfNeeded)
     var placeLabel: String?  // label of the place we're in; a change re-applies auto control
     var settingPlace: Int?  // row waiting for a location fix after "Use current location"
     var pickingPlace: Int?  // row waiting for a map click after "Pick on map"
@@ -412,14 +414,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         popover.behavior = .transient
 
         location.delegate = self
-        location.desiredAccuracy = kCLLocationAccuracyHundredMeters
-        location.distanceFilter = 50
-        watchLocation()
-        // The Mac may have moved while asleep: restarting tracking sends a fresh fix within seconds; the old place
+        askLocation()
+        // The Mac may have moved while asleep: restarting the watcher sends a fresh fix within seconds; the old place
         // holds until it lands, rather than dropping to the global mode.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.location.stopUpdatingLocation()
-            self?.watchLocation()
+            self?.ozen("place", "--restart") { self?.applyPlace($0) }
         }
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.reload(); self?.refreshReview(); self?.refreshState() }
         refreshState()
@@ -507,6 +506,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     func refreshState() {
+        ozen("place") { self.applyPlace($0) }
         ozen("status") { self.show(state: $0); self.autoControl() }
         ozen("health") {
             self.problems = $0.split(separator: "\n").map(String.init)
@@ -654,57 +654,58 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     // MARK: places
 
-    func currentPlace() -> Place? {
-        // No age limit: tracking sends no new fix while you stand still, so an old fix at home is still home.
-        // A failed or revoked location clears `here` instead, so a stale place never outlives its source.
-        guard let here else { return nil }
-        return loadPlaces().first { p in
-            guard let lat = p.lat, let lon = p.lon else { return false }
-            return here.distance(from: CLLocation(latitude: lat, longitude: lon)) <= p.radius ?? defaultRadius
+    func currentPlace() -> Place? { placeNow }
+
+    /// `ozen place` output: {"here": {lat, lon, age} | null, "place": {label, action} | null}. Where you are and
+    /// which place that is are decided in Rust (src/places.rs, src/bin/locate.rs); this only keeps the answer.
+    func applyPlace(_ json: String) {
+        guard let r = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return }
+        let h = r["here"] as? [String: Any], p = r["place"] as? [String: Any]
+        here = (h?["lat"] as? Double).flatMap { lat in (h?["lon"] as? Double).map { (lat, $0) } }
+        let place = (p?["label"] as? String).map { Place(label: $0, action: p?["action"] as? String ?? "off") }
+        if place?.label != placeNow?.label || place?.action != placeNow?.action {
+            placeNow = place
+            autoControl()
+            if placesWindow?.isVisible == true { showPlacesOnMap(fit: false) }
         }
+        supplyLocationIfNeeded()
     }
 
-    /// Track location only while some place has coordinates, so an unused feature never asks for location.
-    func watchLocation() {
-        if loadPlaces().contains(where: { $0.lat != nil }) {
-            location.requestAlwaysAuthorization()
-            location.startUpdatingLocation()
-        } else {
-            location.stopUpdatingLocation()
-            here = nil
+    /// Fallback: the locate binary shares the app's location permission through the app's identity. If it can't get
+    /// a location (it writes here.json.error) while the app itself is allowed, the app writes here.json instead, so
+    /// place switching keeps working; `ozen place` still decides which place that is. The locate binary retries each
+    /// minute and clears the error on its first fix, which hands the job back.
+    func supplyLocationIfNeeded() {
+        let blocked = FileManager.default.fileExists(atPath: dir.appendingPathComponent("here.json.error").path)
+        let allowed = location.authorizationStatus == .authorizedAlways
+        let want = blocked && allowed && loadPlaces().contains(where: { $0.lat != nil })
+        if want {  // heartbeat for `ozen health`: the app has the location covered, so don't warn
+            FileManager.default.createFile(atPath: dir.appendingPathComponent("here.json.app").path, contents: nil)
         }
+        guard want != supplyingLocation else { return }
+        supplyingLocation = want
+        want ? location.startUpdatingLocation() : location.stopUpdatingLocation()
     }
 
     func locationManager(_ m: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let fix = locations.last else { return }
-        here = fix
-        if let i = settingPlace {
-            settingPlace = nil
-            var places = loadPlaces()
-            if places.indices.contains(i) {
-                places[i].lat = fix.coordinate.latitude
-                places[i].lon = fix.coordinate.longitude
-                savePlaces(places)
-                watchLocation()
-                buildPlaces()
-            }
-        }
-        autoControl()
+        guard supplyingLocation, let fix = locations.last else { return }
+        let json = "{\"lat\":\(fix.coordinate.latitude),\"lon\":\(fix.coordinate.longitude),\"t\":\(fix.timestamp.timeIntervalSince1970)}"
+        try? Data(json.utf8).write(to: dir.appendingPathComponent("here.json"), options: .atomic)
     }
 
-    func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {
-        if (error as? CLError)?.code != .locationUnknown { here = nil }  // locationUnknown is transient; it keeps trying
-        if settingPlace != nil {
-            settingPlace = nil
-            placesNote.stringValue = "Couldn't get your location: \(error.localizedDescription)"
-            watchLocation()  // setPlaceHere paused tracking for its one fix
-            buildPlaces()
+    /// Only the app can show the location prompt (the locate binary uses the answer), so ask here once some
+    /// place has coordinates; an unused feature never asks. macOS shows the prompt when updates start, not on the
+    /// request alone, so start them until the user answers.
+    func askLocation() {
+        if loadPlaces().contains(where: { $0.lat != nil }), location.authorizationStatus == .notDetermined {
+            location.requestAlwaysAuthorization()
+            location.startUpdatingLocation()
         }
     }
 
     func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+        if m.authorizationStatus != .notDetermined, !supplyingLocation { m.stopUpdatingLocation() }  // answered: locate takes over
         if m.authorizationStatus == .denied || m.authorizationStatus == .restricted {
-            here = nil
             placesNote.stringValue = "Location access is off. Turn on Ozen in System Settings → Privacy & Security → Location Services."
         }
     }
@@ -979,7 +980,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         struct Here: Encodable { let lat: Double, lon: Double }
         let enc = JSONEncoder()
         guard let places = try? enc.encode(loadPlaces()), let places = String(data: places, encoding: .utf8) else { return }
-        let here = self.here.flatMap { try? enc.encode(Here(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude)) }
+        let here = self.here.flatMap { try? enc.encode(Here(lat: $0.lat, lon: $0.lon)) }
             .flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         placesMap.evaluateJavaScript("show(\(places), \(defaultRadius), \(here), \(fit))")  // before the page loads this is a no-op
     }
@@ -1047,7 +1048,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         var places = loadPlaces()
         change(&places)
         savePlaces(places)
-        watchLocation()
+        askLocation()
         lastWanted = nil  // a changed place applies right away
         autoControl()
         showPlacesOnMap(fit: fit)
@@ -1069,25 +1070,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     @objc func setPlaceHere(_ sender: NSButton) {
         commitEdits()
         placesNote.stringValue = ""
-        settingPlace = sender.tag
-        if let here, Date().timeIntervalSince(here.timestamp) < 120 {
-            locationManager(location, didUpdateLocations: [here])  // already tracking and standing still: no new fix will come
-            return
-        }
-        location.requestAlwaysAuthorization()
-        // requestLocation does nothing while updates are running (they are, once any place has coordinates),
-        // and standing still sends no new update: pause tracking for the one fix; the handlers resume it.
-        location.stopUpdatingLocation()
-        location.requestLocation()
+        askLocation()
         let row = sender.tag
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-            guard let self, self.settingPlace == row else { return }
-            self.settingPlace = nil
-            self.placesNote.stringValue = "Couldn't get your location in 30 seconds. Check Wi-Fi is on, or use Pick on map."
-            self.watchLocation()
-            self.buildPlaces()
-        }
+        settingPlace = row
         buildPlaces()
+        run(["places", "here", String(row)]) { _, err, code in  // Rust gets the fix and saves it (src/places.rs)
+            self.settingPlace = nil
+            if code != 0 { self.placesNote.stringValue = err }
+            self.lastWanted = nil  // a changed place applies right away
+            self.buildPlaces()
+            self.refreshState()
+        }
     }
 
     @objc func removePlace(_ sender: NSButton) {

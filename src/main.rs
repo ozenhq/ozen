@@ -7,6 +7,7 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod places;
 mod separate;
 mod text;
 mod timebar;
@@ -22,7 +23,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -50,6 +51,10 @@ ozen control: start | pause | resume | stop | record | process | status | health
   retrain       rebuild voiceprints, labels and the ignored voices from all tags
   show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
+  place [--restart]
+                where you are and which place that is (JSON); keeps a location watcher running while some place
+                has coordinates. --restart replaces the watcher (after sleep)
+  places here N set place N (from 0, as in the Places window) to where you are now
   meetings      list past meetings: id, start, minutes, lines, first words (tab separated)
   gather [--kev] ID...
                 write those meetings into context/<now>/ to start Claude Code or Hermes in; --kev also adds
@@ -64,6 +69,9 @@ ozen control: start | pause | resume | stop | record | process | status | health
   mcp           MCP server on stdio: agents read and edit meetings, lines, speakers, places and vocab";
 
 const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
+const LOCATE_BUILT: &str = "target/release/locate"; // src/bin/locate.rs
+const LOCATE_BIN: &str = "target/locator/locate";
+const LOCATE: &str = r"^target/locator/locate watch"; // the watcher `place` keeps running
 // macOS lists a bare binary under its file name in Privacy & Security, so run a copy named ozen.
 const REC_BIN: &str = "target/recorder/ozen";
 // The old path too, so pause/stop still reach a recorder started before the rename.
@@ -357,29 +365,41 @@ fn start_processing() {
     }
 }
 
-/// `cargo build` re-links rec with an ad-hoc signature, which macOS would treat as a new app; copy it to
-/// REC_BIN and re-sign it with the stable identity so its recording permission carries over.
-fn prepare_rec() -> bool {
-    if !Path::new(REC_BUILT).exists() {
-        eprintln!("{REC_BUILT} missing: run `cargo build --release`");
+/// `cargo build` re-links rec and locate with ad-hoc signatures, which macOS would treat as new apps; copy each
+/// to its stable path and re-sign it with the stable identity so its permission (recording, location) carries over.
+fn prepare(built: &str, bin: &str) -> bool {
+    if !Path::new(built).exists() {
+        eprintln!("{built} missing: run `cargo build --release`");
         return false;
     }
-    if !newer(REC_BIN, REC_BUILT) {
-        let _ = fs::create_dir_all("target/recorder");
-        if let Err(e) = fs::copy(REC_BUILT, REC_BIN) {
-            eprintln!("copy {REC_BUILT} to {REC_BIN}: {e}");
+    if !newer(bin, built) {
+        // Copy and sign in a private dir, then rename into place: concurrent callers (the panel polls `place`)
+        // never run or sign a half-copied file. Same file name, since codesign names an unbundled binary by it.
+        let bin_path = Path::new(bin);
+        let staging = bin_path.with_file_name(format!(".staging-{}", std::process::id()));
+        let staged = staging.join(bin_path.file_name().unwrap_or_default());
+        let _ = fs::create_dir_all(&staging);
+        let copied = fs::copy(built, &staged);
+        if let Err(e) = &copied {
+            eprintln!("copy {built} to {}: {e}", staged.display());
+        } else {
+            sign(&staged.to_string_lossy(), false);
+            let _ = fs::rename(&staged, bin);
+        }
+        let _ = fs::remove_dir_all(&staging);
+        if copied.is_err() {
             return false;
         }
     }
     let signed = cmd("codesign")
-        .args(["-dr", "-", REC_BIN])
+        .args(["-dr", "-", bin])
         .output()
         .is_ok_and(|o| {
             String::from_utf8_lossy(&o.stdout).contains("certificate leaf")
                 || String::from_utf8_lossy(&o.stderr).contains("certificate leaf")
         });
     if !signed {
-        sign(REC_BIN, false);
+        sign(bin, false);
     }
     true
 }
@@ -416,6 +436,10 @@ fn stale_env(name: &str, ps: &str) -> bool {
                 .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
         });
     ours && !ps.contains(&format!("environments-v2/{name}/"))
+}
+
+fn prepare_rec() -> bool {
+    prepare(REC_BUILT, REC_BIN)
 }
 
 fn build_app(app: &str) -> bool {
@@ -590,6 +614,18 @@ fn main() {
             println!("{state}");
         }
         "health" => {
+            // Place switching doesn't depend on recording: say why it can't see where you are.
+            // Not while the menu bar app supplies the location instead (it touches here.json.app each poll).
+            let error = format!("{}.error", places::HERE);
+            let supplied = fs::metadata(format!("{}.app", places::HERE))
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|e| e.as_secs() < 30));
+            if places::tracked(&places::load(places::FILE))
+                && !supplied
+                && let Ok(why) = fs::read_to_string(&error)
+            {
+                println!("Place switching is off: {}", why.trim());
+            }
             if !running(REC) {
                 if recorder_blocked(&String::from_utf8_lossy(
                     &fs::read("start.log").unwrap_or_default(),
@@ -673,6 +709,85 @@ fn main() {
                 eprintln!("{e}");
                 exit(1);
             }
+        }
+        // Where you are and which place that is, as JSON for the menu bar (polled with status). Keeps a
+        // location watcher running while some place has coordinates, and stops it once none does.
+        // --restart replaces the watcher (after wake).
+        "place" => {
+            let ps = places::load(places::FILE);
+            if !places::tracked(&ps) {
+                signal("-TERM", LOCATE);
+                let _ = fs::remove_file(places::HERE);
+                let _ = fs::remove_file(format!("{}.error", places::HERE));
+                return println!(r#"{{"here":null,"place":null}}"#);
+            }
+            // After sleep the Mac may have moved: a new watcher sends a fresh fix; here.json holds the old one till then.
+            if std::env::args().any(|a| a == "--restart") {
+                signal("-TERM", LOCATE);
+                sleep(Duration::from_millis(200));
+            }
+            let _ = File::create(format!("{}.asked", places::HERE)); // the watcher's heartbeat
+            // A watcher that stopped on a permission problem (FILE.error) is retried each minute, not each poll.
+            let error = format!("{}.error", places::HERE);
+            let backing_off = fs::metadata(&error)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|e| e.as_secs() < 60));
+            if !backing_off && !running(LOCATE) && prepare(LOCATE_BUILT, LOCATE_BIN) {
+                spawn_detached(
+                    cmd(LOCATE_BIN).args(["watch", places::HERE]),
+                    Stdio::null(),
+                    log().into(),
+                );
+            }
+            let here: serde_json::Value = fs::read(places::HERE)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default();
+            let (Some(lat), Some(lon), Some(t)) = (
+                here["lat"].as_f64(),
+                here["lon"].as_f64(),
+                here["t"].as_f64(),
+            ) else {
+                return println!(r#"{{"here":null,"place":null}}"#);
+            };
+            let place = places::at(&ps, lat, lon)
+                .map(|p| serde_json::json!({"label": p.label, "action": p.action}));
+            println!(
+                "{}",
+                serde_json::json!({"here": {"lat": lat, "lon": lon, "age": now() - t}, "place": place})
+            );
+        }
+        // Set a place's coordinates to where you are now.
+        "places" => {
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let ["here", i] = a.iter().map(String::as_str).collect::<Vec<_>>()[..] else {
+                eprintln!("usage: ozen places here N");
+                exit(2);
+            };
+            let Ok(i) = i.parse::<usize>() else {
+                eprintln!("{i} isn't a place number");
+                exit(2);
+            };
+            if !prepare(LOCATE_BUILT, LOCATE_BIN) {
+                exit(1);
+            }
+            let out = cmd(LOCATE_BIN)
+                .arg("once")
+                .stderr(Stdio::inherit())
+                .output()
+                .expect("run locate");
+            let fix: Vec<f64> = String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .filter_map(|w| w.parse().ok())
+                .collect();
+            let [lat, lon, _] = fix[..] else {
+                exit(out.status.code().unwrap_or(1))
+            };
+            if let Err(e) = places::set_location(places::FILE, i, lat, lon) {
+                eprintln!("{e}");
+                exit(1);
+            }
+            println!("{lat} {lon}");
         }
         "meetings" => {
             for m in meetings::all().iter().rev() {
