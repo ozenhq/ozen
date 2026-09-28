@@ -1,11 +1,10 @@
 # dmgbuild layout for the release DMG (.github/workflows/release.yml): Ozen.app and an Applications link on the
-# background dmg.swift draws. Usage: dmgbuild -s dmg_settings.py -D app=<Ozen.app> -D bg=<bg.tiff> Ozen <out.dmg>
-import os
-
+# background dmg.swift draws, with the installer icon `swift icon.swift <dir> installer` draws as the volume icon.
+# Usage: dmgbuild -s dmg_settings.py -D app=<Ozen.app> -D bg=<bg.tiff> -D icon=<Installer.icns> Ozen <out.dmg>
 app = defines["app"]  # noqa: F821 (dmgbuild injects defines)
 files = [app]
 symlinks = {"Applications": "/Applications"}
-icon = os.path.join(app, "Contents/Resources/AppIcon.icns")  # the mounted volume's icon
+icon = defines["icon"]  # noqa: F821 (the mounted volume's icon: a drive, not the app, so it reads as the installer)
 background = defines["bg"]  # noqa: F821
 window_rect = ((200, 120), (640, 430))  # dmg.swift draws 640x400; the extra 30 is the title bar
 icon_size = 112
