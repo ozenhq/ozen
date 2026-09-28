@@ -46,7 +46,7 @@ jobs:
       - name: Swift menu bar and icon type-check
         run: swiftc -typecheck menubar.swift && swiftc -typecheck icon.swift
       - name: Python scripts compile
-        run: python3 -m py_compile transcribe.py overlap.py asr.py
+        run: python3 -m py_compile transcribe.py overlap.py eval_overlap.py asr.py
       - name: Review panel check
         timeout-minutes: 5
         run: ./check-review.sh

@@ -7,3 +7,6 @@ dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+eval = ["pyarrow"]  # eval_overlap.py reads its datasets with it: `uv run --group eval eval_overlap.py`
