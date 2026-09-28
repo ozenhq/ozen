@@ -656,7 +656,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let hints = ["person": "", "unnamed": " · unnamed, this run", "ignored": " · not transcribed"]
         for v in voices {
             let name = v["name"] as? String ?? "?", kind = v["kind"] as? String ?? ""
-            let title = NSTextField(labelWithString: "\(name == ignoreTag ? "Ignored voices" : name) · \(v["lines"] ?? 0) lines\(hints[kind] ?? "")")
+            let n = v["lines"] as? Int ?? 0
+            // Isolate names and lines: a Hebrew name would otherwise reorder the whole row ("lines 1 · נתן").
+            let shown = name == ignoreTag ? "Ignored voices" : "\u{2068}\(name)\u{2069}"
+            let title = NSTextField(labelWithString: "\(shown) · \(n) line\(n == 1 ? "" : "s")\(hints[kind] ?? "")")
             title.font = .boldSystemFont(ofSize: 13)
             let actions: [(String, Selector)] = kind == "person" ? [("Rename…", #selector(renameVoice(_:))), ("Ignore…", #selector(ignoreVoice(_:))), ("Forget…", #selector(forgetVoice(_:)))]
                 : kind == "unnamed" ? [("Name…", #selector(renameVoice(_:))), ("Ignore", #selector(ignoreVoice(_:)))]
@@ -671,13 +674,15 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             voicesStack.addArrangedSubview(NSStackView(views: [title, NSView()] + buttons))
             for line in v["recent"] as? [[String: Any]] ?? [] {
                 // Click a line to see it in the transcript.
-                let b = NSButton(title: "  “\(line["text"] as? String ?? "")”", target: self, action: #selector(showVoiceLine(_:)))
+                let b = NSButton(title: "  “\u{2068}\(line["text"] as? String ?? "")\u{2069}”", target: self, action: #selector(showVoiceLine(_:)))
                 b.isBordered = false
                 b.font = .systemFont(ofSize: 11)
                 b.contentTintColor = .secondaryLabelColor
                 b.lineBreakMode = .byTruncatingTail
+                b.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)  // truncate, don't widen the window
                 b.identifier = NSUserInterfaceItemIdentifier(line["id"] as? String ?? "")
                 voicesStack.addArrangedSubview(b)
+                b.widthAnchor.constraint(lessThanOrEqualTo: voicesStack.widthAnchor, constant: -24).isActive = true
             }
         }
         voicesWindow?.contentView?.needsLayout = true
