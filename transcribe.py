@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -226,6 +227,7 @@ def pending() -> list[pathlib.Path]:
 
 
 print(f"transcribing {chunks} -> {out}", flush=True)
+disk_full = False  # logged once per full-disk spell, not on every retry
 while True:
     for f in pending():
         ms, tag = f.stem.split("-")
@@ -278,6 +280,8 @@ while True:
                     else:
                         lines.append([start, spk, text, w * e, end])
                     prev = spk
+                if shutil.disk_usage(out.parent).free < 16 << 20:  # room for every line or none, so a retry never repeats one
+                    raise OSError(errno.ENOSPC, "less than 16 MB free", str(out))
                 with out.open("a") as fh, open_lines() as lj:
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
                         text = asr.corrected(heard, learned().get("replace", {}))
@@ -296,10 +300,13 @@ while True:
         except Exception as e:  # one bad chunk must not kill the live transcript
             if isinstance(e, OSError) and e.errno == errno.ENOSPC:
                 # Disk full: keep the audio and try again once there's room, rather than drop it.
-                print(f"disk full, keeping {f.name} for later: {e}", file=sys.stderr, flush=True)
+                if not disk_full:
+                    print(f"disk full, keeping {f.name} and the rest for later: {e}", file=sys.stderr, flush=True)
+                disk_full = True
                 time.sleep(10)
                 break
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
+        disk_full = False
         if KEEP_AUDIO and f.exists():
             # mic/call: recent audio for comparing models (uv run eval.py). local: computer audio only,
             # kept apart so a missed echo can be replayed with the reference the transcriber had.
