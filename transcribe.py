@@ -42,7 +42,7 @@ KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 # Separating people talking at once costs ~0.75x real time per such utterance (overlap.py): skip it while more than
 # this many chunks wait (two 15s windows), so it never makes the transcript fall behind; those lines stay merged
 SEPARATE_BACKLOG = int(os.environ.get("OZEN_SEPARATE_BACKLOG", "6"))
-PACE = HERE / "pace.jsonl"  # one row per chunk done: when, how long it took; the Timebar window (chunks.html) reads it
+PACE = HERE / "pace.jsonl"  # one row per chunk done: when, how long it took; `ozen timebar` (src/timebar.rs) reads it
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); `ozen retrain` (src/ignore.rs) writes their prints
 IGNORES = HERE / "ignore.json"
