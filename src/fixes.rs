@@ -18,7 +18,7 @@ const FIX_AUDIO: &str = "fixes";
 /// How fixes turn into what the transcriber uses. `ozen eval` sweeps these to find the best values.
 #[derive(Clone, Copy, Debug)]
 pub struct Learn {
-    pub vocab: usize, // most learned hint words; Whisper's prompt is ~220 tokens, shared with vocab.txt, names, previous line
+    pub vocab: usize, // most learned hint words; Whisper's prompt is ~220 tokens, shared with vocab.txt and the previous line
     pub repeat: usize, // the same correction this many times becomes an automatic replacement (0: never)
 }
 pub const LEARN: Learn = Learn {

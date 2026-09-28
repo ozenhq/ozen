@@ -341,8 +341,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             test.len()
         ));
     }
-    // The prompt the live transcriber starts from: vocab.txt. (Known people's names and the previous line
-    // are left out: they change from meeting to meeting, and the eval must not.)
+    // The prompt the live transcriber starts from: vocab.txt. (The previous line is left out: it changes from
+    // meeting to meeting, and the eval must not.)
     let base: Vec<String> = fs::read_to_string("vocab.txt")
         .unwrap_or_default()
         .split([',', '\n'])

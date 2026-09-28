@@ -169,9 +169,10 @@ def learned() -> dict:
 
 
 def hint_words() -> list[str]:
-    """The vocabulary + known people's names + words from your fixes, given to Whisper so it spells them."""
+    """The vocabulary + words from your fixes, given to Whisper so it spells them. Not the known people's names:
+    on room noise Whisper read them back as lines ("אורן דן, בן נחושתן, תודה רבה."); add a name to vocab.txt
+    if it keeps coming out wrong."""
     words = [w.strip() for w in re.split(r"[,\n]", VOCAB.read_text()) if w.strip()] if VOCAB.exists() else []
-    words += [s[0] for s in speakers if not anon(s[0])]
     return words + learned().get("vocab", [])
 
 
