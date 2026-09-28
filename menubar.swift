@@ -670,14 +670,17 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     /// Only the app can show the location prompt (the locate binary uses the answer), so ask here once some
-    /// place has coordinates; an unused feature never asks.
+    /// place has coordinates; an unused feature never asks. macOS shows the prompt when updates start, not on the
+    /// request alone, so start them until the user answers.
     func askLocation() {
         if loadPlaces().contains(where: { $0.lat != nil }), location.authorizationStatus == .notDetermined {
             location.requestAlwaysAuthorization()
+            location.startUpdatingLocation()
         }
     }
 
     func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+        if m.authorizationStatus != .notDetermined { m.stopUpdatingLocation() }  // answered: the locate binary takes over
         if m.authorizationStatus == .denied || m.authorizationStatus == .restricted {
             placesNote.stringValue = "Location access is off. Turn on Ozen in System Settings → Privacy & Security → Location Services."
         }
