@@ -922,12 +922,13 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     func lines(limit: Int) -> [Line] {
         guard let raw = try? String(contentsOf: dir.appendingPathComponent("lines.jsonl"), encoding: .utf8) else { return [] }
+        let junk = Set(json("junk.json") as? [String] ?? [])  // old lines the transcriber's filters now drop
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
         // Call and mic chunks finish transcribing at different times, so file order isn't time order.
         return raw.split(separator: "\n").suffix(limit).compactMap { row -> (Double, Line)? in
             guard let r = try? JSONSerialization.jsonObject(with: Data(row.utf8)) as? [String: Any],
-                  let id = r["id"] as? String, let t = r["t"] as? Double else { return nil }
+                  let id = r["id"] as? String, let t = r["t"] as? Double, !junk.contains(id) else { return nil }
             let text = r["text"] as? String ?? ""
             let d = r["d"] as? Double ?? min(15, max(1, Double(text.count) / 14))  // older lines: estimate from length
             return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), t: t, d: d, spk: r["spk"] as? String ?? "?",
@@ -938,7 +939,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     func reload() {
         guard popover.isShown else { return }
-        let files = ["lines.jsonl", "tags.json", "labels.json", "stats.json", "fixes.json"]
+        let files = ["lines.jsonl", "tags.json", "labels.json", "stats.json", "fixes.json", "junk.json"]
         let sig = files.map { f -> String in
             let a = try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(f).path)
             return "\(a?[.size] ?? 0)-\((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"

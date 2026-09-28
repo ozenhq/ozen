@@ -1,7 +1,7 @@
 #!/bin/sh
 # Check what Review asks about: builds menubar.swift without its app.run() block and opens its panel on sample
 # lines (no recording). Unsure lines queue most uncertain first, whether a retrain labeled them or only the
-# transcriber has seen them, and only for the last 10 minutes.
+# transcriber has seen them, and only for the last 10 minutes; lines in junk.json never show.
 set -e
 cd "$(dirname "$0")"
 tmp=$(mktemp -d)
@@ -33,8 +33,10 @@ line() { echo "{\"id\": \"$1\", \"t\": $(($now - $2)), \"spk\": \"S1\", \"src\":
     line sure 20 ', "doubt": 0.3'     # the transcriber is sure
     line labeled 10 ''                # retrain's verdict: unsure (0.4 - 0.37 = 0.03)
     line relabeled 5 ', "doubt": 0.01' # a retrain since found it sure: its verdict wins
+    line junk 40 ', "doubt": 0.001'   # unsure, but junk.json hides it (an old Whisper echo)
 } > "$tmp/lines.jsonl"
 echo '{"labeled": {"spk": "Dana", "sim": 0.37, "margin": 0.2, "unsure": true},
        "relabeled": {"spk": "Dana", "sim": 0.9, "margin": 0.5, "unsure": false}}' > "$tmp/labels.json"
 echo '{"threshold": 0.4}' > "$tmp/stats.json"
+echo '["junk"]' > "$tmp/junk.json"
 "$tmp/check" "$tmp" | grep -x ok

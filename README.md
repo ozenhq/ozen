@@ -17,7 +17,9 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   for each one: Hebrew goes to [ivrit.ai's Hebrew-trained turbo](https://huggingface.co/mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx),
   English to stock large-v3-turbo. Each call is hinted with `vocab.txt` (terms and names to spell right, e.g. Kev,
   PR, code review; edit freely) and the previous line. Known filler that Whisper invents
-  on noise ("Thank you.", "תודה רבה") is dropped, and so are lines where it loops one phrase ("Amen. Amen. Amen.").
+  on noise ("Thank you.", "תודה רבה") is dropped, and so are lines where it loops one phrase ("Amen. Amen.
+  Amen."). Older lines these filters would drop are hidden from the panel (ids in `junk.json`; delete it to show
+  them again).
 - **Drops echo.** A mic utterance that mostly overlaps call or local audio, in the voice that was playing then,
   is speaker bleed, not a person in the room, so it's discarded. That covers the computer reading text aloud and
   remote voices leaking into the mic. Someone in the room talking over the call keeps their line: their voice
