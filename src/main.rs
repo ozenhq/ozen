@@ -18,11 +18,15 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
-  status        prints recording | paused | stopping | stopped
+  record        record only: chunks queue up in chunks/ untranscribed until `process` (stop ends it)
+  process [stop]
+                transcribe the queued chunks without recording, then exit; while recording, keeps
+                transcribing live until the recording stops. `process stop` stops transcribing
+  status        prints recording | paused | stopping | processing | stopped
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   eval [--vocab 0,10,30,60] [--repeat 0,1,2,3] [--real] [--fresh]
                 score learning settings on a fixed set of spoken lines (see src/eval.rs)
@@ -60,6 +64,9 @@ const REC_BIN: &str = "target/recorder/ozen";
 const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
+const PROCESS: &str = r"/ozen process-queue$"; // the detached helper `process` leaves behind
+const RECORD_ONLY: &str = ".record-only"; // recording started by `record`: no transcriber is kept running for it
+const PROCESSING: &str = ".processing"; // `process` asked to transcribe the queue; removed when it's done or stopped
 const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current while the meeting goes on
 /// Tests that chdir into a temp dir hold this: the working directory is shared by every test thread.
 #[cfg(test)]
@@ -317,6 +324,19 @@ fn restart_dead_transcriber() {
     }
 }
 
+/// Hand the transcriber to a detached `process-queue`, which stops it once the queue is transcribed.
+fn start_processing() {
+    File::create(PROCESSING).expect("create .processing");
+    if !running(PROCESS) {
+        let me = std::env::current_exe().expect("own path");
+        spawn_detached(
+            Command::new(me).arg("process-queue"),
+            Stdio::null(),
+            Stdio::null(),
+        );
+    }
+}
+
 /// `cargo build` re-links rec with an ad-hoc signature, which macOS would treat as a new app; copy it to
 /// REC_BIN and re-sign it with the stable identity so its recording permission carries over.
 fn prepare_rec() -> bool {
@@ -449,6 +469,9 @@ fn main() {
                 exit(1);
             }
             fs::create_dir_all("chunks").expect("create chunks/");
+            // Live again: the transcriber stays loaded across pauses, not just until the queue empties.
+            let _ = fs::remove_file(RECORD_ONLY);
+            let _ = fs::remove_file(PROCESSING);
             if !running(TR) {
                 start_transcriber();
             }
@@ -457,6 +480,49 @@ fn main() {
             }
         }
         "pause" => signal("-INT", REC), // SIGINT: recorder flushes its current chunk first
+        "record" => {
+            rotate_log();
+            if !prepare_rec() {
+                exit(1);
+            }
+            fs::create_dir_all("chunks").expect("create chunks/");
+            File::create(RECORD_ONLY).expect("create .record-only");
+            // A live transcriber already running keeps going as processing, so nothing heard so far waits.
+            if running(TR) {
+                start_processing();
+            }
+            if !running(REC) {
+                spawn_detached(cmd(REC_BIN).arg("chunks"), log().into(), log().into());
+            }
+        }
+        "process" if std::env::args().nth(2).as_deref() == Some("stop") => {
+            let _ = fs::remove_file(PROCESSING);
+            signal("-TERM", TR); // chunks are deleted only once transcribed, so the rest waits for the next run
+        }
+        "process" => {
+            fs::create_dir_all("chunks").expect("create chunks/");
+            if !running(TR) {
+                start_transcriber();
+            }
+            start_processing();
+        }
+        // Keep the transcriber running until the queue is empty and nothing is recording, then stop it.
+        "process-queue" => {
+            while Path::new(PROCESSING).exists() {
+                if !running(REC) && chunks_waiting() == 0 {
+                    signal("-TERM", TR);
+                    let _ = fs::remove_file(PROCESSING);
+                    break;
+                }
+                restart_dead_transcriber();
+                sleep(Duration::from_secs(2));
+            }
+        }
+        // Record only: no transcriber to drain. A `process` run finishes the queue by itself.
+        "stop" if Path::new(RECORD_ONLY).exists() => {
+            signal("-INT", REC);
+            let _ = fs::remove_file(RECORD_ONLY);
+        }
         "stop" => {
             signal("-INT", REC);
             File::create(".stopping").expect("create .stopping");
@@ -466,7 +532,7 @@ fn main() {
         // Let the transcriber drain queued chunks (max 2 min) so the last words aren't lost.
         "drain" => {
             for _ in 0..120 {
-                if chunks_waiting() == 0 {
+                if chunks_waiting() == 0 || !running(TR) {
                     break;
                 }
                 sleep(Duration::from_secs(1));
@@ -475,9 +541,16 @@ fn main() {
             let _ = fs::remove_file(".stopping");
         }
         "status" => {
+            if Path::new(PROCESSING).exists() && !running(PROCESS) {
+                let _ = fs::remove_file(PROCESSING); // its helper was killed
+            }
             let state = if running(REC) {
-                restart_dead_transcriber();
+                if !Path::new(RECORD_ONLY).exists() {
+                    restart_dead_transcriber();
+                }
                 "recording"
+            } else if Path::new(PROCESSING).exists() {
+                "processing"
             // .stopping outlives a drain that was killed; without the drain it's stale, not "stopping"
             } else if Path::new(".stopping").exists() && running(TR) && running(DRAIN) {
                 "stopping"
@@ -525,7 +598,9 @@ fn main() {
                 );
             }
             let n = chunks_waiting();
-            if !running(TR) {
+            if Path::new(RECORD_ONLY).exists() && !Path::new(PROCESSING).exists() {
+                // recording without transcribing is what was asked for
+            } else if !running(TR) {
                 println!(
                     "Transcriber stopped, {n} chunks waiting: restarting it automatically (details in start.log)"
                 );

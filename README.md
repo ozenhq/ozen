@@ -77,6 +77,10 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon is a red filled ear only while recording; otherwise it's monochrome (ear stopped, pause paused,
   hourglass finishing transcription) and the panel says **Not recording** and why.
+- **Records now, transcribes later (advanced).** The gear button in the panel (or **Advanced…** in the right-click
+  menu) has **Split recording and processing**, off by default. On, **Record** only records (the audio waits in
+  `chunks/`, taking disk space) and **Process** transcribes what's waiting, with or without a recording going on,
+  then stops. Pause is hidden: without a transcriber loaded it would be the same as Stop.
 - **Timeline view.** Switch the panel to **Timeline** for one lane per speaker (with their total talk time) and a
   bar for every line they spoke, on a scrollable time axis; **− / +** zoom. Silences over 2 minutes shrink to a
   short break marker. Hover a bar for what was said; click it to jump to that line in the transcript.
@@ -143,7 +147,9 @@ background on the first start; until it's ready, people talking at once stay mer
 | Command | What it does |
 |---|---|
 | `target/release/ozen start` / `pause` / `resume` / `stop` | Same as the menu bar buttons. Pause keeps the transcriber loaded; stop finishes transcribing queued audio first |
-| `target/release/ozen status` | `recording`, `paused`, `stopping` or `stopped` |
+| `target/release/ozen record` | Record without transcribing: chunks wait in `chunks/` until `process`. `stop` ends it |
+| `target/release/ozen process` / `process stop` | Transcribe the waiting chunks without recording, then exit (while recording, keeps transcribing until the recording stops) / stop transcribing |
+| `target/release/ozen status` | `recording`, `paused`, `stopping`, `processing` or `stopped` |
 | `target/release/ozen health` | One line per problem the menu bar warns about: recording blocked, silent mic, transcriber down or behind |
 | `target/release/ozen fix <line-id> "right text"` | Correct a line's text (what the panel does); empty clears. Relearns hint words and corrections |
 | `target/release/ozen meetings` | Past meetings, newest first: id, start, minutes, lines, first words |
@@ -162,6 +168,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
+| `./check-split.sh` | Check the Advanced split toggle: off by default, and on it swaps Start/Pause for Record and Process (opens the bar app's panel, no recording) |
 | `./check-review.sh` | Check what Review asks about: unsure lines from the last 10 minutes, most uncertain first (opens the bar app's panel on sample lines) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 
