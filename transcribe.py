@@ -6,6 +6,7 @@
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
+import errno
 import fcntl
 import json
 import os
@@ -293,6 +294,11 @@ while True:
                             rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:  # one bad chunk must not kill the live transcript
+            if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                # Disk full: keep the audio and try again once there's room, rather than drop it.
+                print(f"disk full, keeping {f.name} for later: {e}", file=sys.stderr, flush=True)
+                time.sleep(10)
+                break
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
         if KEEP_AUDIO and f.exists():
             # mic/call: recent audio for comparing models (uv run eval.py). local: computer audio only,
