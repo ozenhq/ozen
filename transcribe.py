@@ -304,7 +304,8 @@ while True:
                         e = esum / np.linalg.norm(esum)
                         rec = {"id": f"{ms}-{tag}-{i}", "t": round(t_chunk + start, 2), "d": round(end - start, 2),
                                "src": SOURCE.get(tag, tag), "run": RUN, "spk": spk, "text": text, "e": e.round(5).tolist()}
-                        if (dt := doubt(e)) is not None:
+                        # under MIN_EMBED_SEC the print is noise: tagging such a line teaches nothing, so never ask
+                        if end - start >= MIN_EMBED_SEC and (dt := doubt(e)) is not None:
                             rec["doubt"] = dt
                         if text != heard:
                             rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
