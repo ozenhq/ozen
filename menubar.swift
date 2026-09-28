@@ -1,5 +1,5 @@
 // Menu bar ear icon: left-click shows the live transcript with start/pause/stop controls,
-// right-click offers the same controls plus Quit. Controls call the ozen CLI (src/main.rs).
+// right-click offers the same controls plus Quit (stops recording) or quit the bar alone. Controls call the ozen CLI (src/main.rs).
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (train.py), so labels improve the more you tag. Click a line's text to fix what was
 // said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
@@ -275,6 +275,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let gatherButton = NSButton(title: "Open", target: nil, action: nil)
     let kevButton = NSButton(title: "Auto add with Kev", target: nil, action: nil)
     let askButton = NSButton(title: "Ask about now", target: nil, action: nil)
+    let quitButton = NSButton(title: "Quit", target: nil, action: nil)
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let button = item.button!
@@ -289,7 +290,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         text.linkTextAttributes = [.cursor: NSCursor.pointingHand]  // links keep their own colors: names, unsure, text
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces))] {
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (quitButton, #selector(quitOzen))] {
             b.target = self
             b.action = cmd
             b.bezelStyle = .rounded
@@ -308,7 +309,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         askButton.bezelStyle = .rounded
         askButton.controlSize = .small
         askButton.toolTip = "Start Claude Code or Hermes on the meeting happening now (ozen live)"
-        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton])
+        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton, quitButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         viewControl.target = self
         viewControl.action = #selector(switchView)
@@ -398,7 +399,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             places.target = self
             menu.addItem(places)
             menu.addItem(.separator())
-            menu.addItem(withTitle: "Quit ozen bar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            let quit = NSMenuItem(title: "Quit ozen", action: #selector(quitOzen), keyEquivalent: "q")
+            quit.target = self
+            menu.addItem(quit)
+            menu.addItem(withTitle: "Quit bar, keep recording", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
             item.menu = menu
             item.button?.performClick(nil)  // shows the menu
             item.menu = nil  // keep left-click for the popover
@@ -525,6 +529,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     @objc func startCapture() { control(state == "paused" ? "resume" : "start", optimistic: "recording") }
     @objc func pauseCapture() { control("pause", optimistic: "paused") }
     @objc func stopCapture() { control("stop", optimistic: "stopping") }
+    // Stop returns at once (the drain runs detached), so the last words still reach the transcript after we exit.
+    @objc func quitOzen() { state == "stopped" ? NSApp.terminate(nil) : ozen("stop") { _ in NSApp.terminate(nil) } }
 
     // MARK: places
 
