@@ -49,6 +49,12 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Those lines, and earlier ones that sound like them, turn grey and leave the timeline, and the transcriber stops
   writing that voice from then on. Ignored prints stay on this Mac (`ignore.json`), never in the registry. To undo,
   tag the line as a person or **Clear tag**, or use **Stop ignoring** in **Voices…**.
+- **Shows how far behind transcription is.** **Timebar…** in the panel (or the right-click menu) draws every
+  recorded 15s chunk per stream on a local-time bar with a line at now: done, still waiting, or skipped on an error.
+  Scroll or drag back through history, pinch or ⌘-scroll to zoom, **Now** to follow live. Under it, how long after
+  recording each chunk was done and how many were waiting at each moment; above it, the backlog, median delay,
+  speed against real time, chunks done per minute and when the backlog clears at that pace. The transcriber logs each
+  chunk it finishes to `pace.jsonl` (local only, last 14 days); chunks from before that log show as done at an unknown time.
 - **Manages voices in one place.** **Voices…** in the panel (or the right-click menu) lists everyone ozen has heard:
   people with their line counts and last few lines, this run's unnamed speakers (S1, S2…), and the ignored voices.
   Rename a person (an existing name merges the two), name or ignore an unnamed speaker in one go, ignore or forget a
@@ -162,6 +168,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |
 | `target/release/ozen tag <line-id> "Dana Levi"` | Tag a line (what the panel does); empty name clears. Retrains and pushes the registry |
+| `target/release/ozen timebar` | JSON of every chunk (start, stream, done / waiting / error / old, delay stats) that **Timebar…** draws |
 | `target/release/ozen voices` | JSON list of people, this run's unnamed speakers and ignored voices (what **Voices…** shows) |
 | `target/release/ozen name "Dana Levi" <line-id>...` | Tag those lines as a person, e.g. an unnamed speaker's lines. Retrains |
 | `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget Ignored` stops ignoring. Retrains |
@@ -170,6 +177,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
 | `./check-split.sh` | Check the Advanced split toggle: off by default, and on it swaps Start/Pause for Record and Process (opens the bar app's panel, no recording) |
 | `uv run --group eval eval_overlap.py [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`overlap.py`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
+| `./check-timebar.sh` | Check the Timebar window: presses **Timebar…** in the bar app's panel and checks the page drew what a stubbed `ozen timebar` returned |
 | `./check-review.sh` | Check what Review asks about: unsure lines from the last 10 minutes, most uncertain first (opens the bar app's panel on sample lines) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 

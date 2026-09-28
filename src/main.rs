@@ -7,6 +7,7 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod timebar;
 mod train;
 mod voices;
 
@@ -400,7 +401,11 @@ fn stale_env(name: &str, ps: &str) -> bool {
 
 fn build_app(app: &str) -> bool {
     let bin = format!("{app}/Contents/MacOS/Ozen");
-    if newer(&bin, "menubar.swift") && newer(&bin, "icon.swift") && newer(&bin, "map.html") {
+    if newer(&bin, "menubar.swift")
+        && newer(&bin, "icon.swift")
+        && newer(&bin, "map.html")
+        && newer(&bin, "chunks.html")
+    {
         return true;
     }
     let resources = format!("{app}/Contents/Resources");
@@ -410,8 +415,10 @@ fn build_app(app: &str) -> bool {
     if !ok(cmd("swiftc").args(["-O", "menubar.swift", "-o", &bin])) {
         return false;
     }
-    if fs::copy("map.html", format!("{resources}/map.html")).is_err() {
-        eprintln!("map.html missing; the Places map stays blank");
+    for page in ["map.html", "chunks.html"] {
+        if fs::copy(page, format!("{resources}/{page}")).is_err() {
+            eprintln!("{page} missing; its window stays blank");
+        }
     }
     if !ok(cmd("swift").args(["icon.swift", &resources])) {
         eprintln!("icon build failed; app still works");
@@ -727,6 +734,7 @@ fn main() {
         }
         "retrain" => retrain(),
         "voices" => println!("{}", serde_json::Value::from(voices::list())),
+        "timebar" => println!("{}", timebar::json()),
         "name" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             match args.split_first() {

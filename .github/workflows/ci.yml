@@ -50,6 +50,9 @@ jobs:
       - name: Review panel check
         timeout-minutes: 5
         run: ./check-review.sh
+      - name: Timebar window check
+        timeout-minutes: 5
+        run: ./check-timebar.sh
       - uses: astral-sh/setup-uv@v6
       - name: Transcript filter doctests
         run: uv run -q --with mlx-whisper python -m doctest asr.py < /dev/null
