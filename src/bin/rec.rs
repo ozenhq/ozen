@@ -83,7 +83,10 @@ impl Recorder {
         let Ok(list) = sample.audio_buffer_list() else {
             return;
         };
-        let buffers: Vec<&[u8]> = list.iter().map(|b| b.data()).collect();
+        let buffers: Vec<&[u8]> = list
+            .iter()
+            .map(screencapturekit::AudioBuffer::data)
+            .collect();
         let float = fd.audio_is_float();
         let bits = fd.audio_bits_per_channel().unwrap_or(32) as u16;
         if !(float && bits == 32 || !float && bits == 16) {

@@ -5,6 +5,9 @@ edition = "2024"
 default-run = "ozen"  # `cargo run -- app` (README) must not have to pick between ozen and rec
 publish = false
 
+[lints.clippy]
+redundant_closure_for_method_calls = "warn"  # CI runs clippy with -D warnings
+
 [profile.release]
 strip = true
 
