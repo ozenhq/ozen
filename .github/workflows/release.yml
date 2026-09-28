@@ -22,7 +22,8 @@ jobs:
       - name: Package
         # ozen/ holds the tagged sources plus target/release/{ozen,rec}: unpacked in ~ it is the ~/ozen checkout.
         # The DMG holds Ozen.app with that checkout inside (menubar.swift copies it to ~/ozen on launch), next to an
-        # Applications link to drag it onto, on the background dmg.swift draws (layout: dmg_settings.py).
+        # Applications link to drag it onto, on the background dmg.swift draws (layout: dmg_settings.py). The volume icon is
+        # icon.swift's installer variant (a drive), so the mounted DMG doesn't look like the app.
         # Signed ad hoc: not notarized, so the first open needs Open Anyway.
         run: |
           v="$GITHUB_REF_NAME"
@@ -36,8 +37,9 @@ jobs:
           cp -R pkg/ozen dmg/Ozen.app/Contents/Resources/
           codesign --force --deep -s - dmg/Ozen.app
           swift dmg.swift pkg
+          swift icon.swift pkg installer
           tiffutil -cathidpicheck pkg/bg.png pkg/bg@2x.png -out pkg/bg.tiff
-          uvx dmgbuild==1.6.7 -s dmg_settings.py -D app=dmg/Ozen.app -D bg=pkg/bg.tiff Ozen "ozen-$v-macos-arm64.dmg"
+          uvx dmgbuild==1.6.7 -s dmg_settings.py -D app=dmg/Ozen.app -D bg=pkg/bg.tiff -D icon=pkg/Installer.icns Ozen "ozen-$v-macos-arm64.dmg"
       - name: Upload to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

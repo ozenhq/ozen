@@ -1,12 +1,12 @@
-# One locked env (.venv, next to this file) for every script, so uv doesn't keep a copy of torch per checkout path.
+# One locked env (.venv, next to this file) for every script, so uv keeps one copy, not one per checkout path.
 [project]
 name = "ozen"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
+dependencies = ["numpy"]
 
 [tool.uv]
 package = false
 
 [dependency-groups]
-eval = ["pyarrow"]  # eval_overlap.py reads its datasets with it: `uv run --group eval eval_overlap.py`
+eval = ["pyarrow", "soundfile"]  # eval_overlap.py reads its datasets with these: `uv run --group eval eval_overlap.py`

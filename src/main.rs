@@ -8,6 +8,7 @@ mod low_disk_alert;
 mod mcp;
 mod meetings;
 mod panel;
+mod separate;
 mod text;
 mod timebar;
 mod train;
@@ -825,6 +826,12 @@ fn main() {
             }
         }
         // The transcriber's voiceprint encoder (src/ecapa.rs), fed audio on stdin.
+        "separate" => {
+            if let Err(e) = separate::serve() {
+                eprintln!("{e}");
+                exit(1);
+            }
+        }
         "embed" => {
             if let Err(e) = ecapa::serve() {
                 eprintln!("{e}");

@@ -29,7 +29,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
 - **Hears people talking at once.** In the room, on the call, or both: when voiceprints across an utterance
   disagree (two people at once, or one cutting in without a pause), `overlap.py` separates it into one track per
-  voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), on the GPU), splits each track where its
+  voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), run in Rust on the GPU by `src/separate.rs`), splits each track where its
   voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
   the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
   `uv run overlap.py` checks it on macOS voices; `uv run --group eval eval_overlap.py` scores it on real speech.
