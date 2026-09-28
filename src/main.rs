@@ -329,7 +329,11 @@ fn start_processing() {
     File::create(PROCESSING).expect("create .processing");
     if !running(PROCESS) {
         let me = std::env::current_exe().expect("own path");
-        spawn_detached(Command::new(me).arg("process-queue"), Stdio::null(), Stdio::null());
+        spawn_detached(
+            Command::new(me).arg("process-queue"),
+            Stdio::null(),
+            Stdio::null(),
+        );
     }
 }
 
