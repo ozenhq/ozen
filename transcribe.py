@@ -6,6 +6,7 @@
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
+import fcntl
 import json
 import os
 import pathlib
@@ -266,6 +267,7 @@ while True:
                         lines.append([start, spk, text, w * e, end])
                     prev = spk
                 with out.open("a") as fh, LINES.open("a") as lj:
+                    fcntl.flock(lj, fcntl.LOCK_EX)  # `ozen mcp` deletes lines by rewriting the file under this lock
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
                         text = asr.corrected(heard, learned().get("replace", {}))
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")

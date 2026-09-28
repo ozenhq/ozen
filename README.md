@@ -91,6 +91,10 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   meeting (one whose last line is under 10 minutes old), in `context/live/`. A background `ozen live-sync` rewrites
   that folder with the latest lines every 15s and exits when the meeting ends; the agent is told to reread it, and that
   `ozen look` shows your screen.
+- **Lets any agent read and edit what ozen keeps.** `ozen mcp` is an MCP server: meetings, transcript lines (read,
+  add notes, fix text, set speakers, delete), people, places, vocabulary and recording control. Tools are in
+  [src/mcp.rs](src/mcp.rs). Add it to Claude Code with `claude mcp add -s user ozen -- ~/ozen/target/release/ozen mcp`,
+  or to any MCP client as the command `~/ozen/target/release/ozen` with the argument `mcp`.
 
 Output is `transcript.txt`:
 
@@ -132,6 +136,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen live [--open claude\|hermes]` | Write the meeting happening now into `context/live/` and print the folder; a background `live-sync` keeps it current every 15s until the meeting ends. `--open` starts that agent there |
 | `target/release/ozen open DIR claude\|hermes\|finder` | Start that agent (or Finder) in a folder written by `gather` or `live` |
 | `target/release/ozen ignore <line-id>...` | Tag lines as a voice to ignore (what **Ignore all** in the panel does). Retrains |
+| `target/release/ozen mcp` | MCP server on stdio for agents (see [What it does](#what-it-does)) |
 | `target/release/ozen app` | Build and install `~/Applications/Ozen.app` |
 | `target/release/ozen bar` | Build if needed and open Ozen.app |
 | `target/release/ozen look [N]` | Screenshot to `screen-small.png` and print the last N transcript lines (tagged speakers, fixed text). Use it to answer "what's on screen / what was just said" |

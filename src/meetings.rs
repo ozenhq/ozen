@@ -96,6 +96,10 @@ impl Meeting {
     fn start(&self) -> f64 {
         self.lines[0].t
     }
+    /// First and last line times: every line in between belongs to this meeting.
+    pub fn span(&self) -> (f64, f64) {
+        (self.start(), self.lines.last().unwrap().t)
+    }
     fn file(&self) -> String {
         local(self.start()).format("%Y-%m-%d %H%M.md").to_string()
     }
