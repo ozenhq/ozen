@@ -1,0 +1,45 @@
+name: release
+# A version tag (v1.2.3) on a commit in main: build the CLI and recorder, pack them with the sources ozen runs from
+# (the Python transcriber, the Swift menu bar), and upload the tarball to R2 under its version and as latest.
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # origin/main, to check the tag is on it
+      - name: Tag must be on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Package
+        # ozen/ holds the tagged sources plus target/release/{ozen,rec}: unpacked in ~ it is the ~/ozen checkout.
+        run: |
+          name="ozen-$GITHUB_REF_NAME-macos-arm64.tar.gz"
+          git archive --prefix=ozen/ -o ozen.tar HEAD
+          mkdir -p pkg/ozen/target/release
+          cp target/release/ozen target/release/rec pkg/ozen/target/release/
+          tar -rf ozen.tar -C pkg ozen/target
+          gzip -9 < ozen.tar > "$name"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required # R2 rejects some of the CLI's default checksums
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ vars.R2_BUCKET }}
+          PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+        run: |
+          aws s3 cp "$NAME" "s3://$BUCKET/$NAME" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$NAME" "s3://$BUCKET/ozen-latest-macos-arm64.tar.gz" --endpoint-url "$ENDPOINT" \
+            --cache-control "no-cache"
+          echo "Download: $PUBLIC_URL/$NAME (latest: $PUBLIC_URL/ozen-latest-macos-arm64.tar.gz)" >> "$GITHUB_STEP_SUMMARY"
