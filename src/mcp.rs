@@ -12,8 +12,9 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::process::{Command, Stdio};
 
 const LINES: &str = "lines.jsonl";
@@ -76,15 +77,27 @@ enum Edit {
     Set(Row),
 }
 
-/// Rewrite lines.jsonl in place, holding the lock the transcriber takes to append, so no new line is lost.
-// ponytail: readers (panel, train.py) don't lock; one may see a half-written file for a moment and re-reads.
+/// lines.jsonl open for appending and locked. `rewrite` swaps in a new file while holding the old one's
+/// lock, so a lock won on a swapped-out file is retried on the current one (transcribe.py does the same).
+fn locked() -> Result<File, String> {
+    loop {
+        let f = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(LINES)
+            .map_err(err)?;
+        f.lock().map_err(err)?;
+        if fs::metadata(LINES).is_ok_and(|m| m.ino() == f.metadata().map_or(0, |m| m.ino())) {
+            return Ok(f);
+        }
+    }
+}
+
+/// Rewrite lines.jsonl under the transcriber's append lock, so no new line is lost, and swap it in by
+/// rename, so readers that don't lock (the panel, train.py) see the old file or the new one, never half.
 fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
-    let mut f = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(LINES)
-        .map_err(err)?;
-    f.lock().map_err(err)?;
+    let mut f = locked()?;
     let mut raw = String::new();
     f.read_to_string(&mut raw).map_err(err)?;
     let mut out = String::with_capacity(raw.len());
@@ -96,19 +109,14 @@ fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
         }
         out.push('\n');
     }
-    f.set_len(0).map_err(err)?;
-    f.rewind().map_err(err)?;
-    f.write_all(out.as_bytes()).map_err(err)
+    let tmp = format!("{LINES}.tmp");
+    fs::write(&tmp, out).map_err(err)?;
+    fs::rename(&tmp, LINES).map_err(err) // the old file's lock is released when f drops, after the swap
 }
 
 fn append(r: Row) -> Result<(), String> {
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LINES)
-        .map_err(err)?;
-    f.lock().map_err(err)?;
-    f.write_all((Value::Object(r).to_string() + "\n").as_bytes())
+    locked()?
+        .write_all((Value::Object(r).to_string() + "\n").as_bytes())
         .map_err(err)
 }
 
@@ -756,6 +764,24 @@ mod tests {
             )
         );
         assert!(!is_note(&rows()[0]) && is_note(&rows()[1]));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_append_waiting_on_a_swapped_out_file_lands_in_the_new_one() {
+        let _cwd = crate::CWD.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("ozen-mcp-swap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        fs::write(LINES, "old\n").unwrap();
+        let held = locked().unwrap(); // like rewrite, mid-swap
+        let writer = std::thread::spawn(|| append(Map::new()));
+        std::thread::sleep(std::time::Duration::from_millis(100)); // writer is now blocked on the old file
+        fs::write("new", "new\n").unwrap();
+        fs::rename("new", LINES).unwrap();
+        drop(held);
+        writer.join().unwrap().unwrap();
+        assert_eq!(fs::read_to_string(LINES).unwrap(), "new\n{}\n");
         fs::remove_dir_all(&dir).unwrap();
     }
 }
