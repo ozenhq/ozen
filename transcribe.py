@@ -328,7 +328,7 @@ while True:
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
         disk_full = False
         if KEEP_AUDIO and f.exists():
-            # mic/call: recent audio for comparing models (uv run eval.py). local: computer audio only,
+            # mic/call: recent audio for comparing models (ozen compare). local: computer audio only,
             # kept apart so a missed echo can be replayed with the reference the transcriber had.
             keep = RECENT / "local" if tag == "local" else RECENT
             try:
