@@ -30,6 +30,8 @@ MIN_SOURCE = 0.25  # the quieter track's share of the clip vs the louder one's, 
 # (single voices reaching separation: <=0.21; two voices: 0.2-1.0)
 SAME_TRACKS = 0.6  # tracks this alike are one voice split in two. Not the same-voice cutoff: separated tracks leak
 # into each other, so two people's tracks score up to ~0.65; one voice's two tracks stayed under 0.35
+LEAK = 0.3  # a track's frame this much quieter than the other track's frame is leak of the other voice
+TRACK_MIN = 0.6  # seconds; on real meetings (AMI) shorter separated pieces were mostly invented words ("Amen.")
 _separator = None
 
 
@@ -107,7 +109,19 @@ def voices(clip: np.ndarray, embed, same: float) -> list[tuple[float, np.ndarray
     if len(ts) == 1:
         return [(0.0, clip)]
     print(f"{len(ts)} voices at once in {len(clip) / SR:.1f}s", flush=True)
-    return sorted((p for t in ts for u in utterances(t) for p in turns(*u, embed, same)), key=lambda p: p[0])
+    return sorted((p for t in unleak(ts) for u in utterances(t, min_len=TRACK_MIN) for p in turns(*u, embed, same)), key=lambda p: p[0])
+
+
+def unleak(ts: list[np.ndarray], frame: int = 480) -> list[np.ndarray]:
+    """Silence each track where the other one is much louder: there it only carries leak of the other voice,
+    which Whisper would transcribe a second time. Where both are loud, both people are talking."""
+    n = min(len(t) for t in ts) // frame * frame
+    r = [np.sqrt((t[:n].reshape(-1, frame) ** 2).mean(1)) for t in ts]
+    out = []
+    for k, t in enumerate(ts):
+        keep = np.repeat(r[k] >= LEAK * r[1 - k], frame)
+        out.append(np.concatenate([t[:n] * keep, t[n:]]))
+    return out
 
 
 def turns(offset: float, piece: np.ndarray, embed, same: float) -> list[tuple[float, np.ndarray]]:
