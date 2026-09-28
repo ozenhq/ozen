@@ -249,6 +249,7 @@ while True:
                         active.append((t0, t1, e if long else None))
                     if tag == "local":
                         continue  # computer's own audio: reference only, never transcribed
+                    share = 0.0
                     if tag == "mic":
                         share, near = echo(t0, t1, e if long else None)
                         if share >= ECHO_OVERLAP and (near is None or near >= SAME_SPEAKER):
@@ -261,6 +262,12 @@ while True:
                               f"past it", flush=True)
                     text = transcribe(clip, tag)
                     if not text:
+                        continue
+                    if share >= ECHO_OVERLAP and asr.hint_only(text, hint_words()):
+                        # Kept because it sounds like no one playing, but noise under call audio sounds like no one
+                        # too, and Whisper fills it with the prompt's names ("אורן דן, בן נחושתן, תודה רבה."). Someone
+                        # talking over the call says more than names and filler.
+                        print(f"noise under call audio dropped {t1 - t0:.1f}s: {text}", flush=True)
                         continue
                     spk = who(clip, e)
                     if spk == IGNORE:
@@ -279,6 +286,9 @@ while True:
                     prev = spk
                 with out.open("a") as fh, open_lines() as lj:
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
+                        if asr.hint_echo(heard, hint_words()):  # pieces that each said a name once, merged
+                            print(f"hint echo dropped: {heard}", flush=True)
+                            continue
                         text = asr.corrected(heard, learned().get("replace", {}))
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"

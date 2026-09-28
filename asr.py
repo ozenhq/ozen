@@ -73,7 +73,12 @@ def hint_echo(text: str, hint: list[str]) -> bool:
     only of hint words (and filler) that repeats itself is that echo. A single "אורן דן." can be real speech
     (someone addressed by name), so it stays."""
     words = words_of(text)
-    return len(words) > len(set(words)) and set(words) <= {w for h in hint for w in words_of(h)} | FILLER
+    return len(words) > len(set(words)) and hint_only(text, hint)
+
+
+def hint_only(text: str, hint: list[str]) -> bool:
+    """Only words from Whisper's own prompt (names, terms) and filler: what it says on noise it can't place."""
+    return set(words_of(text)) <= {w for h in hint for w in words_of(h)} | FILLER
 
 
 def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = ()) -> tuple[str, str]:
