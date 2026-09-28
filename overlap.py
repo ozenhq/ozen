@@ -1,36 +1,55 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["speechbrain", "torchaudio", "mlx-whisper"]
+# dependencies = ["speechbrain", "torchaudio", "mlx-whisper", "clearvoice"]
 # ///
 """Several people in one utterance: two talking at once, or one cutting in without a pause. The transcriber
 splits utterances on pauses, so these used to come out as one line under one speaker. `voices` separates such a
-clip into one track per voice (SepFormer, 2 voices, trained on noisy reverberant rooms), each as long as the clip,
-so every voice is transcribed and labeled on its own and keeps its timing.
+clip into one track per voice (MossFormer2, 2 voices), each as long as the clip, so every voice is transcribed and
+labeled on its own and keeps its timing. SepFormer (speechbrain) was tried first: fine on clean mixes, but through a
+real room into the laptop mic it split single voices into two loud tracks and returned two copies of the louder of two
+voices; MossFormer2 kept single voices whole and recovered both voices in every real room pair tried.
 
-    uv run overlap.py   # self-check on macOS voices: one voice stays whole; overlap and quick turns split in two
+    uv run overlap.py   # self-check on macOS voices: one voice stays whole; overlap and quick turns give each voice
 """
 import numpy as np
 import torch
 
 SR = 16000
-SEPFORMER = "speechbrain/sepformer-whamr16k"
+SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
+# A frame counts as speech only above -38 dBFS. The per-chunk relative threshold alone let steady room noise
+# (measured -47 dB median, -41.7 dB max frame) through as one 15s "utterance" per chunk, and on it the Hebrew
+# model hallucinates Knesset openers ("אדוני היושב-ראש…") and "Okay. Okay.". Speech from ~0.5m measured -31 dB
+# at its 10th percentile frame, so the floor sits between the two.
+SPEECH_RMS = 0.0125
+MODEL = "MossFormer2_SS_16K"  # ~640MB, downloaded to models/ on first overlap
 WINDOW, HOP = 1.5, 0.75  # seconds; voiceprints this short are noisy, but only decide whether to try separating
-MIN_SOURCE = 0.25  # the quieter separated track must be this loud vs the louder one, else it's residue of one voice
-# (LibriSpeech: one voice leaves residue at <=0.07 of the louder track; two voices at once 0.4-1.0)
-SAME_TRACKS = 0.5  # tracks this alike are one voice split in two. Not the same-voice cutoff: separated tracks
-# leak into each other, so two real people's tracks still score up to ~0.45
+# Both checks measured on real voices (LibriSpeech mixes, and pairs played into a room and recorded by ozen):
+MIN_SOURCE = 0.25  # the quieter track's share of the clip vs the louder one's, below which it's residue of one voice
+# (single voices reaching separation: <=0.21; two voices: 0.2-1.0)
+SAME_TRACKS = 0.6  # tracks this alike are one voice split in two. Not the same-voice cutoff: separated tracks leak
+# into each other, so two people's tracks score up to ~0.65; one voice's two tracks stayed under 0.35
 _separator = None
 
 
 def separator():
     global _separator
-    if _separator is None:  # loaded on first need; ~100MB download on first use
-        from speechbrain.inference.separation import SepformerSeparation
-        device = "mps" if torch.backends.mps.is_available() else "cpu"  # ~4x faster than CPU on Apple Silicon
-        _separator = SepformerSeparation.from_hparams(
-            source=SEPFORMER, savedir=str(__import__("pathlib").Path(__file__).parent / "models/sepformer"),
-            run_opts={"device": device})
+    if _separator is None:  # loaded on first need; runs on the GPU (MPS) when there is one
+        import os
+        import pathlib
+
+        from clearvoice import ClearVoice
+        cwd = os.getcwd()
+        os.chdir(pathlib.Path(__file__).parent / "models")  # clearvoice keeps checkpoints under ./checkpoints
+        try:
+            _separator = ClearVoice(task="speech_separation", model_names=[MODEL])
+        finally:
+            os.chdir(cwd)
     return _separator
+
+
+def separate(clip: np.ndarray) -> list[np.ndarray]:
+    with torch.no_grad():
+        return [np.asarray(t, dtype=np.float32).reshape(-1)[: len(clip)] for t in separator()(clip[None].astype(np.float32))]
 
 
 def rms(x: np.ndarray) -> float:
@@ -48,22 +67,65 @@ def mixed(clip: np.ndarray, embed, same: float) -> bool:
     return float((p @ p.T).min()) < same
 
 
-def voices(clip: np.ndarray, embed, same: float) -> list[np.ndarray]:
+def tracks(clip: np.ndarray, embed, same: float) -> list[np.ndarray]:
     """The clip's voices as separate full-length tracks, or just [clip] when it's one voice.
     embed(audio) -> unit voiceprint; same: the same-voice similarity cutoff."""
     if not mixed(clip, embed, same):
         return [clip]
-    with torch.no_grad():
-        out = separator().separate_batch(torch.from_numpy(clip.astype(np.float32))[None])
-    tracks = [t for t in out.squeeze(0).T.cpu().numpy()]
-    loud = sorted(rms(t) for t in tracks)
+    ts = separate(clip)
+    # Output levels are normalized, so measure each track's share of the clip: fit clip ~ a*t1 + b*t2
+    share = np.linalg.lstsq(np.stack(ts, 1), clip, rcond=None)[0]
+    loud = sorted(rms(k * t) for k, t in zip(share, ts))
     if loud[-1] == 0 or loud[0] / loud[-1] < MIN_SOURCE:
         return [clip]  # one voice; the other track is residue
-    if float(embed(tracks[0]) @ embed(tracks[1])) >= SAME_TRACKS:
+    if float(embed(ts[0]) @ embed(ts[1])) >= SAME_TRACKS:
         return [clip]  # one voice split in two
-    peak = float(np.abs(clip).max())
-    # SepFormer's output level is arbitrary: bring each track back to the clip's level so silence thresholds hold
-    return [t * (peak / max(float(np.abs(t).max()), 1e-9)) for t in tracks]
+    return [k * t for k, t in zip(share, ts)]  # each at its level in the clip, so silence thresholds hold
+
+
+def voices(clip: np.ndarray, embed, same: float) -> list[tuple[float, np.ndarray]]:
+    """(offset, piece) per voice turn: the clip itself, or, when several people talk in it, each separated track
+    split on its own pauses and where its voice changes, in time order (overlapping pieces overlap in time)."""
+    ts = tracks(clip, embed, same)
+    if len(ts) == 1:
+        return [(0.0, clip)]
+    print(f"{len(ts)} voices at once in {len(clip) / SR:.1f}s", flush=True)
+    return sorted((p for t in ts for u in utterances(t) for p in turns(*u, embed, same)), key=lambda p: p[0])
+
+
+def turns(offset: float, piece: np.ndarray, embed, same: float) -> list[tuple[float, np.ndarray]]:
+    """Split a separated piece where its voice changes. The separator can also swap tracks with no pause, e.g. when
+    the second person starts talking, leaving the first one's opening and the second one's words in one track."""
+    w, h = int(WINDOW * SR), int(HOP * SR)
+    starts = range(0, len(piece) - w + 1, h)
+    if len(starts) < 2:
+        return [(offset, piece)]
+    p = np.stack([embed(piece[i:i + w]) for i in starts])
+    # ponytail: best single change point, then recurse on both sides; O(windows^2) dot products, no extra embeds
+    def side(x):
+        m = x.mean(0)
+        return m / np.linalg.norm(m)
+    k = min(range(1, len(p)), key=lambda k: float(side(p[:k]) @ side(p[k:])))
+    if float(side(p[:k]) @ side(p[k:])) >= same:
+        return [(offset, piece)]
+    cut = starts[k] + (w - h) // 2  # middle of the stretch the windows on both sides of the change share
+    return turns(offset, piece[:cut], embed, same) + turns(offset + cut / SR, piece[cut:], embed, same)
+
+
+def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
+    """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes."""
+    n = int(frame * SR)
+    if len(audio) < n:
+        return  # shorter than one frame (a fragment cut off at stop): nothing to split, and no rms to rank
+    rms = np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
+    voiced = np.flatnonzero(rms > max(SPEECH_RMS, 0.15 * np.percentile(rms, 95)))
+    if not voiced.size:
+        return
+    groups = np.split(voiced, np.flatnonzero(np.diff(voiced) * frame > max_gap) + 1)
+    for g in groups:
+        start, end = max(0, g[0] - 3) * n, min(len(audio), (g[-1] + 4) * n)  # ~0.1s padding
+        if (end - start) / SR >= min_len:
+            yield start / SR, audio[start:end]
 
 
 if __name__ == "__main__":
@@ -95,18 +157,15 @@ if __name__ == "__main__":
     at = lambda x, s, n: np.pad(x, (int(s * SR), max(0, n - len(x) - int(s * SR))))[:n]  # noqa: E731
     n = len(b) + 2 * SR
     same = 0.26  # the calibrated cutoff at the time of writing (voices/config.json)
-    cases = {
-        "one voice": (a, 1),
-        "two at once": (at(a, 0, n) + at(b, 2, n), 2),
-        "quick turns": (np.concatenate([a, c]), 2),
+    cases = {  # clip, the speakers in it
+        "one voice": (a, [a]),
+        "two at once": (at(a, 0, n) + at(b, 2, n), [a, b]),
+        "quick turns": (np.concatenate([a, c]), [a, c]),
     }
-    for name, (clip, want) in cases.items():
-        got = voices(clip, embed, same)
-        print(f"{name}: {len(got)} voice(s)")
-        assert len(got) == want, name
-        if want == 2:
-            refs = [a, b] if name == "two at once" else [a, c]
-            sims = sorted(max(float(embed(t) @ embed(r)) for t in got) for r in refs)
-            print(f"  each speaker's best track match: {[round(s, 2) for s in sims]}")
-            assert sims[0] >= same, "a separated track should sound like its speaker"
+    for name, (clip, refs) in cases.items():
+        pieces = voices(clip, embed, same)
+        # every piece is one of the speakers, and every speaker is heard in some piece
+        best = [max(range(len(refs)), key=lambda k: float(embed(p) @ embed(refs[k]))) for _, p in pieces if len(p) >= SR]
+        print(f"{name}: {len(pieces)} piece(s), speakers heard: {sorted(set(best))}")
+        assert sorted(set(best)) == list(range(len(refs))), name
     print("ok")

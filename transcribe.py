@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mlx-whisper", "speechbrain", "torchaudio"]
+# dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
 # ///
 """Watch the chunk dir; transcribe call + mic chunks with local Whisper, drop mic echo of
 call/local (computer) audio, label each line by speaker,
@@ -34,12 +34,7 @@ SOURCE = {"call": "call", "mic": "room"}
 ECHO_OVERLAP = 0.6  # mic turn mostly overlapping speaker output = echo, not a person in the room
 ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
 SR = asr.SR
-SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
-# A frame counts as speech only above -38 dBFS. The per-chunk relative threshold alone let steady room noise
-# (measured -47 dB median, -41.7 dB max frame) through as one 15s "utterance" per chunk, and on it the Hebrew
-# model hallucinates Knesset openers ("אדוני היושב-ראש…") and "Okay. Okay.". Speech from ~0.5m measured -31 dB
-# at its 10th percentile frame, so the floor sits between the two.
-SPEECH_RMS = 0.0125
+SILENCE_RMS = overlap.SILENCE_RMS
 SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one train.py calibrates from your tags
 MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
 SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing label (else "?")
@@ -146,22 +141,6 @@ def doubt(e: np.ndarray) -> float | None:
     return round(min(abs(sims[0] - SAME_SPEAKER), margin), 3)
 
 
-def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
-    """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes."""
-    n = int(frame * SR)
-    if len(audio) < n:
-        return  # shorter than one frame (a fragment cut off at stop): nothing to split, and no rms to rank
-    rms = np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
-    voiced = np.flatnonzero(rms > max(SPEECH_RMS, 0.15 * np.percentile(rms, 95)))
-    if not voiced.size:
-        return
-    groups = np.split(voiced, np.flatnonzero(np.diff(voiced) * frame > max_gap) + 1)
-    for g in groups:
-        start, end = max(0, g[0] - 3) * n, min(len(audio), (g[-1] + 4) * n)  # ~0.1s padding
-        if (end - start) / SR >= min_len:
-            yield start / SR, audio[start:end]
-
-
 last_lang: dict[str, str] = {}  # per source; short clips reuse it
 last_text: dict[str, str] = {}  # per source; previous line, given to Whisper as context
 
@@ -204,16 +183,6 @@ def echo(t0: float, t1: float, e: np.ndarray | None) -> tuple[float, float | Non
             max(float(p @ e) for p in prints) if prints and e is not None else None)
 
 
-def voices(clip: np.ndarray) -> list[tuple[float, np.ndarray]]:
-    """(offset, piece) per voice turn: the clip itself, or, when several people talk in it, each separated
-    voice split on its own pauses, in time order (overlapping pieces overlap in time)."""
-    tracks = overlap.voices(clip, embed, SAME_SPEAKER)
-    if len(tracks) == 1:
-        return [(0.0, clip)]
-    print(f"{len(tracks)} voices at once in {len(clip) / SR:.1f}s", flush=True)
-    return sorted((p for t in tracks for p in utterances(t)), key=lambda p: p[0])
-
-
 def start_ms(f: pathlib.Path) -> int:
     return int(f.stem.split("-")[0])
 
@@ -238,8 +207,8 @@ while True:
                 covered[tag] = max(covered[tag], t_chunk + len(audio) / SR)
             if audio.size and np.sqrt(np.mean(audio**2)) > SILENCE_RMS:
                 lines, prev = [], None  # [start, speaker, text, print sum, end], merged while speaker repeats
-                turns = utterances(audio) if tag == "local" else (
-                    (u + o, p) for u, c in utterances(audio) for o, p in voices(c))
+                turns = overlap.utterances(audio) if tag == "local" else (
+                    (u + o, p) for u, c in overlap.utterances(audio) for o, p in overlap.voices(c, embed, SAME_SPEAKER))
                 for start, clip in turns:
                     t0, t1 = t_chunk + start, t_chunk + start + len(clip) / SR
                     long = len(clip) >= MIN_EMBED_SEC * SR  # shorter prints are too noisy to judge echo by

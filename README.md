@@ -27,9 +27,10 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
 - **Hears people talking at once.** In the room, on the call, or both: when voiceprints across an utterance
   disagree (two people at once, or one cutting in without a pause), `overlap.py` separates it into one track per
-  voice ([SepFormer](https://huggingface.co/speechbrain/sepformer-whamr16k), on the GPU) and each voice becomes
-  its own line with its own speaker and time, so overlapping lines overlap in the timeline too. Only such
-  utterances are separated, so a single speaker costs nothing extra. `uv run overlap.py` checks it on macOS voices.
+  voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), on the GPU), splits each track where its
+  voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
+  the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
+  `uv run overlap.py` checks it on macOS voices.
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
   Each tag runs `ozen tag`, which retrains with `train.py`: every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
@@ -115,7 +116,7 @@ On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** 
 grant both (System Settings > Privacy & Security), then press Start again. **Location Services** is asked for
 only when you first locate a place; without it, places never match and recording follows Always / Meetings. The build signs the app and recorder
 with a local self-signed certificate (created once in `~/Library/Keychains/ozen-signing.keychain-db`), so the
-permissions survive rebuilds. The Whisper, ECAPA and SepFormer models download on first use.
+permissions survive rebuilds. The Whisper and ECAPA models download on first use, and the MossFormer2 separator (~640MB) on the first overlap.
 
 ## Use
 
