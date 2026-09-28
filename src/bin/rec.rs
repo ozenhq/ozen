@@ -710,8 +710,10 @@ fn main() {
         } else if tick.is_multiple_of(5) && meeting_processes() != cap.meeting {
             cap.start_taps("meeting apps changed")
                 .unwrap_or_else(|e| fatal(e));
-        } else if cap.output.is_some() && cap.rec.age("local") > Duration::from_secs(30) {
-            cap.start_taps("no system audio for 30s")
+        // A live tap delivers silence too, so 5s without buffers means it died: opening a Bluetooth headset's mic
+        // switches its profile a moment later, which silently ended the first tap built after it.
+        } else if cap.output.is_some() && cap.rec.age("local") > Duration::from_secs(5) {
+            cap.start_taps("no system audio for 5s")
                 .unwrap_or_else(|e| fatal(e));
         }
         if cap.rec.age("mic") > Duration::from_secs(30) {
