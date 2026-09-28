@@ -4,6 +4,7 @@
 //! their side effects stay in one place and their prints never land in the protocol stream on stdout.
 use crate::fixes::read;
 use crate::meetings;
+use crate::places;
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -23,7 +24,6 @@ const LABELS: &str = "labels.json";
 const FIXES: &str = "fixes.json";
 const JUNK: &str = "junk.json"; // ids of old Whisper echoes the transcriber flags; the panel hides them
 const STATS: &str = "stats.json";
-const PLACES: &str = "places.json";
 const VOCAB: &str = "vocab.txt";
 const APP_ID: &str = "com.tupe12334.ozen"; // Ozen.app's defaults domain, where the menu bar keeps the record mode
 
@@ -246,18 +246,9 @@ fn retag(from: &str, to: &str) -> Reply {
     Ok(format!("retagged {n} lines"))
 }
 
-fn places() -> Vec<Value> {
-    fs::read(PLACES)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
-}
-
-/// Atomic like the menu bar's own save, so it never reads half a file.
-fn save_places(p: &[Value]) -> Reply {
-    let tmp = format!("{PLACES}.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(p).map_err(err)? + "\n").map_err(err)?;
-    fs::rename(&tmp, PLACES).map_err(err)?;
+/// places.json is owned by crate::places (also used by the menu bar's `ozen place`); reply with the list.
+fn save_places(p: &[places::Place]) -> Reply {
+    places::save(places::FILE, p)?;
     serde_json::to_string(p).map_err(err)
 }
 
@@ -624,7 +615,7 @@ impl Ozen {
         annotations(read_only_hint = true)
     )]
     async fn list_places(&self) -> Reply {
-        Ok(Value::from(places()).to_string())
+        serde_json::to_string(&places::load(places::FILE)).map_err(err)
     }
 
     #[tool(
@@ -634,9 +625,16 @@ impl Ozen {
         if p.label.trim().is_empty() {
             return Err("empty label".into());
         }
-        let mut all = places();
-        let new = serde_json::to_value(&p).map_err(err)?;
-        match all.iter_mut().find(|x| x["label"] == p.label.as_str()) {
+        let mut all = places::load(places::FILE);
+        let action = serde_json::to_value(&p.action).map_err(err)?;
+        let new = places::Place {
+            action: action.as_str().unwrap_or("off").into(),
+            label: p.label.clone(),
+            lat: p.lat,
+            lon: p.lon,
+            radius: p.radius,
+        };
+        match all.iter_mut().find(|x| x.label == p.label) {
             Some(old) => *old = new,
             None => all.push(new),
         }
@@ -648,9 +646,9 @@ impl Ozen {
         annotations(destructive_hint = true)
     )]
     async fn delete_place(&self, Parameters(p): Parameters<Label>) -> Reply {
-        let mut all = places();
+        let mut all = places::load(places::FILE);
         let n = all.len();
-        all.retain(|x| x["label"] != p.label.as_str());
+        all.retain(|x| x.label != p.label);
         if all.len() == n {
             return Err(format!("no place {:?}", p.label));
         }
