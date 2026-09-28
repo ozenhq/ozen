@@ -42,6 +42,7 @@ KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 # Separating people talking at once costs ~0.75x real time per such utterance (overlap.py): skip it while more than
 # this many chunks wait (two 15s windows), so it never makes the transcript fall behind; those lines stay merged
 SEPARATE_BACKLOG = int(os.environ.get("OZEN_SEPARATE_BACKLOG", "6"))
+PACE = HERE / "pace.jsonl"  # one row per chunk done: when, how long it took; the Timebar window (chunks.html) reads it
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); `ozen retrain` (src/ignore.rs) writes their prints
 IGNORES = HERE / "ignore.json"
@@ -245,8 +246,10 @@ while True:
         # Mic echo check needs the call/local audio for the same time window first.
         if tag == "mic" and min(covered.values()) < t_chunk + 14 and time.time() - f.stat().st_mtime < 40:
             continue
+        began, wrote, sec, error = time.time(), 0, 0.0, None
         try:
             audio = np.array(load_audio(str(f)))
+            sec = len(audio) / SR
             if tag in covered:
                 covered[tag] = max(covered[tag], t_chunk + len(audio) / SR)
             if audio.size and np.sqrt(np.mean(audio**2)) > SILENCE_RMS:
@@ -310,6 +313,7 @@ while True:
                         if text != heard:
                             rec["heard"] = heard  # what Whisper said; fixes learn from this, not the correction
                         lj.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                        wrote += 1
         except Exception as e:  # one bad chunk must not kill the live transcript
             if isinstance(e, OSError) and e.errno == errno.ENOSPC:
                 # Disk full: keep the audio and try again once there's room, rather than drop it.
@@ -319,7 +323,16 @@ while True:
                 time.sleep(10)
                 break
             print(f"skip {f.name}: {e}", file=sys.stderr, flush=True)
+            error = str(e)
         disk_full = False
+        try:
+            # ponytail: append-only, ~1.5 MB a day; trim it if the Timebar gets slow to open
+            with PACE.open("a") as pf:
+                pf.write(json.dumps({"ms": int(ms), "tag": tag, "sec": round(sec, 2), "done": round(time.time(), 2),
+                                     "took": round(time.time() - began, 2), "lines": wrote}
+                                    | ({"error": error} if error else {})) + "\n")
+        except OSError:
+            pass  # stats only: never stop transcribing over them
         if KEEP_AUDIO and f.exists():
             # mic/call: recent audio for comparing models (ozen compare). local: computer audio only,
             # kept apart so a missed echo can be replayed with the reference the transcriber had.

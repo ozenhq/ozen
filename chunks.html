@@ -1,0 +1,203 @@
+<!doctype html>
+<!-- Timebar: every recorded 15s chunk on a local-time axis, colored by whether the transcriber has done it, with
+     how far behind it ran and how fast it's going. Scroll or drag to move through history, pinch or ⌘-scroll to
+     zoom, Now to follow live again.
+     Host → page: show({now, chunks: [{t, tag, state, sec?, done?, took?, lines?, error?}]}) from `ozen timebar`
+     (src/timebar.rs); state is done | waiting | error | old (done before the transcriber logged when). -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #fff; --fg: #1c2024; --dim: #80838d; --grid: #e8e8ec; --done: #30a46c; --old: #a5d6b9;
+          --waiting: #f5a524; --error: #e5484d; --line: #0090ff; --now: #e5484d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1e1e1e; --fg: #edeef0; --dim: #8b8d98; --grid: #2e3135; --old: #2f5c43; }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 12px -apple-system, system-ui, sans-serif; }
+  body { padding: 10px 12px; user-select: none; }
+  #stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px 12px; margin-bottom: 8px; }
+  .stat b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--dim); }
+  #bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--dim); }
+  #bar .sp { flex: 1; }
+  button { font: inherit; }
+  .key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 3px 0 8px; vertical-align: -1px; }
+  canvas { display: block; width: 100%; cursor: grab; }
+  canvas.drag { cursor: grabbing; }
+  #tip { position: fixed; pointer-events: none; background: var(--fg); color: var(--bg); padding: 5px 7px;
+         border-radius: 5px; white-space: pre; display: none; font-variant-numeric: tabular-nums; }
+  h4 { margin: 10px 0 2px; font-weight: 600; color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="stats"></div>
+<div id="bar">
+  <span id="range"></span><span class="sp"></span>
+  <span><i class="key" style="background:var(--done)"></i>done<i class="key" style="background:var(--old)"></i>done, time unknown<i class="key" style="background:var(--waiting)"></i>waiting<i class="key" style="background:var(--error)"></i>skipped</span>
+  <button id="out">−</button><button id="in">+</button><button id="live">Now</button>
+</div>
+<canvas id="lanes" data-h="96"></canvas>
+<h4>Behind: how long after recording each chunk was done (dots), chunks waiting (line)</h4>
+<canvas id="pace" data-h="150"></canvas>
+<div id="tip"></div>
+<script>
+const LANES = [["call", "call"], ["mic", "room"], ["local", "computer"]];
+const GUTTER = 64, CHUNK = 15;
+let data = { now: Date.now() / 1000, chunks: [] };
+let span = 30 * 60, end = null;  // seconds shown; view end in epoch seconds, null = follow now
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmtT = (t, secs) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(secs && { second: "2-digit" }) });
+const fmtDur = (s) => s == null || !isFinite(s) ? "–" : s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
+const len = (c) => c.sec || CHUNK;
+const behind = (c) => c.done != null ? c.done - (c.t + len(c)) : null;
+const median = (a) => { if (!a.length) return null; a = [...a].sort((x, y) => x - y); return a[a.length >> 1]; };
+
+function show(d) { data = d; draw(); }
+function view() { const e = end ?? data.now; return [e - span, e]; }
+
+function setup(cv) {
+  const r = devicePixelRatio || 1, w = cv.clientWidth, h = +cv.dataset.h;  // CSS px; the backing store is r× that
+  if (cv.width !== w * r || cv.height !== h * r) { cv.width = w * r; cv.height = h * r; cv.style.height = h + "px"; }
+  const g = cv.getContext("2d");
+  g.setTransform(r, 0, 0, r, 0, 0);
+  g.clearRect(0, 0, w, h);
+  g.font = "11px -apple-system, system-ui, sans-serif";
+  return [g, w, h];
+}
+
+function ticks(g, w, h, a, b) {
+  const x = (t) => GUTTER + (t - a) / (b - a) * (w - GUTTER);
+  const step = [60, 300, 600, 900, 1800, 3600, 7200, 21600, 43200, 86400].find((s) => (w - GUTTER) / ((b - a) / s) > 70) || 86400;
+  const off = new Date().getTimezoneOffset() * 60;  // step on local clock boundaries
+  g.strokeStyle = css("--grid"); g.fillStyle = css("--dim"); g.textAlign = "center";
+  for (let t = Math.ceil((a - off) / step) * step + off; t <= b; t += step) {
+    g.beginPath(); g.moveTo(x(t), 0); g.lineTo(x(t), h - 14); g.stroke();
+    g.fillText(step >= 86400 ? new Date(t * 1000).toLocaleDateString() : fmtT(t), x(t), h - 3);
+  }
+  const n = x(data.now);
+  if (n <= w) { g.strokeStyle = css("--now"); g.lineWidth = 2; g.beginPath(); g.moveTo(n, 0); g.lineTo(n, h - 14); g.stroke(); g.lineWidth = 1; }
+  return x;
+}
+
+let hits = [];  // [x0, x1, y0, y1, chunk] for hover
+function drawLanes(a, b) {
+  const [g, w, h] = setup($("lanes"));
+  const x = ticks(g, w, h, a, b), lh = (h - 18) / LANES.length;
+  const color = { done: css("--done"), old: css("--old"), waiting: css("--waiting"), error: css("--error") };
+  hits = [];
+  LANES.forEach(([tag, name], i) => {
+    g.fillStyle = css("--dim"); g.textAlign = "left"; g.fillText(name, 0, i * lh + lh / 2 + 4);
+  });
+  for (const c of data.chunks) {
+    if (c.t + len(c) < a || c.t > b) continue;
+    const i = LANES.findIndex(([tag]) => tag === c.tag);
+    if (i < 0) continue;
+    const x0 = Math.max(GUTTER, x(c.t)), x1 = Math.max(x0 + 1, x(c.t + len(c)) - 0.5), y0 = i * lh + 3, y1 = (i + 1) * lh - 3;
+    g.fillStyle = color[c.state] || css("--dim");
+    g.fillRect(x0, y0, x1 - x0, y1 - y0);
+    hits.push([x0, x1, y0, y1, c]);
+  }
+}
+
+function drawPace(a, b) {
+  const [g, w, h] = setup($("pace"));
+  const x = ticks(g, w, h, a, b), top = 8, bottom = h - 18;
+  const vis = data.chunks.filter((c) => c.t >= a - 3600 && c.t <= b);
+  const lags = vis.filter((c) => c.t >= a && c.done != null).map((c) => [c, behind(c)]);
+  // Chunks waiting at time s: recorded by then, not done by then (the waiting ones still aren't).
+  const n = 160, queue = [];
+  for (let k = 0; k <= n; k++) {
+    const s = a + (b - a) * k / n;
+    if (s > data.now) break;
+    queue.push([s, vis.filter((c) => c.t + len(c) <= s && (c.state === "waiting" || (c.done != null && c.done > s))).length]);
+  }
+  const maxLag = Math.max(60, ...lags.map(([, l]) => l)), maxQ = Math.max(3, ...queue.map(([, q]) => q));
+  const y = (l) => bottom - l / maxLag * (bottom - top), yq = (q) => bottom - q / maxQ * (bottom - top);
+  g.fillStyle = css("--dim"); g.textAlign = "right";
+  g.fillText(fmtDur(maxLag), GUTTER - 6, top + 8); g.fillText("0", GUTTER - 6, bottom);
+  g.textAlign = "left"; g.fillStyle = css("--line"); g.fillText(`${maxQ} waiting`, GUTTER + 4, top + 8);
+  g.strokeStyle = css("--line"); g.beginPath();
+  queue.forEach(([s, q], k) => (k ? g.lineTo : g.moveTo).call(g, x(s), yq(q)));
+  g.stroke();
+  for (const [c, l] of lags) {
+    g.fillStyle = c.state === "error" ? css("--error") : css("--done");
+    g.beginPath(); g.arc(x(c.t + len(c)), y(Math.max(0, l)), 2, 0, 7); g.fill();
+  }
+}
+
+function stats(a, b) {
+  const vis = data.chunks.filter((c) => c.t + len(c) >= a && c.t <= b);
+  const waiting = data.chunks.filter((c) => c.state === "waiting");
+  const timed = vis.filter((c) => c.done != null);
+  const took = timed.reduce((s, c) => s + (c.took || 0), 0), audio = timed.reduce((s, c) => s + len(c), 0);
+  // Pace right now: audio finished in the last 10 minutes of wall time, per second.
+  const recent = data.chunks.filter((c) => c.done != null && c.done > data.now - 600);
+  const rate = recent.reduce((s, c) => s + len(c), 0) / 600;
+  const backlog = waiting.reduce((s, c) => s + len(c), 0);
+  const oldest = waiting.length ? Math.min(...waiting.map((c) => c.t)) : null;
+  const rows = [
+    ["recorded", vis.length, "chunks in view"],
+    ["done", vis.filter((c) => c.state === "done" || c.state === "old").length, "chunks in view"],
+    ["waiting", waiting.length, `${fmtDur(backlog)} audio`],
+    ["skipped", vis.filter((c) => c.state === "error").length, "errors in view"],
+    ["behind", fmtDur(median(timed.map(behind))), "median in view"],
+    ["speed", took ? `${(audio / took).toFixed(1)}×` : "–", "faster than real time"],
+    ["pace", rate ? `${(rate * 60 / CHUNK).toFixed(1)}/min` : "–", "done, last 10m"],
+    ["clear in", backlog ? (rate ? fmtDur(backlog / rate) : "stalled") : "caught up", oldest ? `oldest ${fmtT(oldest)}` : "nothing waiting"],
+  ];
+  $("stats").innerHTML = rows.map(([k, v, s]) => `<div class="stat" title="${s}"><span>${k}</span><b>${v}</b><span>${s}</span></div>`).join("");
+  $("range").textContent = `${new Date(a * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} – ${fmtT(b)}${end == null ? " · live" : ""}`;
+}
+
+function draw() { const [a, b] = view(); stats(a, b); drawLanes(a, b); drawPace(a, b); }
+
+function zoom(f, at) {  // at: epoch seconds to keep under the pointer
+  const [a, b] = view(), s = Math.min(14 * 86400, Math.max(120, span * f));
+  const p = at == null ? 1 : (at - a) / (b - a);
+  const e = (at ?? b) + (1 - p) * s;
+  span = s; end = e >= data.now ? null : e; draw();
+}
+function pan(dt) { const e = (end ?? data.now) + dt; end = e >= data.now ? null : e; draw(); }
+const timeAt = (cv, px) => { const [a, b] = view(); return a + (px - GUTTER) / (cv.clientWidth - GUTTER) * (b - a); };
+
+for (const cv of [$("lanes"), $("pace")]) {
+  cv.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) return zoom(Math.exp(e.deltaY / 100), timeAt(cv, e.offsetX));  // pinch arrives as ctrl+wheel
+    pan((e.deltaX || e.deltaY) / (cv.clientWidth - GUTTER) * span);
+  }, { passive: false });
+  let dragX = null;
+  cv.addEventListener("mousedown", (e) => { dragX = e.clientX; cv.classList.add("drag"); });
+  addEventListener("mouseup", () => { dragX = null; cv.classList.remove("drag"); });
+  addEventListener("mousemove", (e) => {
+    if (dragX == null) return;
+    pan(-(e.clientX - dragX) / (cv.clientWidth - GUTTER) * span); dragX = e.clientX;
+  });
+}
+$("in").onclick = () => zoom(0.5);
+$("out").onclick = () => zoom(2);
+$("live").onclick = () => { end = null; draw(); };
+addEventListener("resize", draw);
+
+$("lanes").addEventListener("mousemove", (e) => {
+  const h = hits.find(([x0, x1, y0, y1]) => e.offsetX >= x0 - 1 && e.offsetX <= x1 + 1 && e.offsetY >= y0 && e.offsetY <= y1);
+  const tip = $("tip");
+  if (!h) return tip.style.display = "none";
+  const c = h[4], name = LANES.find(([t]) => t === c.tag)[1];
+  tip.textContent = [`${name} ${fmtT(c.t, true)}–${fmtT(c.t + len(c), true)}`,
+    { done: "done", old: "done (time not logged)", waiting: "waiting", error: "skipped" }[c.state],
+    c.done != null && `done ${fmtT(c.done, true)}, ${fmtDur(behind(c))} after recording`,
+    c.took != null && `took ${c.took.toFixed(1)}s`,
+    c.lines != null && `${c.lines} line${c.lines === 1 ? "" : "s"}`,
+    c.error].filter(Boolean).join("\n");
+  tip.style.display = "block";
+  tip.style.left = Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 4) + "px";
+  tip.style.top = e.clientY + 14 + "px";
+});
+$("lanes").addEventListener("mouseleave", () => $("tip").style.display = "none");
+draw();
+</script>
+</body>
+</html>

@@ -9,6 +9,7 @@
 // Places: labeled locations that override the mode while you're there (auto record, or auto off).
 // Meetings view: pick past meetings (⌘/⇧-click for several), optionally let Kev add related ones, and start
 // Claude Code or Hermes in a folder holding their transcripts (`ozen gather`).
+// Timebar…: every recorded chunk on a local-time bar, done or still waiting, and the transcriber's pace (chunks.html).
 // Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
 import AppKit
 import CoreAudio
@@ -268,6 +269,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let zoomIn = NSButton(title: "+", target: nil, action: nil)
     let placesButton = NSButton(title: "Places…", target: nil, action: nil)
     let voicesButton = NSButton(title: "Voices…", target: nil, action: nil)
+    let timebarButton = NSButton(title: "Timebar…", target: nil, action: nil)
+    var timebarWindow: NSWindow?
+    let timebarView = WKWebView()
+    var timebarTimer: Timer?
     let location = CLLocationManager()
     var here: CLLocation?
     var placeLabel: String?  // label of the place we're in; a change re-applies auto control
@@ -302,7 +307,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         text.linkTextAttributes = [.cursor: NSCursor.pointingHand]  // links keep their own colors: names, unsure, text
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (processButton, #selector(processQueue)), (advancedButton, #selector(showAdvanced)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (voicesButton, #selector(showVoices)), (quitButton, #selector(quitOzen))] {
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (processButton, #selector(processQueue)), (advancedButton, #selector(showAdvanced)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (voicesButton, #selector(showVoices)), (timebarButton, #selector(showTimebar)), (quitButton, #selector(quitOzen))] {
             b.target = self
             b.action = cmd
             b.bezelStyle = .rounded
@@ -327,7 +332,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         askButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI")  // the usual mark for AI features
         askButton.imagePosition = .imageLeading
         askButton.toolTip = "Start Claude Code or Hermes on the meeting happening now (ozen live)"
-        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, voicesButton, reviewButton, startButton, pauseButton, stopButton, processButton, advancedButton, quitButton])
+        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, voicesButton, timebarButton, reviewButton, startButton, pauseButton, stopButton, processButton, advancedButton, quitButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         viewControl.target = self
         viewControl.action = #selector(switchView)
@@ -420,6 +425,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let voicesItem = NSMenuItem(title: "Voices…", action: #selector(showVoices), keyEquivalent: "")
             voicesItem.target = self
             menu.addItem(voicesItem)
+            let timebarItem = NSMenuItem(title: "Timebar…", action: #selector(showTimebar), keyEquivalent: "")
+            timebarItem.target = self
+            menu.addItem(timebarItem)
             let advancedItem = NSMenuItem(title: "Advanced…", action: #selector(showAdvanced), keyEquivalent: "")
             advancedItem.target = self
             menu.addItem(advancedItem)
@@ -824,6 +832,34 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         jump(to: id)
     }
 
+    @objc func showTimebar() {
+        if timebarWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 420), styleMask: [.titled, .closable, .resizable],
+                             backing: .buffered, defer: false)
+            w.title = "Ozen Timebar"
+            w.isReleasedWhenClosed = false
+            w.contentView = timebarView
+            timebarView.navigationDelegate = self
+            // Bundled by `ozen app`; a checkout run (Ozen [dir]) falls back to the repo copy.
+            let page = Bundle.main.url(forResource: "chunks", withExtension: "html") ?? dir.appendingPathComponent("chunks.html")
+            timebarView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
+            timebarWindow = w
+            w.center()
+        }
+        timebarWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        refreshTimebar()
+        timebarTimer?.invalidate()
+        timebarTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] t in
+            guard let self, self.timebarWindow?.isVisible == true else { return t.invalidate() }  // closed: stop polling
+            self.refreshTimebar()
+        }
+    }
+
+    func refreshTimebar() {
+        ozen("timebar") { self.timebarView.evaluateJavaScript("show(\($0))") }  // before the page loads this is a no-op
+    }
+
     @objc func showPlaces() {
         if placesWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 240), styleMask: [.titled, .closable],
@@ -974,7 +1010,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         }, fit: key != "radius")
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { showPlacesOnMap() }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webView === timebarView ? refreshTimebar() : showPlacesOnMap()
+    }
 
     func editPlaces(_ change: (inout [Place]) -> Void, fit: Bool = true) {
         var places = loadPlaces()
