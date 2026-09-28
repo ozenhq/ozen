@@ -14,7 +14,6 @@ import subprocess
 import threading
 
 import numpy as np
-import torch
 
 SR = 16000
 SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
@@ -26,7 +25,6 @@ SPEECH_RMS = 0.0125
 # A louder room (fans spinning up under load) moved that noise to -38 dB median, right on SPEECH_RMS, so over half
 # its frames passed and every 15s mic chunk came back as "Okay.". Speech must also be 6 dB over the noise floor.
 NOISE_MARGIN = 2.0
-MODEL = "MossFormer2_SS_16K"  # ~640MB, downloaded to models/ by preload()
 WINDOW, HOP = 1.5, 0.75  # seconds; voiceprints this short are noisy, but only decide whether to try separating
 # Both checks measured on real voices (LibriSpeech mixes, and pairs played into a room and recorded by ozen):
 MIN_SOURCE = 0.25  # the quieter track's share of the clip vs the louder one's, below which it's residue of one voice
@@ -62,19 +60,18 @@ def embedder():
 
 
 def separator():
+    """`ozen separate` (src/separate.rs: ClearVoice's MossFormer2 ported to Rust, on the GPU). It decodes in 2s windows
+    whose track order can flip (turns() splits those). Decoding whole clips keeps the order but merged more real room
+    pairs into one voice: word recall 0.67 vs 0.73 on the room set."""
     global _separator
-    if _separator is None:  # runs on the GPU (MPS) when there is one
-        from clearvoice.network_wrapper import network_wrapper
-        from clearvoice.networks import CLS_MossFormer2_SS_16K
-        # Built by hand rather than through ClearVoice(), whose config keeps checkpoints under a cwd-relative path
-        w = network_wrapper()
-        w.model_name = MODEL
-        w.load_args_ss()
-        w.args.task, w.args.network = "speech_separation", MODEL
-        w.args.checkpoint_dir = str(pathlib.Path(__file__).parent / "models/checkpoints" / MODEL)
-        # Its default decodes in 2s windows whose track order can flip (turns() splits those). Decoding whole clips
-        # keeps the order but merged more real room pairs into one voice: word recall 0.67 vs 0.73 on the room set
-        _separator = CLS_MossFormer2_SS_16K(w.args)
+    if _separator is None:
+        p = subprocess.Popen([str(pathlib.Path(__file__).parent / "target/release/ozen"), "separate"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        # the first start downloads the weights (~640MB)
+        if not select.select([p.stdout], [], [], 3600)[0] or p.stdout.readline() != b"ozen separate 1\n":
+            p.kill()  # an older ozen prints its usage instead
+            raise RuntimeError("ozen separate unavailable; rebuild target/release/ozen from this checkout")
+        _separator = p
     return _separator
 
 
@@ -90,9 +87,16 @@ def preload() -> None:
 
 
 def separate(clip: np.ndarray) -> list[np.ndarray]:
-    with torch.no_grad():
-        out = separator().decode_data(clip[None].astype(np.float32))
-    return [np.asarray(t, dtype=np.float32).reshape(-1)[: len(clip)] for t in out]
+    p, x = separator(), np.ascontiguousarray(clip, dtype="<f4")
+    try:
+        p.stdin.write(struct.pack("<I", len(x)) + x.tobytes())
+        p.stdin.flush()
+        out = np.frombuffer(p.stdout.read(8 * len(x)), "<f4")
+    except OSError:  # it exited: broken pipe
+        out = np.zeros(0, "<f4")
+    if len(out) != 2 * len(x):  # SystemExit passes the per-chunk handler: ozen restarts the transcriber
+        raise SystemExit("ozen separate stopped")
+    return [out[: len(x)].copy(), out[len(x):].copy()]
 
 
 def rms(x: np.ndarray) -> float:
