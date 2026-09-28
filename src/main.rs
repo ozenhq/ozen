@@ -1,5 +1,6 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
 mod compare;
+mod dmg;
 mod ecapa;
 mod eval;
 mod fixes;
@@ -71,6 +72,7 @@ ozen control: start | pause | resume | stop | record | process | status | health
                 start that agent (or Finder) in a folder written by gather or live
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)
+  dmg APP ICNS OUT  pack APP (a built Ozen.app) into the release DMG at OUT, ICNS as its volume icon
   mcp           MCP server on stdio: agents read and edit meetings, lines, speakers, places and vocab";
 
 const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
@@ -519,6 +521,7 @@ fn retrain() {
 }
 
 fn main() {
+    let cwd = std::env::current_dir().unwrap_or_default();
     // The repo is where the sources, chunks and logs live, wherever this is called from.
     std::env::set_current_dir(root()).expect("cd to the ozen checkout");
     let app = format!("{}/Applications/Ozen.app", home());
@@ -969,6 +972,24 @@ fn main() {
                 eprintln!("uv sync failed: the transcriber will set up its env on first start");
             }
             drop_script_envs();
+        }
+        "dmg" => {
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let [app, icon, out] = &a[..] else {
+                eprintln!("usage: ozen dmg <Ozen.app> <volume.icns> <out.dmg>");
+                exit(2);
+            };
+            // relative paths are the caller's, not the checkout main() moved into
+            let abs = |p: &str| {
+                std::path::absolute(Path::new(&cwd).join(p))
+                    .unwrap()
+                    .display()
+                    .to_string()
+            };
+            if let Err(e) = dmg::build(&abs(app), &abs(icon), &abs(out)) {
+                eprintln!("dmg: {e}");
+                exit(1);
+            }
         }
         "bar" => {
             if !build_app(&app) {
