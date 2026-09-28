@@ -1,0 +1,23 @@
+---
+source: src/panel.rs
+expression: "controls(\"stopped\", true, 2, false)"
+---
+{
+  "pause": {
+    "enabled": false,
+    "hidden": true
+  },
+  "process": {
+    "enabled": true,
+    "hidden": false,
+    "title": "Process 2"
+  },
+  "queued": 2,
+  "start": {
+    "enabled": true,
+    "title": "Record"
+  },
+  "stop": {
+    "enabled": false
+  }
+}

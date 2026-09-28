@@ -1,0 +1,57 @@
+---
+source: tests/cli.rs
+expression: "ozen(&dir, &[\"voices\"])"
+---
+[
+  {
+    "kind": "person",
+    "lines": 1,
+    "name": "Dana",
+    "recent": [
+      {
+        "id": "dana",
+        "t": 1.0,
+        "text": "said dana"
+      }
+    ]
+  },
+  {
+    "ids": [
+      "new"
+    ],
+    "kind": "unnamed",
+    "lines": 1,
+    "name": "S4",
+    "recent": [
+      {
+        "id": "new",
+        "t": 4.0,
+        "text": "said new"
+      }
+    ]
+  },
+  {
+    "kind": "ignored",
+    "lines": 1,
+    "name": "Ignored",
+    "recent": [
+      {
+        "id": "tv",
+        "t": 2.0,
+        "text": "said tv"
+      }
+    ]
+  },
+  {
+    "kind": "ignored",
+    "lines": 1,
+    "name": "Ignored 2",
+    "recent": [
+      {
+        "id": "radio",
+        "t": 3.0,
+        "text": "said radio"
+      }
+    ]
+  }
+]

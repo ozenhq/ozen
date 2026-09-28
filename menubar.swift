@@ -55,6 +55,18 @@ func json(_ name: String) -> Any? {
     (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
 }
 
+/// What the ozen CLI decides for the panel (src/panel.rs), as JSON. Blocks: these commands only read a few files.
+func cli(_ args: String...) -> Any? {
+    let p = Process(), pipe = Pipe()
+    p.executableURL = dir.appendingPathComponent("target/release/ozen")
+    p.arguments = args
+    p.standardOutput = pipe
+    guard (try? p.run()) != nil else { return nil }
+    let out = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return try? JSONSerialization.jsonObject(with: out)
+}
+
 // Meeting apps by bundle id prefix. Chrome covers Google Meet; FaceTime calls capture via avconferenced.
 let meetingApps = [("us.zoom", "Zoom"), ("com.google.Chrome", "Chrome"), ("com.microsoft.teams", "Teams"),
                    ("com.tinyspeck.slackmacgap", "Slack"), ("com.apple.FaceTime", "FaceTime"),
@@ -280,11 +292,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var split: Bool { UserDefaults.standard.bool(forKey: "split") }
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
-    var reviewQueue: [String] = []  // untagged unsure line ids, most uncertain first
+    var reviewQueue: [(id: String, until: Double)] = []  // `ozen unsure`: most uncertain first, and when each ages out
     var review: [String] = []  // the queue minus lines too old to remember who said them
-    let reviewMaxAge: Double = 600  // seconds
-    let unsureDoubt = 0.08  // src/train.rs UNSURE: this close to the threshold, or to a second person
-    var shown: [String: (spk: String, t: Double, run: Int?)] = [:]  // line id -> speaker as shown in the transcript
+    var shown: Set<String> = []  // line ids in the transcript
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
     var lastMeeting: Date?, meetingName: String?
@@ -572,7 +582,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let meetingsOnly = place.map { $0.action == "meetings" } ?? (mode == "meetings")
         let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + (place.map { " · \($0.label)" } ?? "")
         // Anything but recording says so first, so a paused, finishing or waiting state never reads as recording.
-        let queued = queuedChunks()
+        let controls = cli("controls", s, split ? "split" : "") as? [String: Any] ?? [:]
+        let queued = controls["queued"] as? Int ?? 0
+        let button = { (name: String) in controls[name] as? [String: Any] ?? [:] }
         let processing = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".processing").path)
         let recordOnly = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".record-only").path)
         status.stringValue = s == "recording" ? "● Recording\(meeting)" + (recordOnly && !processing ? " · not transcribing" : "")
@@ -581,20 +593,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
                 ?? (meetingsOnly ? "waiting for a meeting" : "stopped") + (place.map { " · \($0.label)" } ?? ""))
         item.button?.toolTip = "Ozen: " + status.stringValue
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
-        startButton.title = s == "paused" ? "Resume" : split ? "Record" : "Start"
-        startButton.isEnabled = s == "stopped" || s == "paused" || s == "processing"
-        pauseButton.isEnabled = s == "recording"
-        pauseButton.isHidden = split  // a recording without a transcriber has nothing to keep loaded: Stop is the same
-        stopButton.isEnabled = s == "recording" || s == "paused"
-        processButton.isHidden = !split
-        processButton.title = processing ? "Stop processing" : queued > 0 ? "Process \(queued)" : "Process"
-        processButton.isEnabled = processing || queued > 0
-    }
-
-    /// Recorded audio chunks the transcriber hasn't turned into lines yet.
-    func queuedChunks() -> Int {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("chunks").path)) ?? []
-        return names.filter { $0.hasSuffix(".wav") }.count
+        for (b, name) in [(startButton, "start"), (pauseButton, "pause"), (stopButton, "stop"), (processButton, "process")] {
+            let c = button(name)
+            if let title = c["title"] as? String { b.title = title }
+            b.isEnabled = c["enabled"] as? Bool ?? false
+            b.isHidden = c["hidden"] as? Bool ?? false
+        }
     }
 
     func control(_ cmd: String, optimistic: String) {
@@ -1251,16 +1255,12 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let tags = (json("tags.json") as? [String: String] ?? [:]).merging(pending) { $1 }
         let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
         let fixes = (json("fixes.json") as? [String: String] ?? [:]).merging(pendingFixes) { $1 }
-        let threshold = (json("stats.json") as? [String: Any])?["threshold"] as? Double
-        // How unsure a line is, nil when sure: the last retrain's verdict once there is one, before that the
-        // transcriber's own (same formula), so new lines reach Review without waiting for the next tag.
-        func unsureBy(_ l: Line) -> Double? {
-            guard let g = labels[l.id] else { return l.doubt.flatMap { $0 < unsureDoubt ? $0 : nil } }
-            guard g["unsure"] as? Bool == true else { return nil }
-            guard let sim = g["sim"] as? Double, let thr = threshold else { return 0 }
-            return min(abs(sim - thr), g["margin"] as? Double ?? 0)
+        // Untagged lines ozen isn't sure who said, most uncertain first (src/panel.rs).
+        let unsure = (cli("unsure") as? [[String: Any]] ?? []).compactMap { u -> (id: String, until: Double)? in
+            guard let id = u["id"] as? String, pending[id]?.isEmpty ?? true else { return nil }
+            return (id, u["until"] as? Double ?? 0)
         }
-        var queue: [(Double, String)] = []
+        let isUnsure = Set(unsure.map(\.id))
         let out = NSMutableAttributedString()
         headerRanges = [:]
         let history = lines(limit: 5000)  // timeline spans more than the transcript shows
@@ -1271,20 +1271,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let guess = labels[l.id]
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             return isIgnored(speaker) ? nil : Segment(id: l.id, t: l.t, d: l.d, speaker: speaker,
-                                                        text: l.text, unsure: !tagged && unsureBy(l) != nil)
+                                                        text: l.text, unsure: !tagged && isUnsure.contains(l.id))
         }
-        shown = [:]
+        shown = []
         if atEnd { scrollTimelineToEnd() }
         if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Press Start.", attributes: [.foregroundColor: NSColor.secondaryLabelColor])) }
         for l in all {
             let tagged = !(tags[l.id] ?? "").isEmpty
             let guess = labels[l.id]
-            let doubt = tagged ? nil : unsureBy(l)
-            let unsure = doubt != nil
-            if let doubt { queue.append((doubt, l.id)) }
+            let unsure = !tagged && isUnsure.contains(l.id)
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             let said = fixes[l.id].flatMap { $0.isEmpty ? nil : $0 } ?? l.text
-            shown[l.id] = (speaker, l.t, l.run)
+            shown.insert(l.id)
             let ignored = isIgnored(speaker)
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
@@ -1323,7 +1321,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         if let first = s["accuracy_first"] as? Double, let now = s["accuracy"] as? Double, first != now {
             acc += " (was \(pct(first)))"
         }
-        reviewQueue = queue.sorted { $0.0 < $1.0 }.map(\.1)
+        reviewQueue = unsure.filter { shown.contains($0.id) }
         refreshReview()
         let ignoredLines = (s["ignored"] as? Int ?? 0) > 0 ? " · \(s["ignored"]!) ignored" : ""
         footer.stringValue = "  \(acc) · \(tagged) tagged\(ignoredLines) · orange ? = unsure, tag it to teach ozen · click text to fix it"
@@ -1331,8 +1329,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     // Only ask about recent lines: after 10 minutes nobody remembers who said what.
     func refreshReview() {
-        let cutoff = Date().timeIntervalSince1970 - reviewMaxAge
-        review = reviewQueue.filter { (shown[$0]?.t ?? 0) >= cutoff }
+        let now = Date().timeIntervalSince1970
+        review = reviewQueue.filter { $0.until >= now }.map(\.id)
         reviewButton.title = review.isEmpty ? "Review" : "Review \(review.count)"
         reviewButton.isEnabled = !review.isEmpty
     }
@@ -1362,56 +1360,25 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     func tagMenu(for id: String) -> NSMenu {
         let menu = NSMenu(title: "Who said this?")
-        for name in knownNames() {
-            let mi = NSMenuItem(title: name, action: #selector(pick(_:)), keyEquivalent: "")
-            mi.target = self
-            mi.representedObject = [id, name]
-            menu.addItem(mi)
+        // `ozen tag-menu` (src/panel.rs) decides the entries: people, a new person, ignoring (a new voice, one
+        // already ignored, or every line of this run's unnamed speaker) and clearing the tag.
+        for e in cli("tag-menu", id) as? [[String: Any]] ?? [] {
+            let title = e["title"] as? String ?? "", arg = e["arg"]
+            switch e["action"] as? String {
+            case "separator": menu.addItem(.separator()); continue
+            case "new": menu.addItem(menuItem(title, #selector(newPerson(_:)), id))
+            case "ignore": menu.addItem(menuItem(title, #selector(ignoreAll(_:)), arg as? [String] ?? [id]))
+            default: menu.addItem(menuItem(title, #selector(pick(_:)), [id, arg as? String ?? ""]))
+            }
         }
-        if !menu.items.isEmpty { menu.addItem(.separator()) }
-        let new = NSMenuItem(title: "New person…", action: #selector(newPerson(_:)), keyEquivalent: "")
-        new.target = self
-        new.representedObject = id
-        menu.addItem(new)
-        // Not a person (a video playing nearby): ozen stops transcribing voices like this one. A new ignored
-        // voice by default; one already ignored if it's that same video again.
-        let ignore = NSMenuItem(title: "Ignore this voice", action: #selector(ignoreAll(_:)), keyEquivalent: "")
-        ignore.target = self
-        ignore.representedObject = [id]
-        menu.addItem(ignore)
-        for name in Set((json("tags.json") as? [String: String] ?? [:]).values.filter(isIgnored)).sorted() {
-            let same = NSMenuItem(title: "Same voice as \(name)", action: #selector(pick(_:)), keyEquivalent: "")
-            same.target = self
-            same.representedObject = [id, name]
-            same.indentationLevel = 1
-            menu.addItem(same)
-        }
-        // Only session labels: a named person (you) is never one click from being ignored.
-        if let (spk, t, run) = shown[id], spk.range(of: "^S[0-9]+$", options: .regularExpression) != nil {
-            // S1, S2... restart with the transcriber, so only that run's lines are the same voice
-            // (older lines have no run: those within an hour).
-            let same = shown.filter { l in l.value.spk == spk && (run != nil ? l.value.run == run : abs(l.value.t - t) < 3600) }.map(\.key)
-            let all = NSMenuItem(title: "Ignore all \(same.count) line\(same.count == 1 ? "" : "s") by \(spk)", action: #selector(ignoreAll(_:)), keyEquivalent: "")
-            all.target = self
-            all.representedObject = same
-            menu.addItem(all)
-        }
-        menu.addItem(.separator())
-        let clear = NSMenuItem(title: "Clear tag", action: #selector(pick(_:)), keyEquivalent: "")
-        clear.target = self
-        clear.representedObject = [id, ""]
-        menu.addItem(clear)
         return menu
     }
 
-    func knownNames() -> [String] {
-        let registry = (try? FileManager.default.contentsOfDirectory(at: dir.appendingPathComponent("voices/voices"),
-                                                                     includingPropertiesForKeys: nil)) ?? []
-        let fromRegistry = registry.compactMap { f in
-            (try? Data(contentsOf: f)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["name"] as? String
-        }
-        let fromTags = (json("tags.json") as? [String: String] ?? [:]).values.filter { !$0.isEmpty && !isIgnored($0) }
-        return Array(Set(fromRegistry + fromTags)).sorted()
+    func menuItem(_ title: String, _ action: Selector, _ object: Any) -> NSMenuItem {
+        let mi = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        mi.target = self
+        mi.representedObject = object
+        return mi
     }
 
     @objc func newPerson(_ sender: NSMenuItem) {

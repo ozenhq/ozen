@@ -1,0 +1,62 @@
+---
+source: src/panel.rs
+expression: menu
+---
+[
+  {
+    "action": "tag",
+    "arg": "Avi",
+    "title": "Avi"
+  },
+  {
+    "action": "tag",
+    "arg": "Dana",
+    "title": "Dana"
+  },
+  {
+    "action": "separator",
+    "arg": null,
+    "title": ""
+  },
+  {
+    "action": "new",
+    "arg": null,
+    "title": "New person…"
+  },
+  {
+    "action": "ignore",
+    "arg": [
+      "a"
+    ],
+    "title": "Ignore this voice"
+  },
+  {
+    "action": "tag",
+    "arg": "Ignored",
+    "title": "Same voice as Ignored"
+  },
+  {
+    "action": "tag",
+    "arg": "Ignored 2",
+    "title": "Same voice as Ignored 2"
+  },
+  {
+    "action": "ignore",
+    "arg": [
+      "a",
+      "b",
+      "e"
+    ],
+    "title": "Ignore all 3 lines by S2"
+  },
+  {
+    "action": "separator",
+    "arg": null,
+    "title": ""
+  },
+  {
+    "action": "tag",
+    "arg": "",
+    "title": "Clear tag"
+  }
+]
