@@ -161,7 +161,9 @@ impl Ecapa {
         // As one matmul (Accelerate): [out, in*k] x [in*k, T], rows ordered like the weight's (channel, tap).
         let (out, inp, k) = w.dims3()?;
         let t = x.dim(2)? - dilation * (k - 1);
-        let taps: Vec<Tensor> = (0..k).map(|j| x.narrow(2, j * dilation, t)).collect::<Result<_>>()?;
+        let taps: Vec<Tensor> = (0..k)
+            .map(|j| x.narrow(2, j * dilation, t))
+            .collect::<Result<_>>()?;
         let cols = Tensor::stack(&taps, 2)?.reshape((inp * k, t))?;
         let y = w.reshape((out, inp * k))?.matmul(&cols)?.unsqueeze(0)?;
         y.broadcast_add(&self.get(&format!("{p}.bias"))?.reshape((1, (), 1))?)
