@@ -187,6 +187,21 @@ def echo(t0: float, t1: float, e: np.ndarray | None) -> tuple[float, float | Non
             max(float(p @ e) for p in prints) if prints and e is not None else None)
 
 
+floors: dict[str, list[float]] = {}  # per source: quietest-frame level of recent chunks
+
+
+def noise_floor(tag: str, audio: np.ndarray) -> float:
+    """The source's background level: median over its last 20 chunks of each chunk's 10th-percentile frame.
+    Pauses between words keep that percentile at room level even in a busy chunk, and the median rides out
+    chunks that are speech from end to end."""
+    rms = overlap.frame_rms(audio)
+    hist = floors.setdefault(tag, [])
+    if rms.size:
+        hist.append(float(np.percentile(rms, 10)))
+        del hist[:-20]
+    return float(np.median(hist)) if hist else 0.0
+
+
 def start_ms(f: pathlib.Path) -> int:
     return int(f.stem.split("-")[0])
 
@@ -212,7 +227,7 @@ while True:
             if audio.size and np.sqrt(np.mean(audio**2)) > SILENCE_RMS:
                 lines, prev = [], None  # [start, speaker, text, print sum, end], merged while speaker repeats
                 separate = tag != "local" and sum(1 for _ in chunks.glob("*.wav")) <= SEPARATE_BACKLOG
-                turns = ((u + o, p) for u, c in overlap.utterances(audio)
+                turns = ((u + o, p) for u, c in overlap.utterances(audio, noise_floor(tag, audio))
                          for o, p in (overlap.voices(c, embed, SAME_SPEAKER) if separate else [(0.0, c)]))
                 for start, clip in turns:
                     t0, t1 = t_chunk + start, t_chunk + start + len(clip) / SR
