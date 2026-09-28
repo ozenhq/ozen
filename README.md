@@ -32,7 +32,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
   `uv run overlap.py` checks it on macOS voices.
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
-  Each tag runs `ozen tag`, which retrains with `train.py`: every person's voiceprint becomes the average of all lines tagged as them
+  Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
   prints, and the live transcriber reloads them.
 - **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
@@ -140,7 +140,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `uv run eval.py [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. `OZEN_KEEP_AUDIO=0` keeps none |
 | `./check-review.sh` | Check what Review asks about: unsure lines from the last 10 minutes, most uncertain first (opens the bar app's panel on sample lines) |
-| `uv run train.py show [N]` | Last N lines with tag-corrected speakers |
+| `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 
 ## Tuning how fixes teach
 

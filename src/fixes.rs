@@ -40,7 +40,7 @@ pub(crate) fn write(path: &str, v: &Value) {
         .unwrap_or_else(|e| panic!("write {path}: {e}"));
 }
 
-/// Transcript lines in file order (only lines with a voiceprint, like train.py).
+/// Transcript lines in file order (only lines with a voiceprint, like src/train.rs).
 pub(crate) fn lines() -> Vec<Map<String, Value>> {
     fs::read_to_string(LINES)
         .unwrap_or_default()

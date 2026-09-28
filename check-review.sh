@@ -1,6 +1,6 @@
 #!/bin/sh
 # Check what Review asks about: builds menubar.swift without its app.run() block and opens its panel on sample
-# lines (no recording). Unsure lines queue most uncertain first, whether train.py labeled them or only the
+# lines (no recording). Unsure lines queue most uncertain first, whether a retrain labeled them or only the
 # transcriber has seen them, and only for the last 10 minutes.
 set -e
 cd "$(dirname "$0")"
@@ -31,8 +31,8 @@ line() { echo "{\"id\": \"$1\", \"t\": $(($now - $2)), \"spk\": \"S1\", \"src\":
     line edge 597 ', "doubt": 0.05'   # unsure, ages out during the check
     line new 30 ', "doubt": 0.02'     # unsure, not retrained yet
     line sure 20 ', "doubt": 0.3'     # the transcriber is sure
-    line labeled 10 ''                # train.py's verdict: unsure (0.4 - 0.37 = 0.03)
-    line relabeled 5 ', "doubt": 0.01' # train.py since found it sure: its verdict wins
+    line labeled 10 ''                # retrain's verdict: unsure (0.4 - 0.37 = 0.03)
+    line relabeled 5 ', "doubt": 0.01' # a retrain since found it sure: its verdict wins
 } > "$tmp/lines.jsonl"
 echo '{"labeled": {"spk": "Dana", "sim": 0.37, "margin": 0.2, "unsure": true},
        "relabeled": {"spk": "Dana", "sim": 0.9, "margin": 0.5, "unsure": false}}' > "$tmp/labels.json"

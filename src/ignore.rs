@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 
-pub const IGNORE: &str = "Ignored"; // reserved tag, same in transcribe.py, train.py and menubar.swift
+pub const IGNORE: &str = "Ignored"; // reserved tag, same in transcribe.py, src/train.rs and menubar.swift
 /// Ignoring needs the same-voice threshold plus this: dropping someone's speech costs more than keeping noise.
 /// At the bare threshold a different voice (0.43) was dropped; the ignored voice itself scores 0.87-0.90.
 pub const MARGIN: f32 = 0.1; // same as transcribe.py
@@ -17,9 +17,9 @@ const TAGS: &str = "tags.json";
 const LABELS: &str = "labels.json";
 const STATS: &str = "stats.json";
 const IGNORES: &str = "ignore.json";
-const REGISTRY: &str = "voices"; // clone of the voices registry; train.py writes the people's prints here
+const REGISTRY: &str = "voices"; // clone of the voices registry; src/train.rs writes the people's prints here
 const ECAPA: &str = "speechbrain/spkrec-ecapa-voxceleb";
-const DEFAULT_THRESHOLD: f32 = 0.4; // train.py's until it has calibrated one
+const DEFAULT_THRESHOLD: f32 = 0.4; // src/train.rs's until it has calibrated one
 
 /// Tag `ids` as `name` (empty clears) in tags.json, keeping every other tag.
 pub fn tag(ids: &[String], name: &str) {
@@ -67,7 +67,7 @@ fn matches(
         .collect()
 }
 
-/// People's prints and the same-voice threshold, as train.py last wrote them to the registry.
+/// People's prints and the same-voice threshold, as src/train.rs last wrote them to the registry.
 fn registry() -> (Vec<Vec<f32>>, f32) {
     let people = fs::read_dir(format!("{REGISTRY}/voices"))
         .into_iter()
@@ -85,11 +85,11 @@ fn registry() -> (Vec<Vec<f32>>, f32) {
     (people, threshold)
 }
 
-/// Run after train.py retrains: rewrite ignore.json and label lines that sound like an ignored voice (never
+/// Run after src/train.rs retrains: rewrite ignore.json and label lines that sound like an ignored voice (never
 /// unsure, so Review skips them).
 pub fn apply() {
     let tags = read(TAGS);
-    // Keyed by id like train.py: a line written twice (two transcribers on one chunk) counts once.
+    // Keyed by id like src/train.rs: a line written twice (two transcribers on one chunk) counts once.
     let lines: Vec<(String, Vec<f32>)> = lines()
         .into_iter()
         .filter_map(|r| Some((r.get("id")?.as_str()?.to_string(), unit(r.get("e")?)?)))
