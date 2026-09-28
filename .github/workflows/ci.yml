@@ -1,8 +1,10 @@
 name: ci
+# Runs on pull requests only. A squash merge lands code that already passed on its PR head, so re-running
+# on every push to main billed a third of this private repo's macOS minutes (10x rate) for no new signal.
+# Check main by hand from the Actions tab when needed.
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
