@@ -3,8 +3,8 @@
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
 // the voiceprints (src/train.rs), so labels improve the more you tag. Click a line's text to fix what was
 // said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
-// Tag a voice "Ignored" (a video playing nearby) and ozen stops transcribing it; ignored lines show
-// dimmed and leave the timeline.
+// Ignore a voice (a video playing nearby) and ozen stops transcribing it; ignored lines show dimmed and leave
+// the timeline. Each ignore is its own voice (Ignored, Ignored 2...), so you can stop ignoring one alone.
 // Record mode: Always, or Meetings (auto start/stop while a meeting app is using the microphone).
 // Places: labeled locations that override the mode while you're there (auto record, or auto off).
 // Meetings view: pick past meetings (⌘/⇧-click for several), optionally let Kev add related ones, and start
@@ -48,6 +48,8 @@ if args.isEmpty, let res = Bundle.main.resourceURL {
 
 let maxLines = 400
 let ignoreTag = "Ignored"  // reserved tag, same as src/ignore.rs / transcribe.py
+/// ignoreTag or one of its numbered voices ("Ignored 2"), same as src/ignore.rs is_ignored.
+func isIgnored(_ name: String) -> Bool { name.range(of: "^Ignored( [0-9]+)?$", options: .regularExpression) != nil }
 
 func json(_ name: String) -> Any? {
     (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
@@ -764,7 +766,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let name = v["name"] as? String ?? "?", kind = v["kind"] as? String ?? ""
             let n = v["lines"] as? Int ?? 0
             // Isolate names and lines: a Hebrew name would otherwise reorder the whole row ("lines 1 · נתן").
-            let shown = name == ignoreTag ? "Ignored voices" : "\u{2068}\(name)\u{2069}"
+            let shown = "\u{2068}\(name)\u{2069}"
             let title = NSTextField(labelWithString: "\(shown) · \(n) line\(n == 1 ? "" : "s")\(hints[kind] ?? "")")
             title.font = .boldSystemFont(ofSize: 13)
             let actions: [(String, Selector)] = kind == "person" ? [("Rename…", #selector(renameVoice(_:))), ("Ignore…", #selector(ignoreVoice(_:))), ("Forget…", #selector(forgetVoice(_:)))]
@@ -832,7 +834,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let to = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !to.isEmpty, to != name, to != ignoreTag else { return }
+        guard !to.isEmpty, to != name, !isIgnored(to) else { return }
         if people.contains(to), !confirm("Merge \(name) into \(to)?", "All of \(name)'s lines become \(to)'s, and one voiceprint is built from both.", "Merge") { return }
         changeVoices(unnamed ? ["name", to] + (v["ids"] as? [String] ?? []) : ["rename", name, to])
     }
@@ -846,8 +848,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     @objc func forgetVoice(_ sender: NSButton) {
         guard let v = voice(sender), let name = v["name"] as? String else { return }
-        let ignored = name == ignoreTag
-        guard confirm(ignored ? "Stop ignoring every ignored voice?" : "Forget \(name) on this Mac?",
+        let ignored = isIgnored(name)
+        guard confirm(ignored ? "Stop ignoring \(name)?" : "Forget \(name) on this Mac?",
                       ignored ? "Their speech is transcribed again from now on." : "Clears every tag of \(name) here. Other Macs keep theirs.",
                       ignored ? "Stop ignoring" : "Forget") else { return }
         changeVoices(["forget", name])
@@ -1268,7 +1270,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let tagged = !(tags[l.id] ?? "").isEmpty
             let guess = labels[l.id]
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
-            return speaker == ignoreTag ? nil : Segment(id: l.id, t: l.t, d: l.d, speaker: speaker,
+            return isIgnored(speaker) ? nil : Segment(id: l.id, t: l.t, d: l.d, speaker: speaker,
                                                         text: l.text, unsure: !tagged && unsureBy(l) != nil)
         }
         shown = [:]
@@ -1283,7 +1285,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
             let said = fixes[l.id].flatMap { $0.isEmpty ? nil : $0 } ?? l.text
             shown[l.id] = (speaker, l.t, l.run)
-            let ignored = speaker == ignoreTag
+            let ignored = isIgnored(speaker)
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
             if said.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
@@ -1371,11 +1373,19 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         new.target = self
         new.representedObject = id
         menu.addItem(new)
-        // Not a person (a video playing nearby): ozen stops transcribing voices like this one.
-        let ignore = NSMenuItem(title: "Ignore this voice", action: #selector(pick(_:)), keyEquivalent: "")
+        // Not a person (a video playing nearby): ozen stops transcribing voices like this one. A new ignored
+        // voice by default; one already ignored if it's that same video again.
+        let ignore = NSMenuItem(title: "Ignore this voice", action: #selector(ignoreAll(_:)), keyEquivalent: "")
         ignore.target = self
-        ignore.representedObject = [id, ignoreTag]
+        ignore.representedObject = [id]
         menu.addItem(ignore)
+        for name in Set((json("tags.json") as? [String: String] ?? [:]).values.filter(isIgnored)).sorted() {
+            let same = NSMenuItem(title: "Same voice as \(name)", action: #selector(pick(_:)), keyEquivalent: "")
+            same.target = self
+            same.representedObject = [id, name]
+            same.indentationLevel = 1
+            menu.addItem(same)
+        }
         // Only session labels: a named person (you) is never one click from being ignored.
         if let (spk, t, run) = shown[id], spk.range(of: "^S[0-9]+$", options: .regularExpression) != nil {
             // S1, S2... restart with the transcriber, so only that run's lines are the same voice
@@ -1400,7 +1410,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let fromRegistry = registry.compactMap { f in
             (try? Data(contentsOf: f)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["name"] as? String
         }
-        let fromTags = (json("tags.json") as? [String: String] ?? [:]).values.filter { !$0.isEmpty && $0 != ignoreTag }
+        let fromTags = (json("tags.json") as? [String: String] ?? [:]).values.filter { !$0.isEmpty && !isIgnored($0) }
         return Array(Set(fromRegistry + fromTags)).sorted()
     }
 

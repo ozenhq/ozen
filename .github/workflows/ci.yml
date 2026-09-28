@@ -53,6 +53,9 @@ jobs:
       - name: Timebar window check
         timeout-minutes: 5
         run: ./check-timebar.sh
+      - name: Ignored voices check
+        timeout-minutes: 5
+        run: ./check-ignore.sh
       - uses: astral-sh/setup-uv@v6
       - name: Transcript filter doctests
         run: uv run -q --with mlx-whisper python -m doctest asr.py < /dev/null

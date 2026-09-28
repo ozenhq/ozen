@@ -46,9 +46,10 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   `tags.json` and `lines.jsonl`, which never leave it; that's what the rebuild re-applies.
 - **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
   name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
+  Each ignore is its own voice (Ignored, Ignored 2…); pick **Same voice as Ignored 2** when it's that video again.
   Those lines, and earlier ones that sound like them, turn grey and leave the timeline, and the transcriber stops
   writing that voice from then on. Ignored prints stay on this Mac (`ignore.json`), never in the registry. To undo,
-  tag the line as a person or **Clear tag**, or use **Stop ignoring** in **Voices…**.
+  tag the line as a person or **Clear tag**, or use a voice's **Stop ignoring** in **Voices…**.
 - **Shows how far behind transcription is.** **Timebar…** in the panel (or the right-click menu) draws every
   recorded 15s chunk per stream on a local-time bar with a line at now: done, still waiting, or skipped on an error.
   Scroll or drag back through history, pinch or ⌘-scroll to zoom, **Now** to follow live. Under it, how long after
@@ -177,7 +178,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen timebar` | JSON of every chunk (start, stream, done / waiting / error / old, delay stats) that **Timebar…** draws |
 | `target/release/ozen voices` | JSON list of people, this run's unnamed speakers and ignored voices (what **Voices…** shows) |
 | `target/release/ozen name "Dana Levi" <line-id>...` | Tag those lines as a person, e.g. an unnamed speaker's lines. Retrains |
-| `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget Ignored` stops ignoring. Retrains |
+| `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget "Ignored 2"` stops ignoring that voice. Retrains |
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |

@@ -341,7 +341,7 @@ struct LineEdit {
     id: String,
     /// The right text. Empty clears an earlier fix.
     text: Option<String>,
-    /// Who really said it. "Ignored" marks a voice to drop; empty clears the tag.
+    /// Who really said it. "Ignored" marks a voice to drop ("Ignored 2", "Ignored 3"... are other dropped voices); empty clears the tag.
     speaker: Option<String>,
 }
 
@@ -587,7 +587,7 @@ impl Ozen {
     }
 
     #[tool(
-        description = "People: lines tagged per name here (\"Ignored\" = voices to drop), and the voiceprints ozen matches with their sample counts. Add someone by tagging a line with update_line.",
+        description = "People: lines tagged per name here (\"Ignored\", \"Ignored 2\"... = voices to drop), and the voiceprints ozen matches with their sample counts. Add someone by tagging a line with update_line.",
         annotations(read_only_hint = true)
     )]
     async fn list_people(&self) -> Reply {
@@ -612,7 +612,7 @@ impl Ozen {
     }
 
     #[tool(
-        description = "Forget a person here: clears every tag with that name and retrains, which drops their voiceprint samples from these lines. Use \"Ignored\" to stop ignoring every ignored voice.",
+        description = "Forget a person here: clears every tag with that name and retrains, which drops their voiceprint samples from these lines. Use an ignored voice's name (\"Ignored\", \"Ignored 2\"...) to stop ignoring that voice.",
         annotations(destructive_hint = true)
     )]
     async fn delete_person(&self, Parameters(p): Parameters<Name>) -> Reply {
@@ -697,7 +697,7 @@ impl Ozen {
 #[tool_handler(router = self.tool_router, instructions = "\
 ozen records meetings on this Mac and transcribes them live. Data:
 - lines: transcript lines (id, time, speaker, text). Meetings are runs of lines with under 10 minutes of silence between them; a meeting's id is its start time in seconds.
-- speaker: a line's tag (set by you or the user) wins over the voiceprint guess. Tagging retrains the voiceprints. The name \"Ignored\" marks a voice to drop (a video playing nearby).
+- speaker: a line's tag (set by you or the user) wins over the voiceprint guess. Tagging retrains the voiceprints. The name \"Ignored\" (or \"Ignored 2\", \"Ignored 3\"... for other voices) marks a voice to drop (a video playing nearby).
 - text: fixing a line's text also teaches the transcriber the words and repeated corrections.
 - notes: lines you create (src \"note\"); they have no voice, so editing one just rewrites it.
 - places, vocab, mode: settings the menu bar app reads live.")]

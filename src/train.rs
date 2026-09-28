@@ -9,13 +9,13 @@
 //! to tag next (labels.json "unsure"), logs the trend (history.jsonl), and pushes the registry.
 //! That is the loop: tag what it asks -> better prints and threshold -> fewer uncertain lines.
 //!
-//! Lines tagged IGNORE (`ozen ignore <line-id>...`) are not a person, so they never become a voiceprint here;
+//! Lines tagged as an ignored voice (`ozen ignore <line-id>...`) are not a person, so they never become a voiceprint here;
 //! src/ignore.rs turns them into ignore.json and labels after this retrain, and the transcriber drops that voice.
 //!
 //! Registry files are written exactly as the Python version of this wrote them (json.dumps), so a Mac on
 //! either version doesn't rewrite every file on the other's next retrain.
 use crate::fixes::lines;
-use crate::ignore::IGNORE;
+use crate::ignore::is_ignored;
 use indexmap::IndexMap;
 use regex::Regex;
 use serde::Serialize;
@@ -354,7 +354,7 @@ pub fn retrain(retry: bool) {
         }
     }
     for (sid, name) in &tags {
-        let Some(name) = name.as_str().filter(|n| !n.is_empty() && *n != IGNORE) else {
+        let Some(name) = name.as_str().filter(|n| !n.is_empty() && !is_ignored(n)) else {
             continue;
         };
         if let Some(e) = lines.get(sid) {
@@ -461,7 +461,7 @@ pub fn retrain(retry: bool) {
     let accuracy = (evaluated > 0).then(|| round(correct as f64 / evaluated as f64, 3));
     let tagged = tags
         .values()
-        .filter(|v| v.as_str().is_some_and(|n| !n.is_empty() && n != IGNORE))
+        .filter(|v| v.as_str().is_some_and(|n| !n.is_empty() && !is_ignored(n)))
         .count();
     let people: IndexMap<&str, usize> = samples
         .iter()
