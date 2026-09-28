@@ -35,6 +35,7 @@ const STATS: &str = "stats.json";
 const ECAPA: &str = "speechbrain/spkrec-ecapa-voxceleb";
 const DEFAULT_THRESHOLD: f64 = 0.4; // until there are enough tags to calibrate one
 const UNSURE: f64 = 0.08; // a line this close to the threshold, or to a second person, gets queued for review
+const MIN_EMBED_SEC: f64 = 1.0; // transcribe.py's: a shorter line's print is noise, so it's never queued
 
 /// A person's tagged lines: line id -> {"w": weight, "e": voiceprint}. Ordered, like the files.
 type Samples = IndexMap<String, IndexMap<String, Value>>;
@@ -284,7 +285,17 @@ pub fn retrain(retry: bool) {
         eprintln!("registry fetch failed; training on the local copy");
     }
     // By id, the last copy of a line winning (two transcribers on one chunk).
-    let lines: IndexMap<String, Value> = lines()
+    let rows = lines();
+    let short: Vec<String> = rows
+        .iter()
+        .filter(|r| {
+            r.get("d")
+                .and_then(Value::as_f64)
+                .is_some_and(|d| d < MIN_EMBED_SEC)
+        })
+        .filter_map(|r| Some(r.get("id")?.as_str()?.to_string()))
+        .collect();
+    let lines: IndexMap<String, Value> = rows
         .into_iter()
         .filter_map(|mut r| Some((r.get("id")?.as_str()?.to_string(), r.remove("e")?)))
         .filter(|(_, e)| e.as_array().is_some_and(|a| !a.is_empty()))
@@ -439,7 +450,7 @@ pub fn retrain(retry: bool) {
         // Unsure = near the threshold or nearly tied between two people: tagging these teaches the most.
         let doubt = (best - threshold).abs().min(margin);
         let label = json!({"spk": (best >= threshold).then_some(name), "sim": round(best, 3),
-                           "margin": round(margin, 3), "unsure": doubt < UNSURE});
+                           "margin": round(margin, 3), "unsure": doubt < UNSURE && !short.contains(sid)});
         labels.insert(
             sid.clone(),
             ordered(label, &["spk", "sim", "margin", "unsure"]),
