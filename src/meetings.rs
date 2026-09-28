@@ -38,7 +38,7 @@ fn read_json(path: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Every transcript line, time ordered, rendered like `train.py show`: speakers corrected by your tags.
+/// Every transcript line, time ordered, rendered like `ozen show`: speakers corrected by your tags.
 fn lines() -> Vec<Line> {
     let (tags, labels) = (read_json("tags.json"), read_json("labels.json"));
     let raw = fs::read_to_string("lines.jsonl").unwrap_or_default();

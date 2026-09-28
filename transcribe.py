@@ -29,18 +29,18 @@ out = pathlib.Path(sys.argv[2])
 
 
 VOCAB = HERE / "vocab.txt"  # names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
-LEARNED = HERE / "learned.json"  # from your transcript fixes (train.py fix): words to hint, corrections to apply
+LEARNED = HERE / "learned.json"  # from your transcript fixes (ozen fix): words to hint, corrections to apply
 SOURCE = {"call": "call", "mic": "room"}
 ECHO_OVERLAP = 0.6  # mic turn mostly overlapping speaker output = echo, not a person in the room
 ECHO_PAD = 0.3  # seconds; slack for capture-latency differences between streams
 SR = asr.SR
 SILENCE_RMS = overlap.SILENCE_RMS
-SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one train.py calibrates from your tags
+SAME_SPEAKER = 0.4  # cosine similarity cutoff; replaced by the one src/train.rs calibrates from your tags
 MIN_EMBED_SEC = 1.0  # shorter clips give unreliable voiceprints: they never create or update a voice
 SHORT_MARGIN = 0.1  # a short clip needs SAME_SPEAKER + this to take an existing label (else "?")
 
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
-REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
+REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by src/train.rs from your tags
 RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks (computer audio in recent/local), local only
 KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
 # Separating people talking at once costs ~0.75x real time per such utterance (overlap.py): skip it while more than
@@ -66,11 +66,11 @@ def anon(label: str) -> bool:
 
 
 def load_registry() -> None:
-    """(Re)load named voiceprints; train.py rewrites them after every tag, so pick up changes live."""
+    """(Re)load named voiceprints; src/train.rs rewrites them after every tag, so pick up changes live."""
     global registry_mtime, SAME_SPEAKER, last_pull, ignored
     if time.time() - last_pull > PULL_EVERY:
         last_pull = time.time()
-        try:  # ponytail: offline or diverged just keeps the local prints; train.py reconciles on its next push
+        try:  # ponytail: offline or diverged just keeps the local prints; src/train.rs reconciles on its next push
             subprocess.run(["git", "-C", str(REGISTRY), "pull", "--ff-only", "-q"], capture_output=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             pass
@@ -126,7 +126,7 @@ def who(clip: np.ndarray, e: np.ndarray) -> str:
     if speakers:
         best = max(speakers, key=lambda s: float(s[1] @ e))
         if float(best[1] @ e) >= SAME_SPEAKER:
-            if anon(best[0]):  # named prints change only through tagging (train.py)
+            if anon(best[0]):  # named prints change only through tagging (src/train.rs)
                 c = best[1] * best[2] + e
                 best[1], best[2] = c / np.linalg.norm(c), best[2] + 1
             return best[0]
@@ -137,7 +137,7 @@ def who(clip: np.ndarray, e: np.ndarray) -> str:
 
 
 def doubt(e: np.ndarray) -> float | None:
-    """How unsure train.py would be about this line (same formula), so Review can ask before the next retrain."""
+    """How unsure src/train.rs would be about this line (same formula), so Review can ask before the next retrain."""
     sims = sorted((float(s[1] @ e) for s in speakers if not anon(s[0])), reverse=True)
     if not sims:
         return None

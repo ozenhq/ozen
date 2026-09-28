@@ -3,6 +3,7 @@ mod eval;
 mod fixes;
 mod ignore;
 mod meetings;
+mod train;
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::process::CommandExt;
@@ -12,7 +13,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | meetings | gather | live | open | app | bar
+ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | show | meetings | gather | live | open | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -24,6 +25,7 @@ ozen control: start | pause | resume | stop | status | health | look | fix | eva
   tag ID [NAME] set who said a transcript line (empty clears), then retrain
   ignore ID...  tag transcript lines as a voice to ignore (a video playing nearby), then retrain
   retrain       rebuild voiceprints, labels and the ignored voices from all tags
+  show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   meetings      list past meetings: id, start, minutes, lines, first words (tab separated)
   gather [--kev] ID...
@@ -376,9 +378,9 @@ fn build_app(app: &str) -> bool {
     true
 }
 
-/// train.py rebuilds the people's voiceprints and labels; then ozen adds the voices to ignore on top.
+/// Rebuild the people's voiceprints and labels; then add the voices to ignore on top, even if training failed.
 fn retrain() {
-    let trained = ok(cmd("uv").args(["run", "-q", "train.py", "retrain"]));
+    let trained = std::panic::catch_unwind(|| train::retrain(true)).is_ok();
     ignore::apply();
     if !trained {
         exit(1);
@@ -585,6 +587,12 @@ fn main() {
             retrain();
         }
         "retrain" => retrain(),
+        "show" => fixes::show(
+            std::env::args()
+                .nth(2)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(40),
+        ),
         "app" => {
             if !build_app(&app) {
                 exit(1);

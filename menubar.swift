@@ -1,7 +1,7 @@
 // Menu bar ear icon: left-click shows the live transcript with start/pause/stop controls,
 // right-click offers the same controls plus Quit (stops recording) or quit the bar alone. Controls call the ozen CLI (src/main.rs).
 // Click a speaker name in the transcript to tag who really said that line; every tag retrains
-// the voiceprints (train.py), so labels improve the more you tag. Click a line's text to fix what was
+// the voiceprints (src/train.rs), so labels improve the more you tag. Click a line's text to fix what was
 // said; fixes teach the transcriber words and repeated corrections (`ozen fix`, src/fixes.rs).
 // Tag a voice "Ignored" (a video playing nearby) and ozen stops transcribing it; ignored lines show
 // dimmed and leave the timeline.
@@ -245,7 +245,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var reviewQueue: [String] = []  // untagged unsure line ids, most uncertain first
     var review: [String] = []  // the queue minus lines too old to remember who said them
     let reviewMaxAge: Double = 600  // seconds
-    let unsureDoubt = 0.08  // train.py UNSURE: this close to the threshold, or to a second person
+    let unsureDoubt = 0.08  // src/train.rs UNSURE: this close to the threshold, or to a second person
     var shown: [String: (spk: String, t: Double, run: Int?)] = [:]  // line id -> speaker as shown in the transcript
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
@@ -938,7 +938,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
         let fixes = (json("fixes.json") as? [String: String] ?? [:]).merging(pendingFixes) { $1 }
         let threshold = (json("stats.json") as? [String: Any])?["threshold"] as? Double
-        // How unsure a line is, nil when sure: train.py's verdict once it has retrained, before that the
+        // How unsure a line is, nil when sure: the last retrain's verdict once there is one, before that the
         // transcriber's own (same formula), so new lines reach Review without waiting for the next tag.
         func unsureBy(_ l: Line) -> Double? {
             guard let g = labels[l.id] else { return l.doubt.flatMap { $0 < unsureDoubt ? $0 : nil } }
