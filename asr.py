@@ -12,6 +12,7 @@ Request: {"audio": path, "start": s, "duration": s, "words": [hint words], "repl
 Reply:   {"heard": Whisper's text, "text": after replace, "lang": language used}
 The worker seeds MLX before every clip, so its output depends only on the request.
 """
+import collections
 import functools
 import json
 import re
@@ -75,6 +76,19 @@ def hint_echo(text: str, hint: list[str]) -> bool:
     return len(words) > len(set(words)) and set(words) <= {w for h in hint for w in words_of(h)} | FILLER
 
 
+def loop(text: str) -> bool:
+    """"Amen. Amen. Amen. Amen." on noise: Whisper stuck on one short phrase, which the compression-ratio check
+    misses when the phrase is short. A phrase said 3+ times that makes up most of the line is that loop.
+    Also checked on merged lines, since one "Yeah." per utterance merges into "Yeah. Yeah. Yeah."
+
+    >>> loop("Amen. Amen. Amen. Amen. Yeah."), loop("Yeah. Yeah."), loop("זה קורה קורה קורה.")
+    (True, False, False)
+    """
+    phrases = [p.strip().lower() for p in re.split(r"[.,!?;:]+", text) if p.strip()]
+    top = collections.Counter(phrases).most_common(1)
+    return bool(top) and top[0][1] >= 3 and top[0][1] / len(phrases) >= 0.6
+
+
 def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = ()) -> tuple[str, str]:
     """(text, language). `lang` is used for clips under ~1.5s, where detection is unreliable ("שלום" came out
     as "Shalom"); longer clips pick between the languages actually spoken, since open detection on short
@@ -92,7 +106,7 @@ def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = ()) ->
         for s in r["segments"]
         if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
     ).strip()
-    return ("" if noise(text) or hint_echo(text, hint) else text), lang
+    return ("" if noise(text) or hint_echo(text, hint) or loop(text) else text), lang
 
 
 def prompt(words: list[str], previous: str = "") -> str:

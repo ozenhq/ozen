@@ -280,6 +280,8 @@ while True:
                     prev = spk
                 with out.open("a") as fh, open_lines() as lj:
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
+                        if asr.loop(heard):
+                            continue
                         text = asr.corrected(heard, learned().get("replace", {}))
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
                         line = f"[{ts}] {spk} ({SOURCE.get(tag, tag)}): {text}"
