@@ -7,6 +7,9 @@ voices; MossFormer2 kept single voices whole and recovered both voices in every 
 
     uv run overlap.py   # self-check on macOS voices: one voice stays whole; overlap and quick turns give each voice
 """
+import pathlib
+import struct
+import subprocess
 import threading
 
 import numpy as np
@@ -34,11 +37,29 @@ TRACK_MIN = 0.6  # seconds; on real meetings (AMI) shorter separated pieces were
 _separator = None
 
 
+def embedder():
+    """embed(audio) -> unit voiceprint, from `ozen embed` (src/ecapa.rs: speechbrain's ECAPA ported to Rust)."""
+    ozen = subprocess.Popen([str(pathlib.Path(__file__).parent / "target/release/ozen"), "embed"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    def embed(x: np.ndarray) -> np.ndarray:
+        x = np.ascontiguousarray(x, dtype="<f4")
+        try:
+            ozen.stdin.write(struct.pack("<I", len(x)) + x.tobytes())
+            ozen.stdin.flush()
+            e = np.frombuffer(ozen.stdout.read(192 * 4), "<f4")
+        except OSError:  # it exited: broken pipe
+            e = np.zeros(0)
+        if len(e) != 192:  # SystemExit passes the per-chunk handler: ozen restarts the transcriber, the chunk waits
+            raise SystemExit("ozen embed stopped; is target/release/ozen built from this checkout?")
+        return e / np.linalg.norm(e)
+    embed(np.zeros(SR, np.float32))  # fail at start, not on the first chunk
+    return embed
+
+
 def separator():
     global _separator
     if _separator is None:  # runs on the GPU (MPS) when there is one
-        import pathlib
-
         from clearvoice.network_wrapper import network_wrapper
         from clearvoice.networks import CLS_MossFormer2_SS_16K
         # Built by hand rather than through ClearVoice(), whose config keeps checkpoints under a cwd-relative path
@@ -165,21 +186,11 @@ def utterances(audio: np.ndarray, floor=0.0, frame=0.03, max_gap=0.35, min_len=0
 
 
 if __name__ == "__main__":
-    import pathlib
-    import subprocess
     import tempfile
 
     from mlx_whisper.audio import load_audio
-    from speechbrain.inference.speaker import EncoderClassifier
 
-    here = pathlib.Path(__file__).parent
-    enc = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir=str(here / "models/ecapa"),
-                                         run_opts={"device": "cpu"})
-
-    def embed(x):
-        e = enc.encode_batch(torch.from_numpy(x.astype(np.float32))[None]).squeeze().numpy()
-        return e / np.linalg.norm(e)
-
+    embed = embedder()
     tmp = pathlib.Path(tempfile.mkdtemp())
     separator()
 

@@ -1,5 +1,6 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
 mod compare;
+mod ecapa;
 mod eval;
 mod fixes;
 mod ignore;
@@ -685,6 +686,13 @@ fn main() {
                 }
             }
             retrain();
+        }
+        // The transcriber's voiceprint encoder (src/ecapa.rs), fed audio on stdin.
+        "embed" => {
+            if let Err(e) = ecapa::serve() {
+                eprintln!("{e}");
+                exit(1);
+            }
         }
         "show" => fixes::show(
             std::env::args()
