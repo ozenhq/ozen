@@ -3,7 +3,7 @@
 name = "ozen"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
+dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice", "pyarrow"]  # pyarrow: eval_overlap.py's datasets
 
 [tool.uv]
 package = false
