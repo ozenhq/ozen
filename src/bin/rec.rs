@@ -347,18 +347,28 @@ fn fatal(e: SCError) -> ! {
     exit(1);
 }
 
-fn main() {
-    let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "chunks".into()));
-    fs::create_dir_all(out.join(".partial")).expect("create chunk dir");
-    // A recorder killed hard leaves its in-progress chunks in .partial. ffmpeg (the transcriber's loader)
-    // reads them in full without the final header sizes, so publish them instead of losing that audio.
+/// A recorder killed hard leaves its in-progress chunks in .partial. ffmpeg (the transcriber's loader)
+/// reads them in full without the final header sizes, so publish them instead of losing that audio.
+/// One killed before its first 8KB write-buffer flush is empty (under ~20ms of audio, header included):
+/// ffmpeg can't open it and the transcriber logged it as a failed chunk, so drop it instead.
+fn publish_partials(out: &Path) {
     for e in fs::read_dir(out.join(".partial"))
         .into_iter()
         .flatten()
         .flatten()
     {
-        let _ = fs::rename(e.path(), out.join(e.file_name()));
+        if e.metadata().is_ok_and(|m| m.len() == 0) {
+            let _ = fs::remove_file(e.path());
+        } else {
+            let _ = fs::rename(e.path(), out.join(e.file_name()));
+        }
     }
+}
+
+fn main() {
+    let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "chunks".into()));
+    fs::create_dir_all(out.join(".partial")).expect("create chunk dir");
+    publish_partials(&out);
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
         signal_hook::flag::register(sig, stop.clone()).expect("signal handler");
@@ -488,7 +498,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::retryable;
+    use super::{fs, publish_partials, retryable};
     use screencapturekit::error::{SCError, SCStreamErrorCode as C};
 
     #[test]
@@ -501,5 +511,17 @@ mod tests {
         assert!(retryable(&e(C::FailedToStartMicrophoneCapture)));
         assert!(retryable(&e(C::NoCaptureSource)));
         assert!(retryable(&e(C::InternalError)));
+    }
+
+    #[test]
+    fn publishes_leftover_chunks_and_drops_empty_ones() {
+        let out = std::env::temp_dir().join(format!("ozen-partials-{}", std::process::id()));
+        fs::create_dir_all(out.join(".partial")).unwrap();
+        fs::write(out.join(".partial/1-mic.wav"), b"RIFF....WAVE").unwrap();
+        fs::write(out.join(".partial/2-call.wav"), b"").unwrap();
+        publish_partials(&out);
+        assert!(out.join("1-mic.wav").exists());
+        assert!(!out.join("2-call.wav").exists() && !out.join(".partial/2-call.wav").exists());
+        fs::remove_dir_all(&out).unwrap();
     }
 }
