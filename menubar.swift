@@ -601,7 +601,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             w.contentView = placesStack
             placesMap.navigationDelegate = self
             placesMap.configuration.userContentController.add(self, name: "ozen")  // map.html → pin drags and map clicks
-            placesMap.customUserAgent = "Ozen (https://github.com/tupe12334/ozen)"  // OSM tile policy: identify the app
+            placesMap.customUserAgent = "Ozen (https://github.com/ozenhq/ozen)"  // OSM tile policy: identify the app
             placesMap.heightAnchor.constraint(equalToConstant: 280).isActive = true
             // Bundled by `ozen app`; a checkout run (Ozen [dir]) falls back to the repo copy.
             let page = Bundle.main.url(forResource: "map", withExtension: "html") ?? dir.appendingPathComponent("map.html")

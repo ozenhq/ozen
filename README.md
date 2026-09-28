@@ -104,7 +104,7 @@ Output is `transcript.txt`:
 Requires macOS 15+ on Apple Silicon, Xcode command line tools (`swiftc`), [Rust](https://rustup.rs) (`cargo`), [`uv`](https://docs.astral.sh/uv/) and `ffmpeg`.
 
 ```sh
-git clone https://github.com/tupe12334/ozen ~/ozen
+git clone https://github.com/ozenhq/ozen ~/ozen
 git clone https://github.com/tupe12334/voices-embedding-registry ~/ozen/voices
 cd ~/ozen && cargo run --release -- app   # builds the ozen CLI and ~/Applications/Ozen.app
 ```
