@@ -28,8 +28,6 @@ import mlx.core as mx
 import numpy as np
 import pyarrow.parquet as pq
 import soundfile as sf
-import torch
-from speechbrain.inference.speaker import EncoderClassifier
 
 import asr
 import overlap
@@ -48,13 +46,7 @@ except (OSError, ValueError, KeyError):
     SAME = 0.26  # the calibrated cutoff when this was written
 VOCAB = [w.strip() for w in re.split(r"[,\n]", (HERE / "vocab.txt").read_text()) if w.strip()]
 
-encoder = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir=str(HERE / "models/ecapa"),
-                                         run_opts={"device": "cpu"})
-
-
-def embed(x: np.ndarray) -> np.ndarray:
-    e = encoder.encode_batch(torch.from_numpy(np.ascontiguousarray(x, np.float32))[None]).squeeze().numpy()
-    return e / np.linalg.norm(e)
+embed = overlap.embedder()  # the live transcriber's voiceprints (`ozen embed`, src/ecapa.rs)
 
 
 def rows(name: str) -> list[dict]:
