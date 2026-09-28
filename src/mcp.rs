@@ -21,6 +21,7 @@ const LINES: &str = "lines.jsonl";
 const TAGS: &str = "tags.json";
 const LABELS: &str = "labels.json";
 const FIXES: &str = "fixes.json";
+const JUNK: &str = "junk.json"; // ids of old Whisper echoes the transcriber flags; the panel hides them
 const STATS: &str = "stats.json";
 const PLACES: &str = "places.json";
 const VOCAB: &str = "vocab.txt";
@@ -121,7 +122,7 @@ fn append(r: Row) -> Result<(), String> {
 }
 
 /// A line as agents see it: tagged speaker and fixed text applied, no voiceprint.
-fn view(r: &Row, tags: &Row, labels: &Row, fixes: &Row) -> Value {
+fn view(r: &Row, tags: &Row, labels: &Row, fixes: &Row, junk: &[String]) -> Value {
     let id = str_of(r, "id");
     let tag = tags
         .get(id)
@@ -151,11 +152,16 @@ fn view(r: &Row, tags: &Row, labels: &Row, fixes: &Row) -> Value {
         "text": fixed.unwrap_or(str_of(r, "text")),
         "heard": fixed.map(|_| str_of(r, "text")), // the transcriber's text, when a fix replaced it
         "note": is_note(r),
+        "junk": junk.iter().any(|j| j == id), // not said by anyone: Whisper invented it on noise
     })
 }
 
 fn views(filter: impl Fn(&Row) -> bool) -> Vec<Value> {
     let (tags, labels, fixes) = (read(TAGS), read(LABELS), read(FIXES));
+    let junk: Vec<String> = fs::read(JUNK)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
     let mut all: Vec<Row> = rows().into_iter().filter(|r| filter(r)).collect();
     all.sort_by(|a, b| {
         a["t"]
@@ -164,7 +170,7 @@ fn views(filter: impl Fn(&Row) -> bool) -> Vec<Value> {
             .total_cmp(&b["t"].as_f64().unwrap_or(0.0))
     });
     all.iter()
-        .map(|r| view(r, &tags, &labels, &fixes))
+        .map(|r| view(r, &tags, &labels, &fixes, &junk))
         .collect()
 }
 
@@ -491,7 +497,7 @@ impl Ozen {
     }
 
     #[tool(
-        description = "Transcript lines in time order, as JSON: id, time, speaker (and whether a tag, the voice or the transcriber set it), text (fixed if fixed; heard is the original), note.",
+        description = "Transcript lines in time order, as JSON: id, time, speaker (and whether a tag, the voice or the transcriber set it), text (fixed if fixed; heard is the original), note, junk (an old line Whisper invented on noise; the panel hides these).",
         annotations(read_only_hint = true)
     )]
     async fn list_lines(&self, Parameters(p): Parameters<LineQuery>) -> Reply {
@@ -755,6 +761,29 @@ mod tests {
             )
         );
         assert!(!is_note(&rows()[0]) && is_note(&rows()[1]));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lines_the_transcriber_flagged_as_junk_say_so() {
+        let _cwd = crate::CWD.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("ozen-mcp-junk-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        fs::write(
+            LINES,
+            "{\"id\": \"a\", \"t\": 1.0}\n{\"id\": \"b\", \"t\": 2.0}\n",
+        )
+        .unwrap();
+        let flags = || {
+            views(|_| true)
+                .iter()
+                .map(|v| v["junk"] == true)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(flags(), [false, false]); // no junk.json yet
+        fs::write(JUNK, r#"["b"]"#).unwrap();
+        assert_eq!(flags(), [false, true]);
         fs::remove_dir_all(&dir).unwrap();
     }
 
