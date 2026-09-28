@@ -87,13 +87,11 @@ def loop(text: str) -> bool:
     return bool(top) and top[0][1] >= 3 and top[0][1] / len(phrases) >= 0.6
 
 
-last_raw = ""
-
-
-def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = (), model: str | None = None) -> tuple[str, str]:
-    """(text, language). `lang` is used for clips under ~1.5s, where detection is unreliable ("שלום" came out
-    as "Shalom"); longer clips pick between the languages actually spoken, since open detection on short
-    noisy audio picks random languages and invents words."""
+def decode(clip: np.ndarray, prompt: str, lang: str, model: str | None = None) -> tuple[str, str, str]:
+    """(text Whisper is confident in, language, raw text before any filter). `model` pins "stock" or "hebrew"
+    in `lang` (`ozen compare`). Otherwise `lang` is used for clips under ~1.5s, where detection is unreliable
+    ("שלום" came out as "Shalom"); longer clips pick between the languages actually spoken, since open
+    detection on short noisy audio picks random languages and invents words."""
     if model is None and clip.size >= 1.5 * SR:
         detector = ModelHolder.get_model(MODEL, mx.float16)
         mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=detector.dims.n_mels)
@@ -102,15 +100,24 @@ def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = (), mo
     repo = {"stock": MODEL, "hebrew": MODELS["he"]}.get(model, MODELS[lang])
     r = mlx_whisper.transcribe(clip, path_or_hf_repo=repo, language=lang, initial_prompt=prompt,
                                condition_on_previous_text=False)
-    global last_raw
-    last_raw = r["text"].strip()  # before any filter, for `ozen compare` to show what was dropped
     # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
     text = " ".join(
         s["text"].strip()
         for s in r["segments"]
         if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
     ).strip()
-    return ("" if noise(text) or hint_echo(text, hint) or loop(text) else text), lang
+    return text, lang, r["text"].strip()
+
+
+def kept(text: str, hint: list[str]) -> str:
+    """The text, or "" when it is noise, the hint echoed back, or a loop."""
+    return "" if noise(text) or hint_echo(text, hint) or loop(text) else text
+
+
+def recognize(clip: np.ndarray, prompt: str, lang: str, hint: list[str] = ()) -> tuple[str, str]:
+    """(text, language): what `decode` is confident in, `kept` for the transcript."""
+    text, lang, _ = decode(clip, prompt, lang)
+    return kept(text, hint), lang
 
 
 def prompt(words: list[str], previous: str = "") -> str:
@@ -137,8 +144,9 @@ if __name__ == "__main__":
         clip = audio[s: s + int(q["duration"] * SR)] if q.get("duration") else audio[s:]
         mx.random.seed(0)  # temperature fallback samples; seeded, the same request always gives the same text
         words = q.get("words", [])
-        heard, lang = recognize(clip, prompt(words), q.get("lang", LANGS[0]), words, q.get("model"))
+        text, lang, raw = decode(clip, prompt(words), q.get("lang", LANGS[0]), q.get("model"))
+        heard = kept(text, words)
         reply = {"heard": heard, "text": corrected(heard, q.get("replace", {})), "lang": lang}
         if q.get("model"):
-            reply["raw"] = last_raw
+            reply["raw"] = raw
         print(json.dumps(reply, ensure_ascii=False), flush=True)
