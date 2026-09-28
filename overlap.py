@@ -192,7 +192,7 @@ def utterances(audio: np.ndarray, floor=0.0, frame=0.03, max_gap=0.35, min_len=0
 if __name__ == "__main__":
     import tempfile
 
-    from mlx_whisper.audio import load_audio
+    import asr
 
     embed = embedder()
     tmp = pathlib.Path(tempfile.mkdtemp())
@@ -201,7 +201,7 @@ if __name__ == "__main__":
     def say(voice, text):
         f = tmp / f"{voice}.aiff"
         subprocess.run(["say", "-v", voice, "-o", str(f), text], check=True)
-        return np.array(load_audio(str(f)))
+        return np.array(asr.load_audio(str(f)))
 
     a = say("Samantha", "The launch is moved to next Tuesday because the payments team needs more time for testing.")
     # Steady room noise on SPEECH_RMS (fans under load) is no speech; the same noise with a voice 6 dB over it is

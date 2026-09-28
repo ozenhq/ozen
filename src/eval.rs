@@ -276,7 +276,8 @@ fn score(cases: &[&Case], texts: &[String]) -> Score {
     let mut s = Score::default();
     for (c, got) in cases.iter().zip(texts) {
         let (want, got) = (tokens(&c.text), tokens(got));
-        let e = strsim::generic_levenshtein(&want, &got);
+        let e =
+            strsim::generic_levenshtein::<Vec<String>, Vec<String>, &String, &String>(&want, &got);
         match c.kind {
             Kind::Noise => s.invented += got.len(),
             Kind::Control => {

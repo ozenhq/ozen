@@ -8,44 +8,46 @@ Request: {"audio": path, "start": s, "duration": s, "words": [hint words], "repl
          or {"heard": text, "replace": {...}} to only apply corrections (no audio, no model)
 Reply:   {"heard": Whisper's text, "text": after replace, "lang": language used,
           "raw": Whisper's text before any filter (only with "model")}
-The worker seeds MLX before every clip, so its output depends only on the request.
+Whisper's temperature fallback samples with a fixed seed per clip, so the output depends only on the request.
 """
 import collections
-import functools
 import json
+import pathlib
 import re
-import socket
+import select
 import sys
 
-import mlx.core as mx
-import mlx_whisper
 import numpy as np
-from huggingface_hub import snapshot_download
-from mlx_whisper.audio import load_audio, log_mel_spectrogram, pad_or_trim
-from mlx_whisper.decoding import detect_language
-from mlx_whisper.load_models import load_model
-from mlx_whisper.transcribe import ModelHolder
 
-# mlx_whisper caches a single model, but every utterance uses two: stock turbo detects the language, then
-# the Hebrew model transcribes. Swapping reloaded ~1.6GB twice per line and made the transcriber fall behind.
-# ponytail: keeps every model used resident (two, ~3GB); bound the cache if more models are added.
-ModelHolder.get_model = staticmethod(functools.cache(lambda path, dtype: load_model(path, dtype=dtype)))
-socket.setdefaulttimeout(60)  # a stalled download must fail, not hang the transcriber forever
 SR = 16000
 LANGS = ("he", "en")
+_whisper = None
 
 
-def cached(repo: str) -> str:
-    """The local copy once downloaded, so loading never waits on the Hub's update check."""
-    try:
-        return snapshot_download(repo, local_files_only=True)
-    except Exception:
-        return repo  # not downloaded yet: fetch on first use
+def whisper():
+    """`ozen whisper` (src/whisper.rs): Whisper large-v3-turbo, stock and ivrit.ai's Hebrew, both kept loaded."""
+    global _whisper
+    if _whisper is None:
+        import subprocess
+        _whisper = subprocess.Popen([str(pathlib.Path(__file__).parent / "target/release/ozen"), "whisper"],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        # the first start downloads the models (~3.2GB) unless mlx_whisper already did
+        ready = select.select([_whisper.stdout], [], [], 3600)[0]
+        if not ready or _whisper.stdout.readline() != b"ozen whisper 1\n":  # an older ozen prints its usage
+            raise SystemExit("ozen whisper unavailable; rebuild target/release/ozen from this checkout")
+    return _whisper
 
 
-MODEL = cached("mlx-community/whisper-large-v3-turbo")  # English + language detection
-# Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
-MODELS = {"he": cached("mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"), "en": MODEL}
+def load_audio(path: str) -> np.ndarray:
+    """16 kHz mono float32 through ffmpeg, as mlx_whisper's load_audio did."""
+    import subprocess
+    out = subprocess.run(["ffmpeg", "-nostdin", "-i", path, "-threads", "0", "-f", "s16le", "-ac", "1",
+                          "-acodec", "pcm_s16le", "-ar", str(SR), "-"], capture_output=True)
+    if out.returncode:
+        raise RuntimeError(f"Failed to load audio: {out.stderr.decode()}")
+    return np.frombuffer(out.stdout, np.int16).astype(np.float32) / 32768.0
+
+
 def words_of(text: str) -> list[str]:
     return re.sub(r"[^\w\s]", " ", text.lower()).split()
 
@@ -91,22 +93,17 @@ def decode(clip: np.ndarray, prompt: str, lang: str, model: str | None = None) -
     """(text Whisper is confident in, language, raw text before any filter). `model` pins "stock" or "hebrew"
     in `lang` (`ozen compare`). Otherwise `lang` is used for clips under ~1.5s, where detection is unreliable
     ("שלום" came out as "Shalom"); longer clips pick between the languages actually spoken, since open
-    detection on short noisy audio picks random languages and invents words."""
-    if model is None and clip.size >= 1.5 * SR:
-        detector = ModelHolder.get_model(MODEL, mx.float16)
-        mel = log_mel_spectrogram(pad_or_trim(mx.array(clip)), n_mels=detector.dims.n_mels)
-        _, probs = detect_language(detector, mel)
-        lang = max(LANGS, key=lambda l: probs.get(l, 0))
-    repo = {"stock": MODEL, "hebrew": MODELS["he"]}.get(model, MODELS[lang])
-    r = mlx_whisper.transcribe(clip, path_or_hf_repo=repo, language=lang, initial_prompt=prompt,
-                               condition_on_previous_text=False)
-    # Drop segments Whisper itself flags as noise; these are the hallucinated lines.
-    text = " ".join(
-        s["text"].strip()
-        for s in r["segments"]
-        if s["no_speech_prob"] < 0.5 and s["avg_logprob"] > -0.8 and s["compression_ratio"] < 2.4
-    ).strip()
-    return text, lang, r["text"].strip()
+    detection on short noisy audio picks random languages and invents words. Segments Whisper itself flags as
+    noise (the hallucinated lines) are dropped from the text. Runs in `ozen whisper`."""
+    w, x = whisper(), np.ascontiguousarray(clip, "<f4")
+    try:
+        w.stdin.write((json.dumps({"n": len(x), "prompt": prompt, "lang": lang, "model": model}) + "\n").encode())
+        w.stdin.write(x.tobytes())
+        w.stdin.flush()
+        r = json.loads(w.stdout.readline())
+    except (OSError, ValueError):  # SystemExit passes the per-chunk handler: ozen restarts the transcriber
+        raise SystemExit("ozen whisper stopped")
+    return r["text"], r["lang"], r["raw"]
 
 
 def kept(text: str, hint: list[str]) -> str:
@@ -142,7 +139,6 @@ if __name__ == "__main__":
         audio = np.array(load_audio(q["audio"]))
         s = int(q.get("start", 0) * SR)
         clip = audio[s: s + int(q["duration"] * SR)] if q.get("duration") else audio[s:]
-        mx.random.seed(0)  # temperature fallback samples; seeded, the same request always gives the same text
         words = q.get("words", [])
         text, lang, raw = decode(clip, prompt(words), q.get("lang", LANGS[0]), q.get("model"))
         heard = kept(text, words)

@@ -12,8 +12,11 @@ redundant_closure_for_method_calls = "warn"  # CI runs clippy with -D warnings
 strip = true
 
 [dependencies]
-candle-core = { version = "0.11.0", features = ["accelerate"] }
+base64 = "0.23.1"
+candle-core = { version = "0.11.0", features = ["accelerate", "metal"] }
+candle-nn = { version = "0.11.0", features = ["metal", "accelerate"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+flate2 = "1.1.10"
 hound = "3.5.1"
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
@@ -25,4 +28,5 @@ serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 signal-hook = "0.4.4"
 similar = "3.2.0"
 strsim = "0.11.1"
+tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["rt", "macros", "io-std"] }

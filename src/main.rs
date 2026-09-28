@@ -10,6 +10,7 @@ mod meetings;
 mod timebar;
 mod train;
 mod voices;
+mod whisper;
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::process::CommandExt;
@@ -769,6 +770,13 @@ fn main() {
                 }
             }
             retrain();
+        }
+        // Whisper (src/whisper.rs) for asr.py, fed audio on stdin.
+        "whisper" => {
+            if let Err(e) = whisper::serve() {
+                eprintln!("{e}");
+                exit(1);
+            }
         }
         // The transcriber's voiceprint encoder (src/ecapa.rs), fed audio on stdin.
         "embed" => {
