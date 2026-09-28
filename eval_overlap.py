@@ -91,6 +91,14 @@ def opus(x: np.ndarray) -> np.ndarray:
         return sf.read(f"{d}/b.wav", dtype="float32")[0]
 
 
+def joined(a: dict, b: dict) -> tuple[np.ndarray, str]:
+    """AMI segment a, then b's audio past a's end (same mic), and both texts."""
+    x = audio(a)
+    if b["end_time"] > a["end_time"]:
+        x = np.concatenate([x, audio(b)[int((a["end_time"] - b["begin_time"]) * SR):]])
+    return x, text(a) + " " + text(b)
+
+
 def windows(name: str, n: int) -> tuple[list, list]:
     """(overlap windows, solo windows) as (audio, reference text)."""
     rs = rows(name)
@@ -102,17 +110,15 @@ def windows(name: str, n: int) -> tuple[list, list]:
             near = [c for c in rs[max(0, i - 30):i + 30] if c is not a and c["meeting_id"] == a["meeting_id"]
                     and c["begin_time"] < a["end_time"] and c["end_time"] > a["begin_time"]]
             if not near and 3 <= a["end_time"] - a["begin_time"] <= 10:
-                solos.append((audio(a), text(a)))
+                solos.append((a,))
             for b in near:
                 lo, hi = a["begin_time"], max(a["end_time"], b["end_time"])
                 others = [c for c in near if c is not b and c["begin_time"] < hi and c["end_time"] > lo]
                 if (b["begin_time"] >= lo and b["speaker_id"] != a["speaker_id"] and not others
                         and min(a["end_time"], b["end_time"]) - b["begin_time"] >= 1 and 3 <= hi - lo <= 12):
-                    x = audio(a)
-                    if b["end_time"] > a["end_time"]:  # b's audio past a's end, from the same mic
-                        x = np.concatenate([x, audio(b)[int((a["end_time"] - b["begin_time"]) * SR):]])
-                    pairs.append((x, text(a) + " " + text(b)))
-        return random.sample(pairs, min(n, len(pairs))), random.sample(solos, min(n, len(solos)))
+                    pairs.append((a, b))
+        pairs, solos = random.sample(pairs, min(n, len(pairs))), random.sample(solos, min(n, len(solos)))
+        return [joined(*p) for p in pairs], [(audio(a), text(a)) for a, in solos]  # decode only the sampled ones
     # read speech: pair utterances by different people (voiceprints far apart; FLEURS has no speaker ids)
     pool = [r for r in random.sample(rs[::5], min(len(rs[::5]), 4 * n)) if 3 * SR < len(audio(r)) < 12 * SR]
     prints = [embed(audio(r)) for r in pool]
