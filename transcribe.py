@@ -43,6 +43,9 @@ ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 REGISTRY = HERE / "voices"  # clone of tupe12334/voices-embedding-registry, rebuilt by train.py from your tags
 RECENT = HERE / "recent"  # last KEEP_AUDIO transcribed chunks (computer audio in recent/local), local only
 KEEP_AUDIO = int(os.environ.get("OZEN_KEEP_AUDIO", "20"))
+# Separating people talking at once costs ~0.75x real time per such utterance (overlap.py): skip it while more than
+# this many chunks wait (two 15s windows), so it never makes the transcript fall behind; those lines stay merged
+SEPARATE_BACKLOG = int(os.environ.get("OZEN_SEPARATE_BACKLOG", "6"))
 LINES = HERE / "lines.jsonl"  # every transcript line with its voiceprint; the panel tags these
 IGNORE = "Ignored"  # voices you tagged to ignore (a video playing nearby); `ozen retrain` (src/ignore.rs) writes their prints
 IGNORES = HERE / "ignore.json"
@@ -207,8 +210,9 @@ while True:
                 covered[tag] = max(covered[tag], t_chunk + len(audio) / SR)
             if audio.size and np.sqrt(np.mean(audio**2)) > SILENCE_RMS:
                 lines, prev = [], None  # [start, speaker, text, print sum, end], merged while speaker repeats
-                turns = overlap.utterances(audio) if tag == "local" else (
-                    (u + o, p) for u, c in overlap.utterances(audio) for o, p in overlap.voices(c, embed, SAME_SPEAKER))
+                separate = tag != "local" and sum(1 for _ in chunks.glob("*.wav")) <= SEPARATE_BACKLOG
+                turns = ((u + o, p) for u, c in overlap.utterances(audio)
+                         for o, p in (overlap.voices(c, embed, SAME_SPEAKER) if separate else [(0.0, c)]))
                 for start, clip in turns:
                     t0, t1 = t_chunk + start, t_chunk + start + len(clip) / SR
                     long = len(clip) >= MIN_EMBED_SEC * SR  # shorter prints are too noisy to judge echo by
