@@ -35,6 +35,13 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
   prints, and the live transcriber reloads them.
+- **Shares voices across your Macs.** The registry is a git repo that every Mac clones into `~/ozen/voices`.
+  `ozen start` pulls it, the running transcriber pulls again every few minutes (`PULL_EVERY` in `transcribe.py`),
+  and every retrain starts from the newest registry and pushes when it's done. Tags made on two Macs at the same
+  time both survive: a push that loses the race rebuilds on top of the other Mac's and pushes again. Offline, the
+  retrain commits locally and the next one pushes it. Because each retrain resets `~/ozen/voices` to the remote
+  before rebuilding, change voices by tagging, never by editing files there. A Mac's own tags live in its
+  `tags.json` and `lines.jsonl`, which never leave it; that's what the rebuild re-applies.
 - **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
   name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
   Those lines, and earlier ones that sound like them, turn grey and leave the timeline, and the transcriber stops
@@ -115,6 +122,7 @@ cd ~/ozen && cargo run --release -- app   # builds the ozen CLI and ~/Applicatio
 
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
+On another Mac, run the same three commands; voices tagged on either one reach the other within a few minutes.
 
 On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** and **Microphone** access;
 grant both (System Settings > Privacy & Security), then press Start again. **Location Services** is asked for
