@@ -477,7 +477,7 @@ impl Ozen {
         Ok(meetings::all()
             .iter()
             .rev()
-            .map(|m| m.row())
+            .map(meetings::Meeting::row)
             .collect::<Vec<_>>()
             .join("\n"))
     }
