@@ -2,6 +2,7 @@
 mod eval;
 mod fixes;
 mod ignore;
+mod mcp;
 mod meetings;
 mod train;
 
@@ -13,7 +14,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | show | meetings | gather | live | open | app | bar
+ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | show | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -37,7 +38,8 @@ ozen control: start | pause | resume | stop | status | health | look | fix | eva
   open DIR claude|hermes|finder
                 start that agent (or Finder) in a folder written by gather or live
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
-  bar           build if needed and open Ozen.app (its buttons call this binary)";
+  bar           build if needed and open Ozen.app (its buttons call this binary)
+  mcp           MCP server on stdio: agents read and edit meetings, lines, speakers, places and vocab";
 
 const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
 // macOS lists a bare binary under its file name in Privacy & Security, so run a copy named ozen.
@@ -47,6 +49,9 @@ const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so 
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current while the meeting goes on
+/// Tests that chdir into a temp dir hold this: the working directory is shared by every test thread.
+#[cfg(test)]
+static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
 
 fn home() -> String {
@@ -593,6 +598,7 @@ fn main() {
                 .and_then(|n| n.parse().ok())
                 .unwrap_or(40),
         ),
+        "mcp" => mcp::serve(),
         "app" => {
             if !build_app(&app) {
                 exit(1);
@@ -632,6 +638,7 @@ mod tests {
 
     #[test]
     fn rotates_only_a_log_past_one_mib() {
+        let _cwd = super::CWD.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("ozen-rotate-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_current_dir(&dir).unwrap();

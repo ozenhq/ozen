@@ -6,6 +6,7 @@
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""
 import datetime
+import fcntl
 import json
 import os
 import pathlib
@@ -59,6 +60,17 @@ speakers: list[list] = []  # [label, centroid, count]; named ones come from the 
 registry_mtime = 0.0
 PULL_EVERY = 300  # seconds between registry pulls, so tags made on other machines arrive while running
 last_pull = 0.0
+
+
+def open_lines():
+    """lines.jsonl for appending, locked. `ozen mcp` deletes lines by swapping in a rewritten file while it holds
+    this lock, so a lock won on the swapped-out file is retried on the current one."""
+    while True:
+        lj = LINES.open("a")
+        fcntl.flock(lj, fcntl.LOCK_EX)
+        if os.fstat(lj.fileno()).st_ino == LINES.stat().st_ino:
+            return lj
+        lj.close()
 
 
 def anon(label: str) -> bool:
@@ -265,7 +277,7 @@ while True:
                     else:
                         lines.append([start, spk, text, w * e, end])
                     prev = spk
-                with out.open("a") as fh, LINES.open("a") as lj:
+                with out.open("a") as fh, open_lines() as lj:
                     for i, (start, spk, heard, esum, end) in enumerate(lines):
                         text = asr.corrected(heard, learned().get("replace", {}))
                         ts = datetime.datetime.fromtimestamp(t_chunk + start).strftime("%H:%M:%S")
