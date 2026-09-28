@@ -46,4 +46,10 @@ jobs:
       - name: Swift menu bar and icon type-check
         run: swiftc -typecheck menubar.swift && swiftc -typecheck icon.swift
       - name: Python scripts compile
-        run: python3 -m py_compile transcribe.py overlap.py eval.py
+        run: python3 -m py_compile transcribe.py overlap.py eval.py asr.py
+      - name: Review panel check
+        timeout-minutes: 5
+        run: ./check-review.sh
+      - uses: astral-sh/setup-uv@v6
+      - name: Transcript filter doctests
+        run: uv run -q --with mlx-whisper python -m doctest asr.py < /dev/null
