@@ -4,6 +4,7 @@ mod dmg;
 mod ecapa;
 mod eval;
 mod fixes;
+mod icon;
 mod ignore;
 mod low_disk_alert;
 mod mcp;
@@ -72,7 +73,7 @@ ozen control: start | pause | resume | stop | record | process | status | health
                 start that agent (or Finder) in a folder written by gather or live
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)
-  dmg APP ICNS OUT  pack APP (a built Ozen.app) into the release DMG at OUT, ICNS as its volume icon
+  dmg APP OUT   pack APP (a built Ozen.app) into the release DMG at OUT
   mcp           MCP server on stdio: agents read and edit meetings, lines, speakers, places and vocab";
 
 const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
@@ -457,7 +458,7 @@ fn prepare_rec() -> bool {
 fn build_app(app: &str) -> bool {
     let bin = format!("{app}/Contents/MacOS/Ozen");
     if newer(&bin, "menubar.swift")
-        && newer(&bin, "icon.swift")
+        && newer(&bin, "src/icon.rs")
         && newer(&bin, "map.html")
         && newer(&bin, "chunks.html")
     {
@@ -475,8 +476,8 @@ fn build_app(app: &str) -> bool {
             eprintln!("{page} missing; its window stays blank");
         }
     }
-    if !ok(cmd("swift").args(["icon.swift", &resources])) {
-        eprintln!("icon build failed; app still works");
+    if let Err(e) = icon::write(Path::new(&resources), false) {
+        eprintln!("icon build failed ({e}); app still works");
     }
     let version = cmd("git")
         .args(["rev-parse", "--short", "HEAD"])
@@ -975,8 +976,8 @@ fn main() {
         }
         "dmg" => {
             let a: Vec<String> = std::env::args().skip(2).collect();
-            let [app, icon, out] = &a[..] else {
-                eprintln!("usage: ozen dmg <Ozen.app> <volume.icns> <out.dmg>");
+            let [app, out] = &a[..] else {
+                eprintln!("usage: ozen dmg <Ozen.app> <out.dmg>");
                 exit(2);
             };
             // relative paths are the caller's, not the checkout main() moved into
@@ -986,7 +987,7 @@ fn main() {
                     .display()
                     .to_string()
             };
-            if let Err(e) = dmg::build(&abs(app), &abs(icon), &abs(out)) {
+            if let Err(e) = dmg::build(&abs(app), &abs(out)) {
                 eprintln!("dmg: {e}");
                 exit(1);
             }

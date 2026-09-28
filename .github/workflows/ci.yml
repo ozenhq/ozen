@@ -44,8 +44,8 @@ jobs:
       - run: cargo clippy --release --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --release
-      - name: Swift menu bar and icon type-check
-        run: swiftc -typecheck menubar.swift && swiftc -typecheck icon.swift
+      - name: Swift menu bar type-check
+        run: swiftc -typecheck menubar.swift
       - name: Python scripts compile
         run: python3 -m py_compile transcribe.py overlap.py eval_overlap.py asr.py
       - uses: astral-sh/setup-uv@v6
