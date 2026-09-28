@@ -53,6 +53,8 @@ def embedder():
         if len(e) != 192:  # SystemExit passes the per-chunk handler: ozen restarts the transcriber, the chunk waits
             raise SystemExit("ozen embed stopped; is target/release/ozen built from this checkout?")
         return e / np.linalg.norm(e)
+    if ozen.stdout.readline() != b"ozen embed 1\n":  # an ozen built before this prints its usage instead
+        raise SystemExit("ozen embed unavailable; rebuild target/release/ozen from this checkout")
     embed(np.zeros(SR, np.float32))  # fail at start, not on the first chunk
     return embed
 
