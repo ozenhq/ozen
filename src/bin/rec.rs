@@ -9,7 +9,9 @@
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2_core_audio::*;
-use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
+use objc2_core_audio_types::{
+    AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp,
+};
 use objc2_core_foundation::{CFDictionary, CFRetained, CFString};
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSObject, NSString};
 use std::collections::HashMap;
@@ -372,10 +374,10 @@ fn run(
     tag: &'static str,
     last_only: bool,
     tap: Option<(AudioObjectID, AudioObjectID)>,
+    rate: u32,
     tx: &Sender<Samples>,
 ) -> Result<Stream, String> {
-    let rate =
-        get::<f64>(device, kAudioDevicePropertyNominalSampleRate, GLOBAL).unwrap_or(48000.0) as u32;
+    println!("{tag}: {rate} Hz");
     let source = Box::new(Source {
         tag,
         rate,
@@ -484,7 +486,12 @@ fn tap(
         unsafe { AudioHardwareDestroyProcessTap(tap_id) };
         return Err(e);
     }
-    run(aggregate, tag, true, Some((tap_id, aggregate)), tx)
+    // The aggregate device's nominal rate can differ from what it delivers (44.1 kHz reported while a 16 kHz
+    // headset clocked it), and a wrong rate plays the audio back sped up. The tap's own format is the rate its
+    // buffers arrive at.
+    let format = get::<AudioStreamBasicDescription>(tap_id, kAudioTapPropertyFormat, GLOBAL);
+    let rate = format.map_or(48000.0, |f| f.mSampleRate) as u32;
+    run(aggregate, tag, true, Some((tap_id, aggregate)), rate, tx)
 }
 
 fn flag(name: &str, contents: Option<&str>) {
@@ -542,7 +549,9 @@ impl Capture {
             None => default_device(kAudioHardwarePropertyDefaultInputDevice),
         };
         if let Some(d) = input {
-            self.mic = Some(run(d.id, "mic", false, None, &self.tx)?);
+            let rate =
+                get::<f64>(d.id, kAudioDevicePropertyNominalSampleRate, GLOBAL).unwrap_or(48000.0);
+            self.mic = Some(run(d.id, "mic", false, None, rate as u32, &self.tx)?);
         }
         Ok(())
     }
