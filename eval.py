@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["mlx-whisper"]
-# ///
 """Compare transcription setups on the last real chunks kept in recent/ (OZEN_KEEP_AUDIO).
 
     uv run eval.py [N]    # N most recent chunks with speech (default 6)
