@@ -23,6 +23,9 @@ SILENCE_RMS = 0.003  # below this Whisper hallucinates ("Thank you."), so skip
 # model hallucinates Knesset openers ("אדוני היושב-ראש…") and "Okay. Okay.". Speech from ~0.5m measured -31 dB
 # at its 10th percentile frame, so the floor sits between the two.
 SPEECH_RMS = 0.0125
+# A louder room (fans spinning up under load) moved that noise to -38 dB median, right on SPEECH_RMS, so over half
+# its frames passed and every 15s mic chunk came back as "Okay.". Speech must also be 6 dB over the noise floor.
+NOISE_MARGIN = 2.0
 MODEL = "MossFormer2_SS_16K"  # ~640MB, downloaded to models/ by preload()
 WINDOW, HOP = 1.5, 0.75  # seconds; voiceprints this short are noisy, but only decide whether to try separating
 # Both checks measured on real voices (LibriSpeech mixes, and pairs played into a room and recorded by ozen):
@@ -143,13 +146,19 @@ def turns(offset: float, piece: np.ndarray, embed, same: float) -> list[tuple[fl
     return turns(offset, piece[:cut], embed, same) + turns(offset + cut / SR, piece[cut:], embed, same)
 
 
-def utterances(audio: np.ndarray, frame=0.03, max_gap=0.35, min_len=0.3):
-    """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes."""
+def frame_rms(audio: np.ndarray, frame=0.03) -> np.ndarray:
+    n = int(frame * SR)
+    return np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
+
+
+def utterances(audio: np.ndarray, floor=0.0, frame=0.03, max_gap=0.35, min_len=0.3):
+    """Split on pauses so each piece is one speaker turn; Whisper segments span speaker changes. `floor` is the
+    source's learned background level: a frame is speech only at NOISE_MARGIN times it or more."""
     n = int(frame * SR)
     if len(audio) < n:
         return  # shorter than one frame (a fragment cut off at stop): nothing to split, and no rms to rank
-    rms = np.sqrt(np.mean(audio[: len(audio) // n * n].reshape(-1, n) ** 2, axis=1))
-    voiced = np.flatnonzero(rms > max(SPEECH_RMS, 0.15 * np.percentile(rms, 95)))
+    rms = frame_rms(audio, frame)
+    voiced = np.flatnonzero(rms > max(SPEECH_RMS, NOISE_MARGIN * floor, 0.15 * np.percentile(rms, 95)))
     if not voiced.size:
         return
     groups = np.split(voiced, np.flatnonzero(np.diff(voiced) * frame > max_gap) + 1)
@@ -184,6 +193,14 @@ if __name__ == "__main__":
         return np.array(load_audio(str(f)))
 
     a = say("Samantha", "The launch is moved to next Tuesday because the payments team needs more time for testing.")
+    # Steady room noise on SPEECH_RMS (fans under load) is no speech; the same noise with a voice 6 dB over it is
+    room = np.random.default_rng(0).normal(0, SPEECH_RMS, 15 * SR).astype(np.float32)
+    floor = float(np.percentile(frame_rms(room), 10))
+    assert not list(utterances(room, floor)), "room noise passed as speech"
+    talk = room.copy()
+    talk[3 * SR: 3 * SR + len(a)] += a * (2 * SPEECH_RMS / rms(a))
+    got = list(utterances(talk, floor))
+    assert got and got[0][0] >= 2.9 and sum(len(c) for _, c in got) >= 0.8 * len(a), "voice over room noise lost"
     b = say("Daniel", "I think we should tell the customers today, before they hear about it from someone else.")
     c = say("Fred", "Can everyone see my screen now?")
     at = lambda x, s, n: np.pad(x, (int(s * SR), max(0, n - len(x) - int(s * SR))))[:n]  # noqa: E731
