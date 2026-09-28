@@ -1,4 +1,4 @@
-//! `ozen dmg <Ozen.app> <volume.icns> <out.dmg>`: the release DMG (.github/workflows/release.yml). Ozen.app and an Applications
+//! `ozen dmg <Ozen.app> <out.dmg>`: the release DMG (.github/workflows/release.yml). Ozen.app and an Applications
 //! link on a drawn background, laid out in the volume's .DS_Store so Finder opens it as an install window.
 use dmg_layout::{
     AliasHeader, AliasKind, AliasRecord, AliasTarget, AliasVolume, CatalogNodeId, DiskType,
@@ -33,7 +33,7 @@ const ICON_Y: f64 = 210.0;
 const BG: &str = ".background.tiff";
 const VOLUME: &[u8] = b"Ozen";
 
-pub fn build(app: &str, icon: &str, out: &str) -> Result<(), String> {
+pub fn build(app: &str, out: &str) -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("ozen-dmg-{}", std::process::id()));
     let (stage, mnt, rw) = (tmp.join("stage"), tmp.join("mnt"), tmp.join("rw.dmg"));
     let _ = fs::remove_dir_all(&tmp);
@@ -42,7 +42,10 @@ pub fn build(app: &str, icon: &str, out: &str) -> Result<(), String> {
     std::os::unix::fs::symlink("/Applications", stage.join("Applications"))
         .map_err(|e| e.to_string())?;
     fs::write(stage.join(BG), background()).map_err(|e| e.to_string())?;
-    fs::copy(icon, stage.join(".VolumeIcon.icns")).map_err(|e| format!("volume icon: {e}"))?;
+    // the installer icon (a drive), so the mounted DMG doesn't look like the app
+    crate::icon::write(&tmp, true)?;
+    fs::rename(tmp.join("Installer.icns"), stage.join(".VolumeIcon.icns"))
+        .map_err(|e| e.to_string())?;
     let (s, m, r) = (
         stage.to_string_lossy(),
         mnt.to_string_lossy(),
