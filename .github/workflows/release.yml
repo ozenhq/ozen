@@ -17,11 +17,13 @@ jobs:
         with:
           xcode-version: latest-stable
       - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6 # dmgbuild lays out the DMG window
       - run: cargo build --release
       - name: Package
         # ozen/ holds the tagged sources plus target/release/{ozen,rec}: unpacked in ~ it is the ~/ozen checkout.
         # The DMG holds Ozen.app with that checkout inside (menubar.swift copies it to ~/ozen on launch), next to an
-        # Applications link to drag it onto. Signed ad hoc: not notarized, so the first open needs Open Anyway.
+        # Applications link to drag it onto, on the background dmg.swift draws (layout: dmg_settings.py).
+        # Signed ad hoc: not notarized, so the first open needs Open Anyway.
         run: |
           v="$GITHUB_REF_NAME"
           mkdir -p pkg/ozen/target/release dmg
@@ -33,8 +35,9 @@ jobs:
           cp -R ~/Applications/Ozen.app dmg/
           cp -R pkg/ozen dmg/Ozen.app/Contents/Resources/
           codesign --force --deep -s - dmg/Ozen.app
-          ln -s /Applications dmg/Applications
-          hdiutil create -volname Ozen -srcfolder dmg -format UDZO "ozen-$v-macos-arm64.dmg"
+          swift dmg.swift pkg
+          tiffutil -cathidpicheck pkg/bg.png pkg/bg@2x.png -out pkg/bg.tiff
+          uvx dmgbuild==1.6.7 -s dmg_settings.py -D app=dmg/Ozen.app -D bg=pkg/bg.tiff Ozen "ozen-$v-macos-arm64.dmg"
       - name: Upload to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
