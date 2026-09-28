@@ -39,3 +39,6 @@ context/
 eval/audio/
 eval/cache.jsonl
 eval/report.json
+
+# python env (uv run syncs it from uv.lock)
+.venv/

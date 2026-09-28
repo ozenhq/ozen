@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
-# ///
 """Watch the chunk dir; transcribe call + mic chunks with local Whisper, drop mic echo of
 call/local (computer) audio, label each line by speaker,
 append to transcript.txt and lines.jsonl (with voiceprints, for tagging in the menu bar panel)."""

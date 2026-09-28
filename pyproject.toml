@@ -1,0 +1,9 @@
+# One locked env (.venv, next to this file) for every script, so uv doesn't keep a copy of torch per checkout path.
+[project]
+name = "ozen"
+version = "0"
+requires-python = ">=3.11"
+dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
+
+[tool.uv]
+package = false

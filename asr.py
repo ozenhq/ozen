@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["mlx-whisper"]
-# ///
 """Speech to text for one clip: the Whisper setup the live transcriber (transcribe.py) and the eval (`ozen eval`)
 share, so a configuration measured by the eval is the one that runs in meetings.
 

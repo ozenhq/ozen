@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["speechbrain", "torchaudio", "mlx-whisper", "clearvoice"]
-# ///
 """Several people in one utterance: two talking at once, or one cutting in without a pause. The transcriber
 splits utterances on pauses, so these used to come out as one line under one speaker. `voices` separates such a
 clip into one track per voice (MossFormer2, 2 voices), each as long as the clip, so every voice is transcribed and

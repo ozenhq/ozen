@@ -333,6 +333,40 @@ fn prepare_rec() -> bool {
     true
 }
 
+/// Before pyproject.toml, uv built a separate env per script path in its cache and never deleted them.
+/// Drop our old ones (named after a script, holding mlx_whisper) that no running process uses.
+fn drop_script_envs() {
+    let Ok(dir) = cmd("uv").args(["cache", "dir"]).output() else {
+        return;
+    };
+    let dir = Path::new(String::from_utf8_lossy(&dir.stdout).trim()).join("environments-v2");
+    let Ok(ps) = cmd("ps").args(["-axo", "command"]).output() else {
+        return; // can't tell which are in use
+    };
+    let ps = String::from_utf8_lossy(&ps.stdout);
+    for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let whisper = fs::read_dir(e.path().join("lib"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|py| py.path().join("site-packages/mlx_whisper").is_dir());
+        if whisper && stale_env(&name, &ps) && fs::remove_dir_all(e.path()).is_ok() {
+            println!("removed old env {name}");
+        }
+    }
+}
+
+fn stale_env(name: &str, ps: &str) -> bool {
+    let ours = ["asr-", "eval-", "overlap-", "transcribe-"]
+        .iter()
+        .any(|p| {
+            name.strip_prefix(p)
+                .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        });
+    ours && !ps.contains(&format!("environments-v2/{name}/"))
+}
+
 fn build_app(app: &str) -> bool {
     let bin = format!("{app}/Contents/MacOS/Ozen");
     if newer(&bin, "menubar.swift") && newer(&bin, "icon.swift") && newer(&bin, "map.html") {
@@ -611,6 +645,10 @@ fn main() {
                 exit(1);
             }
             println!("installed {app}");
+            if !ok(cmd("uv").args(["sync", "-q"])) {
+                eprintln!("uv sync failed: the transcriber will set up its env on first start");
+            }
+            drop_script_envs();
         }
         "bar" => {
             if !build_app(&app) {
@@ -627,6 +665,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drops_only_idle_script_envs() {
+        let ps = "/u/.cache/uv/environments-v2/transcribe-1b646a70201e1ec6/bin/python3 transcribe.py chunks\n";
+        assert!(super::stale_env("transcribe-04996fcebd6a04ca", ps));
+        assert!(super::stale_env("asr-2871e1033d644c4b", ps));
+        assert!(!super::stale_env("transcribe-1b646a70201e1ec6", ps)); // running
+        assert!(!super::stale_env("train-02cfad274e3027bf", ps)); // not one of our scripts
+        assert!(!super::stale_env("transcribe-notahash", ps));
+    }
+
     #[test]
     fn keeps_only_processes_in_this_checkout() {
         let tmp = std::env::temp_dir().canonicalize().unwrap();
