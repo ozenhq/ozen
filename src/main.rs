@@ -615,8 +615,14 @@ fn main() {
         }
         "health" => {
             // Place switching doesn't depend on recording: say why it can't see where you are.
+            // Not while the menu bar app supplies the location instead (it touches here.json.app each poll).
+            let error = format!("{}.error", places::HERE);
+            let supplied = fs::metadata(format!("{}.app", places::HERE))
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|e| e.as_secs() < 30));
             if places::tracked(&places::load(places::FILE))
-                && let Ok(why) = fs::read_to_string(format!("{}.error", places::HERE))
+                && !supplied
+                && let Ok(why) = fs::read_to_string(&error)
             {
                 println!("Place switching is off: {}", why.trim());
             }

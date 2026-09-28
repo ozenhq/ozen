@@ -305,6 +305,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     let location = CLLocationManager()
     var here: (lat: Double, lon: Double)?  // from `ozen place`; nil until the first fix
     var placeNow: Place?  // the place you're in, from `ozen place`
+    var supplyingLocation = false  // the app is writing here.json because the locate binary can't (see supplyLocationIfNeeded)
     var placeLabel: String?  // label of the place we're in; a change re-applies auto control
     var settingPlace: Int?  // row waiting for a location fix after "Use current location"
     var pickingPlace: Int?  // row waiting for a map click after "Pick on map"
@@ -667,6 +668,29 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             autoControl()
             if placesWindow?.isVisible == true { showPlacesOnMap(fit: false) }
         }
+        supplyLocationIfNeeded()
+    }
+
+    /// Fallback: the locate binary shares the app's location permission through the app's identity. If it can't get
+    /// a location (it writes here.json.error) while the app itself is allowed, the app writes here.json instead, so
+    /// place switching keeps working; `ozen place` still decides which place that is. The locate binary retries each
+    /// minute and clears the error on its first fix, which hands the job back.
+    func supplyLocationIfNeeded() {
+        let blocked = FileManager.default.fileExists(atPath: dir.appendingPathComponent("here.json.error").path)
+        let allowed = location.authorizationStatus == .authorizedAlways
+        let want = blocked && allowed && loadPlaces().contains(where: { $0.lat != nil })
+        if want {  // heartbeat for `ozen health`: the app has the location covered, so don't warn
+            FileManager.default.createFile(atPath: dir.appendingPathComponent("here.json.app").path, contents: nil)
+        }
+        guard want != supplyingLocation else { return }
+        supplyingLocation = want
+        want ? location.startUpdatingLocation() : location.stopUpdatingLocation()
+    }
+
+    func locationManager(_ m: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard supplyingLocation, let fix = locations.last else { return }
+        let json = "{\"lat\":\(fix.coordinate.latitude),\"lon\":\(fix.coordinate.longitude),\"t\":\(fix.timestamp.timeIntervalSince1970)}"
+        try? Data(json.utf8).write(to: dir.appendingPathComponent("here.json"), options: .atomic)
     }
 
     /// Only the app can show the location prompt (the locate binary uses the answer), so ask here once some
@@ -680,7 +704,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
-        if m.authorizationStatus != .notDetermined { m.stopUpdatingLocation() }  // answered: the locate binary takes over
+        if m.authorizationStatus != .notDetermined, !supplyingLocation { m.stopUpdatingLocation() }  // answered: locate takes over
         if m.authorizationStatus == .denied || m.authorizationStatus == .restricted {
             placesNote.stringValue = "Location access is off. Turn on Ozen in System Settings → Privacy & Security → Location Services."
         }
