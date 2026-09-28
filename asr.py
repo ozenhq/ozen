@@ -63,15 +63,14 @@ FILLER = {w for phrases in NOISE.values() for p in phrases for w in words_of(p)}
 
 def noise(text: str) -> bool:
     """"תודה. תודה רבה." on silence: every word is known filler. Checked across languages, because a clip
-    detected as English can still come out in Hebrew (the hint carries Hebrew names and context)."""
+    detected as English can still come out in Hebrew (the prompt carries Hebrew context)."""
     words = words_of(text)
     return not words or set(words) <= FILLER
 
 
 def hint_echo(text: str, hint: list[str]) -> bool:
-    """"אורן דן. אורן דן. אורן דן." on noise: Whisper repeats names and terms from its own prompt. A line made
-    only of hint words (and filler) that repeats itself is that echo. A single "אורן דן." can be real speech
-    (someone addressed by name), so it stays."""
+    """"Kev. Kev. Kev." on noise: Whisper repeats terms from its own prompt. A line made only of hint words (and
+    filler) that repeats itself is that echo. A single "Kev." can be real speech, so it stays."""
     words = words_of(text)
     return len(words) > len(set(words)) and set(words) <= {w for h in hint for w in words_of(h)} | FILLER
 

@@ -16,7 +16,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 - **Transcribes Hebrew and English.** On-device Whisper (MLX) per utterance, language picked between `he` and `en`
   for each one: Hebrew goes to [ivrit.ai's Hebrew-trained turbo](https://huggingface.co/mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx),
   English to stock large-v3-turbo. Each call is hinted with `vocab.txt` (terms and names to spell right, e.g. Kev,
-  PR, code review; edit freely), the known people's names, and the previous line. Known filler that Whisper invents
+  PR, code review; edit freely) and the previous line. Known filler that Whisper invents
   on noise ("Thank you.", "תודה רבה") is dropped.
 - **Drops echo.** A mic utterance that mostly overlaps call or local audio, in the voice that was playing then,
   is speaker bleed, not a person in the room, so it's discarded. That covers the computer reading text aloud and
