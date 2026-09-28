@@ -1,4 +1,5 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
+mod auto_record;
 mod compare;
 mod ecapa;
 mod eval;
@@ -19,7 +20,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | auto | tag | ignore | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -31,6 +32,7 @@ ozen control: start | pause | resume | stop | record | process | status | health
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   eval [--vocab 0,10,30,60] [--repeat 0,1,2,3] [--real] [--fresh]
                 score learning settings on a fixed set of spoken lines (see src/eval.rs)
+  auto JSON     the menu bar app's start/stop decision from its live facts (see src/auto_record.rs)
   compare [N]   transcribe the last N chunks with speech in recent/ (default 6) with stock Whisper, the
                 Hebrew model and Hebrew + vocab.txt, to judge a model or prompt change on your own speech
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
@@ -654,6 +656,12 @@ fn main() {
         "eval" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             if let Err(e) = eval::run(&args) {
+                eprintln!("{e}");
+                exit(1);
+            }
+        }
+        "auto" => {
+            if let Err(e) = auto_record::run(std::env::args().nth(2)) {
                 eprintln!("{e}");
                 exit(1);
             }

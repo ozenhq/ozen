@@ -39,7 +39,7 @@ struct Place: Codable {
     var action: String  // "record" | "meetings" | "off"
     var radius: Double?  // meters; nil = defaultRadius
 }
-let defaultRadius: CLLocationDistance = 150
+let defaultRadius: CLLocationDistance = 150  // same as DEFAULT_RADIUS_M in src/auto_record.rs
 let placeActions = [("record", "Auto record"), ("meetings", "Record meetings only"), ("off", "Auto off")]
 
 // places.json in the ozen dir: plain JSON any platform or tool can read, not macOS-only preferences.
@@ -272,6 +272,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var here: (lat: Double, lon: Double)?  // from `ozen place`; nil until the first fix
     var placeNow: Place?  // the place you're in, from `ozen place`
     var placeLabel: String?  // label of the place we're in; a change re-applies auto control
+    var placeAction: String?  // that place's action ("record" | "meetings" | "off"), for the status line
     var settingPlace: Int?  // row waiting for a location fix after "Use current location"
     var pickingPlace: Int?  // row waiting for a map click after "Pick on map"
     var rebuilding = false  // removing a focused field fires its action; ignore those echoes
@@ -486,35 +487,32 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         autoControl()
     }
 
+    /// Asks `ozen auto` (src/auto_record.rs, where the rules and their tests live) whether to start or stop,
+    /// with the live facts only this app has (where you are comes from here.json, in Rust); keeps the
+    /// bookkeeping it hands back for the next tick.
     func autoControl() {
         if let app = meetingUsingMic() {
             lastMeeting = Date()
             meetingName = app
         }
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
-        let place = currentPlace()
-        if place?.label != placeLabel {
-            placeLabel = place?.label
-            lastWanted = nil  // arriving at or leaving a place applies right away
-        }
-        // Just launched, places set, no location yet: wait (up to 30s) rather than let the global mode decide
-        // for a place we can't see yet, e.g. start recording at a place set to meetings only.
-        if place == nil, here == nil, Date().timeIntervalSince(launchedAt) < 30, loadPlaces().contains(where: { $0.lat != nil }) {
-            return show(state: state)
-        }
-        let wanted = place.map { $0.action == "record" || $0.action == "meetings" && inMeeting } ?? (mode == "always" || inMeeting)
-        defer { lastWanted = wanted; show(state: state) }
-        guard wanted != lastWanted else { return }
-        // First decision after launch may start recording, never stop one: a recording already running was
-        // started by hand (or by the previous app), and a relaunch or rebuild shouldn't end it.
-        if !adopted {
-            adopted = true
-            if !wanted { return }
-        }
-        if wanted, state == "stopped" || state == "paused" || state == "processing" {
-            startCapture()
-        } else if !wanted, state == "recording" || state == "paused" {
-            stopCapture()
+        let tick: [String: Any] = [
+            "mode": mode, "in_meeting": inMeeting, "state": state,
+            "launched_secs": Date().timeIntervalSince(launchedAt),
+            "place": placeLabel ?? NSNull(), "last_wanted": lastWanted ?? NSNull(), "adopted": adopted,
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: tick) else { return }
+        ozen("auto", String(decoding: json, as: UTF8.self)) { out in
+            guard let d = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any] else { return }
+            self.placeLabel = d["place"] as? String
+            self.placeAction = d["place_action"] as? String
+            self.lastWanted = d["last_wanted"] as? Bool
+            self.adopted = d["adopted"] as? Bool ?? self.adopted
+            switch d["act"] as? String {
+            case "start": self.startCapture()
+            case "stop": self.stopCapture()
+            default: self.show(state: self.state)
+            }
         }
     }
 
@@ -530,9 +528,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             ? image?.withSymbolConfiguration(.init(paletteColors: [.systemRed])).map { $0.isTemplate = false; return $0 }
             : image
         let inMeeting = lastMeeting.map { Date().timeIntervalSince($0) < meetingGrace } ?? false
-        let place = currentPlace()
-        let meetingsOnly = place.map { $0.action == "meetings" } ?? (mode == "meetings")
-        let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + (place.map { " · \($0.label)" } ?? "")
+        let meetingsOnly = placeAction.map { $0 == "meetings" } ?? (mode == "meetings")
+        let at = placeLabel.map { " · \($0)" } ?? ""
+        let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + at
         // Anything but recording says so first, so a paused, finishing or waiting state never reads as recording.
         let queued = queuedChunks()
         let processing = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".processing").path)
@@ -540,7 +538,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         status.stringValue = s == "recording" ? "● Recording\(meeting)" + (recordOnly && !processing ? " · not transcribing" : "")
             : "Not recording · " + (["paused": "paused", "stopping": "finishing transcription…",
                                      "processing": "processing \(queued) chunks…"][s]
-                ?? (meetingsOnly ? "waiting for a meeting" : "stopped") + (place.map { " · \($0.label)" } ?? ""))
+                ?? (meetingsOnly ? "waiting for a meeting" : "stopped") + at)
         item.button?.toolTip = "Ozen: " + status.stringValue
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
         startButton.title = s == "paused" ? "Resume" : split ? "Record" : "Start"
@@ -615,8 +613,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     }
 
     // MARK: places
-
-    func currentPlace() -> Place? { placeNow }
 
     /// `ozen place` output: {"here": {lat, lon, age} | null, "place": {label, action} | null}. Where you are and
     /// which place that is are decided in Rust (src/places.rs, src/bin/locate.rs); this only keeps the answer.
