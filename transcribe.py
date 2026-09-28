@@ -14,10 +14,7 @@ import sys
 import time
 
 import numpy as np
-import torch
 from mlx_whisper.audio import load_audio
-
-from speechbrain.inference.speaker import EncoderClassifier
 
 import asr  # Whisper setup shared with the eval (asr.py)
 import overlap  # several people in one utterance (overlap.py)
@@ -53,7 +50,7 @@ IGNORE_MARGIN = 0.1  # same as src/ignore.rs MARGIN: dropping someone's speech c
 ignored = np.zeros((0, 192), dtype=np.float32)
 
 overlap.preload()
-encoder = EncoderClassifier.from_hparams(source=ECAPA, savedir=str(HERE / "models/ecapa"), run_opts={"device": "cpu"})
+embed = overlap.embedder()  # ECAPA voiceprints (src/ecapa.rs); ECAPA names the model in the registry
 # ponytail: online nearest-centroid clustering, no re-clustering; a voice split early stays split.
 speakers: list[list] = []  # [label, centroid, count]; named ones come from the registry
 registry_mtime = 0.0
@@ -138,11 +135,6 @@ def mark_old_junk() -> None:
 mark_old_junk()
 unknown = 0
 RUN = int(time.time())  # S1, S2... are per run: lines carry it so the panel can group a label's lines
-
-
-def embed(clip: np.ndarray) -> np.ndarray:
-    e = encoder.encode_batch(torch.from_numpy(clip.astype(np.float32))[None]).squeeze().numpy()
-    return e / np.linalg.norm(e)
 
 
 def who(clip: np.ndarray, e: np.ndarray) -> str:

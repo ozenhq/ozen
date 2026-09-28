@@ -24,7 +24,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   is speaker bleed, not a person in the room, so it's discarded. That covers the computer reading text aloud and
   remote voices leaking into the mic. Someone in the room talking over the call keeps their line: their voice
   doesn't match what was playing.
-- **Knows who's speaking.** Each utterance gets an ECAPA voiceprint (speechbrain) and is matched against voices
+- **Knows who's speaking.** Each utterance gets an ECAPA voiceprint (speechbrain's model, run in Rust by `src/ecapa.rs`) and is matched against voices
   already heard, so a person keeps one label for the whole meeting. Known people come from the
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
 - **Hears people talking at once.** In the room, on the call, or both: when voiceprints across an utterance
