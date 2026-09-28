@@ -429,7 +429,7 @@ pub struct Ozen {
 #[tool_router]
 impl Ozen {
     #[tool(
-        description = "Recording state (recording | paused | stopping | stopped), record mode, and current problems.",
+        description = "Recording state (recording | paused | stopping | processing | stopped), record mode, and current problems.",
         annotations(read_only_hint = true)
     )]
     async fn status(&self) -> Reply {

@@ -236,13 +236,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var signature = ""
     var pending: [String: String] = [:]  // tags shown right away while `ozen tag` retrains
     var pendingFixes: [String: String] = [:]  // same for text fixes
-    var state = "stopped"  // from `ozen status`: recording | paused | stopping | stopped
+    var state = "stopped"  // from `ozen status`: recording | paused | stopping | processing | stopped
     var problems: [String] = []  // from `ozen health`: why recording isn't turning into transcript
     let warning = NSTextField(wrappingLabelWithString: "")
     let status = NSTextField(labelWithString: "")
     let startButton = NSButton(title: "Start", target: nil, action: nil)
     let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
     let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    let processButton = NSButton(title: "Process", target: nil, action: nil)
+    let advancedButton = NSButton(title: "", target: nil, action: nil)
+    var advancedWindow: NSWindow?
+    // Advanced setting, off by default: Record only records and Process transcribes the queue, each on its own.
+    var split: Bool { UserDefaults.standard.bool(forKey: "split") }
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
     var reviewQueue: [String] = []  // untagged unsure line ids, most uncertain first
@@ -297,12 +302,16 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         text.linkTextAttributes = [.cursor: NSCursor.pointingHand]  // links keep their own colors: names, unsure, text
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (voicesButton, #selector(showVoices)), (quitButton, #selector(quitOzen))] {
+        for (b, cmd) in [(startButton, #selector(startCapture)), (pauseButton, #selector(pauseCapture)), (stopButton, #selector(stopCapture)), (processButton, #selector(processQueue)), (advancedButton, #selector(showAdvanced)), (reviewButton, #selector(reviewNext)), (placesButton, #selector(showPlaces)), (voicesButton, #selector(showVoices)), (quitButton, #selector(quitOzen))] {
             b.target = self
             b.action = cmd
             b.bezelStyle = .rounded
             b.controlSize = .small
         }
+        advancedButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Advanced settings")
+        advancedButton.imagePosition = .imageOnly
+        advancedButton.toolTip = "Advanced settings"
+        processButton.toolTip = "Transcribe the recorded audio that's waiting, then stop"
         status.font = .boldSystemFont(ofSize: 12)
         warning.font = .systemFont(ofSize: 12)
         warning.textColor = .systemOrange
@@ -318,7 +327,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         askButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI")  // the usual mark for AI features
         askButton.imagePosition = .imageLeading
         askButton.toolTip = "Start Claude Code or Hermes on the meeting happening now (ozen live)"
-        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, voicesButton, reviewButton, startButton, pauseButton, stopButton, quitButton])
+        let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, voicesButton, reviewButton, startButton, pauseButton, stopButton, processButton, advancedButton, quitButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
         viewControl.target = self
         viewControl.action = #selector(switchView)
@@ -389,9 +398,10 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             menu.addItem(withTitle: "ozen: \(state)", action: nil, keyEquivalent: "")
             for p in problems { menu.addItem(withTitle: "⚠︎ " + p, action: nil, keyEquivalent: "") }
             menu.addItem(.separator())
-            for (title, sel, on) in [(state == "paused" ? "Resume" : "Start", #selector(startCapture), state == "stopped" || state == "paused"),
-                                     ("Pause", #selector(pauseCapture), state == "recording"),
-                                     ("Stop", #selector(stopCapture), state == "recording" || state == "paused")] where on {
+            for (title, sel, on) in [(startButton.title, #selector(startCapture), startButton.isEnabled),
+                                     ("Pause", #selector(pauseCapture), !pauseButton.isHidden && pauseButton.isEnabled),
+                                     ("Stop", #selector(stopCapture), stopButton.isEnabled),
+                                     (processButton.title, #selector(processQueue), !processButton.isHidden && processButton.isEnabled)] where on {
                 let mi = NSMenuItem(title: title, action: sel, keyEquivalent: "")
                 mi.target = self
                 menu.addItem(mi)
@@ -410,6 +420,9 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             let voicesItem = NSMenuItem(title: "Voices…", action: #selector(showVoices), keyEquivalent: "")
             voicesItem.target = self
             menu.addItem(voicesItem)
+            let advancedItem = NSMenuItem(title: "Advanced…", action: #selector(showAdvanced), keyEquivalent: "")
+            advancedItem.target = self
+            menu.addItem(advancedItem)
             menu.addItem(.separator())
             let quit = NSMenuItem(title: "Quit ozen", action: #selector(quitOzen), keyEquivalent: "q")
             quit.target = self
@@ -499,7 +512,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             adopted = true
             if !wanted { return }
         }
-        if wanted, state == "stopped" || state == "paused" {
+        if wanted, state == "stopped" || state == "paused" || state == "processing" {
             startCapture()
         } else if !wanted, state == "recording" || state == "paused" {
             stopCapture()
@@ -509,7 +522,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     func show(state s: String) {
         state = s
         let icon = s == "recording" && !problems.isEmpty ? "ear.trianglebadge.exclamationmark"
-            : ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass"][s] ?? "ear"
+            : ["recording": "ear.fill", "paused": "pause.circle", "stopping": "hourglass", "processing": "hourglass"][s] ?? "ear"
         warning.stringValue = problems.map { "⚠︎ " + $0 }.joined(separator: "\n")
         warning.superview?.isHidden = problems.isEmpty
         let image = NSImage(systemSymbolName: icon, accessibilityDescription: "ozen \(s)")
@@ -522,15 +535,29 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let meetingsOnly = place.map { $0.action == "meetings" } ?? (mode == "meetings")
         let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + (place.map { " · \($0.label)" } ?? "")
         // Anything but recording says so first, so a paused, finishing or waiting state never reads as recording.
-        status.stringValue = s == "recording" ? "● Recording\(meeting)"
-            : "Not recording · " + (["paused": "paused", "stopping": "finishing transcription…"][s]
+        let queued = queuedChunks()
+        let processing = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".processing").path)
+        let recordOnly = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".record-only").path)
+        status.stringValue = s == "recording" ? "● Recording\(meeting)" + (recordOnly && !processing ? " · not transcribing" : "")
+            : "Not recording · " + (["paused": "paused", "stopping": "finishing transcription…",
+                                     "processing": "processing \(queued) chunks…"][s]
                 ?? (meetingsOnly ? "waiting for a meeting" : "stopped") + (place.map { " · \($0.label)" } ?? ""))
         item.button?.toolTip = "Ozen: " + status.stringValue
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
-        startButton.title = s == "paused" ? "Resume" : "Start"
-        startButton.isEnabled = s == "stopped" || s == "paused"
+        startButton.title = s == "paused" ? "Resume" : split ? "Record" : "Start"
+        startButton.isEnabled = s == "stopped" || s == "paused" || s == "processing"
         pauseButton.isEnabled = s == "recording"
+        pauseButton.isHidden = split  // a recording without a transcriber has nothing to keep loaded: Stop is the same
         stopButton.isEnabled = s == "recording" || s == "paused"
+        processButton.isHidden = !split
+        processButton.title = processing ? "Stop processing" : queued > 0 ? "Process \(queued)" : "Process"
+        processButton.isEnabled = processing || queued > 0
+    }
+
+    /// Recorded audio chunks the transcriber hasn't turned into lines yet.
+    func queuedChunks() -> Int {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("chunks").path)) ?? []
+        return names.filter { $0.hasSuffix(".wav") }.count
     }
 
     func control(_ cmd: String, optimistic: String) {
@@ -538,11 +565,55 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         ozen(cmd) { _ in DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refreshState() } }
     }
 
-    @objc func startCapture() { control(state == "paused" ? "resume" : "start", optimistic: "recording") }
+    @objc func startCapture() { control(state == "paused" ? "resume" : split ? "record" : "start", optimistic: "recording") }
+    @objc func processQueue() {
+        let stop = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".processing").path)
+        run(stop ? ["process", "stop"] : ["process"]) { _, _, _ in DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refreshState() } }
+    }
     @objc func pauseCapture() { control("pause", optimistic: "paused") }
     @objc func stopCapture() { control("stop", optimistic: "stopping") }
     // Stop returns at once (the drain runs detached), so the last words still reach the transcript after we exit.
-    @objc func quitOzen() { state == "stopped" ? NSApp.terminate(nil) : ozen("stop") { _ in NSApp.terminate(nil) } }
+    // Processing without a recording finishes by itself, so quitting leaves it running.
+    @objc func quitOzen() { state == "stopped" || state == "processing" ? NSApp.terminate(nil) : ozen("stop") { _ in NSApp.terminate(nil) } }
+
+    // MARK: advanced settings
+
+    @objc func showAdvanced() {
+        if advancedWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 170), styleMask: [.titled, .closable],
+                             backing: .buffered, defer: false)
+            w.title = "Ozen Advanced Settings"
+            w.isReleasedWhenClosed = false
+            let header = NSTextField(labelWithString: "Recording and processing")
+            header.font = .boldSystemFont(ofSize: 12)
+            let box = NSButton(checkboxWithTitle: "Split recording and processing", target: self, action: #selector(splitChanged(_:)))
+            box.state = split ? .on : .off
+            let note = NSTextField(wrappingLabelWithString: "Record then only records: nothing is transcribed while it runs, and the audio "
+                + "waits in the chunks folder (it takes disk space until processed). Process transcribes the waiting audio, "
+                + "with or without a recording going on, and stops once it's done. Off: Start records and transcribes together.")
+            note.font = .systemFont(ofSize: 11)
+            note.textColor = .secondaryLabelColor
+            note.preferredMaxLayoutWidth = 420
+            let stack = NSStackView(views: [header, box, note])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 8
+            stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+            w.contentView = stack
+            advancedWindow = w
+            w.center()
+        }
+        NSApp.activate()
+        advancedWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func splitChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "split")
+        // A recording in progress switches now. Turning split on keeps the live transcriber going as processing
+        // (Stop processing ends it), so nothing already heard waits.
+        if state == "recording" { ozen(split ? "record" : "start") { _ in self.refreshState() } }
+        show(state: state)
+    }
 
     // MARK: places
 

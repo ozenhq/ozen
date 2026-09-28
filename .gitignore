@@ -15,6 +15,8 @@ no-display
 capture-error
 mic-fallback
 .transcriber-started
+.record-only
+.processing
 *.png
 lines.jsonl
 junk.json
