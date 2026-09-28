@@ -254,8 +254,10 @@ pub fn serve() -> std::result::Result<(), String> {
         let mut buf = vec![0u8; u32::from_le_bytes(n) as usize * 4];
         inp.read_exact(&mut buf).map_err(|e| e.to_string())?;
         let wav: Vec<f32> = buf
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect();
         let e = enc.embed(&wav).map_err(|e| e.to_string())?;
         let bytes: Vec<u8> = e.iter().flat_map(|v| v.to_le_bytes()).collect();
