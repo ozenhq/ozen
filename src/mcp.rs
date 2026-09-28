@@ -95,7 +95,7 @@ fn locked() -> Result<File, String> {
 }
 
 /// Rewrite lines.jsonl under the transcriber's append lock, so no new line is lost, and swap it in by
-/// rename, so readers that don't lock (the panel, train.py) see the old file or the new one, never half.
+/// rename, so readers that don't lock (the panel, retraining) see the old file or the new one, never half.
 fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
     let mut f = locked()?;
     let mut raw = String::new();
@@ -211,7 +211,7 @@ fn delete(ids: &[String]) -> Reply {
         })
         .cloned()
         .collect();
-    // An empty tag, not a removed one: it tells train.py to drop the line's sample from the registry.
+    // An empty tag, not a removed one: it tells retraining to drop the line's sample from the registry.
     crate::ignore::tag(&tagged, "");
     let mut labels = read(LABELS);
     labels.retain(|id, _| !ids.contains(id));
