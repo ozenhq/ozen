@@ -579,6 +579,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         if settingPlace != nil {
             settingPlace = nil
             placesNote.stringValue = "Couldn't get your location: \(error.localizedDescription)"
+            watchLocation()  // setPlaceHere paused tracking for its one fix
+            buildPlaces()
         }
     }
 
@@ -773,7 +775,18 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
             return
         }
         location.requestAlwaysAuthorization()
-        location.requestLocation()  // one fresh fix, even when an older one is cached
+        // requestLocation does nothing while updates are running (they are, once any place has coordinates),
+        // and standing still sends no new update: pause tracking for the one fix; the handlers resume it.
+        location.stopUpdatingLocation()
+        location.requestLocation()
+        let row = sender.tag
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, self.settingPlace == row else { return }
+            self.settingPlace = nil
+            self.placesNote.stringValue = "Couldn't get your location in 30 seconds. Check Wi-Fi is on, or use Pick on map."
+            self.watchLocation()
+            self.buildPlaces()
+        }
         buildPlaces()
     }
 
