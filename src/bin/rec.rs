@@ -325,6 +325,15 @@ impl Capture {
     }
 }
 
+/// Whether a failed capture rebuild is worth retrying. A missing permission or entitlement never fixes itself;
+/// everything else (audio not ready after wake, a mic that vanished, an interrupted service) usually does.
+fn retryable(e: &SCError) -> bool {
+    !matches!(
+        e.stream_error_code(),
+        Some(SCStreamErrorCode::UserDeclined | SCStreamErrorCode::MissingEntitlements)
+    )
+}
+
 /// A missing permission ends the recorder; `ozen health` recognizes that case by its text.
 fn fatal(e: SCError) -> ! {
     if e.stream_error_code() == Some(SCStreamErrorCode::UserDeclined) {
@@ -389,7 +398,7 @@ fn main() {
         // the meeting unrecorded. Only a missing permission is final.
         let restart = |cap: &mut Capture, why: &str| {
             cap.start(why).unwrap_or_else(|e| {
-                if e.stream_error_code() == Some(SCStreamErrorCode::UserDeclined) {
+                if !retryable(&e) {
                     fatal(e);
                 }
                 eprintln!("capture failed, retrying: {e}");
@@ -471,5 +480,23 @@ fn main() {
         if tick.is_multiple_of(5) {
             cap.refresh_filters();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable;
+    use screencapturekit::error::{SCError, SCStreamErrorCode as C};
+
+    #[test]
+    fn only_permission_errors_end_the_recorder() {
+        let e = SCError::from_stream_error_code;
+        assert!(!retryable(&e(C::UserDeclined)));
+        assert!(!retryable(&e(C::MissingEntitlements)));
+        // Seen live on wake from display sleep: "Stream failed to start audio".
+        assert!(retryable(&e(C::FailedToStartAudioCapture)));
+        assert!(retryable(&e(C::FailedToStartMicrophoneCapture)));
+        assert!(retryable(&e(C::NoCaptureSource)));
+        assert!(retryable(&e(C::InternalError)));
     }
 }
