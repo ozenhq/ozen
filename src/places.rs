@@ -29,7 +29,7 @@ pub fn load(path: &str) -> Vec<Place> {
 
 pub fn save(path: &str, places: &[Place]) -> Result<(), String> {
     let tmp = format!("{path}.tmp");
-    let json = serde_json::to_string_pretty(places).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(places).map_err(|e| e.to_string())? + "\n";
     fs::write(&tmp, json)
         .and_then(|_| fs::rename(&tmp, path))
         .map_err(|e| e.to_string())
