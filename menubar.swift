@@ -292,6 +292,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var split: Bool { UserDefaults.standard.bool(forKey: "split") }
     let reviewButton = NSButton(title: "Review", target: nil, action: nil)
     var headerRanges: [String: NSRange] = [:]  // line id -> speaker name range in the text view
+    var queued = 0  // chunks waiting to be transcribed, from `ozen controls`
+    var controlsAsked = 0  // only the newest `ozen controls` answer is drawn
     var reviewQueue: [(id: String, until: Double)] = []  // `ozen unsure`: most uncertain first, and when each ages out
     var review: [String] = []  // the queue minus lines too old to remember who said them
     var shown: Set<String> = []  // line ids in the transcript
@@ -582,9 +584,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         let meetingsOnly = place.map { $0.action == "meetings" } ?? (mode == "meetings")
         let meeting = (meetingsOnly && inMeeting ? " · \(meetingName ?? "meeting")" : "") + (place.map { " · \($0.label)" } ?? "")
         // Anything but recording says so first, so a paused, finishing or waiting state never reads as recording.
-        let controls = cli("controls", s, split ? "split" : "") as? [String: Any] ?? [:]
-        let queued = controls["queued"] as? Int ?? 0
-        let button = { (name: String) in controls[name] as? [String: Any] ?? [:] }
         let processing = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".processing").path)
         let recordOnly = FileManager.default.fileExists(atPath: dir.appendingPathComponent(".record-only").path)
         status.stringValue = s == "recording" ? "● Recording\(meeting)" + (recordOnly && !processing ? " · not transcribing" : "")
@@ -593,11 +592,19 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
                 ?? (meetingsOnly ? "waiting for a meeting" : "stopped") + (place.map { " · \($0.label)" } ?? ""))
         item.button?.toolTip = "Ozen: " + status.stringValue
         status.textColor = s == "recording" ? .systemRed : .secondaryLabelColor
-        for (b, name) in [(startButton, "start"), (pauseButton, "pause"), (stopButton, "stop"), (processButton, "process")] {
-            let c = button(name)
-            if let title = c["title"] as? String { b.title = title }
-            b.isEnabled = c["enabled"] as? Bool ?? false
-            b.isHidden = c["hidden"] as? Bool ?? false
+        // Off the main thread: this runs on every status poll. Until it answers, the buttons keep their last state.
+        controlsAsked += 1
+        let asked = controlsAsked
+        run(["controls", s, split ? "split" : ""]) { out, _, _ in
+            guard asked == self.controlsAsked, let c = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any] else { return }
+            for (b, name) in [(self.startButton, "start"), (self.pauseButton, "pause"), (self.stopButton, "stop"), (self.processButton, "process")] {
+                let c = c[name] as? [String: Any] ?? [:]
+                if let title = c["title"] as? String { b.title = title }
+                b.isEnabled = c["enabled"] as? Bool ?? false
+                b.isHidden = c["hidden"] as? Bool ?? false
+            }
+            let q = c["queued"] as? Int ?? 0
+            if q != self.queued { self.queued = q; self.show(state: s) }  // the status line counts them
         }
     }
 
