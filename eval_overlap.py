@@ -24,7 +24,6 @@ import tempfile
 import urllib.request
 from collections import Counter
 
-import mlx.core as mx
 import numpy as np
 import pyarrow.parquet as pq
 import soundfile as sf
@@ -156,7 +155,6 @@ def recognize(clip: np.ndarray, lang: str) -> str:
         return ""
     key = hashlib.sha1(clip.astype(np.float32).tobytes() + f"{lang}|{CONTEXT}".encode()).hexdigest()
     if key not in cache:
-        mx.random.seed(0)  # as asr.py's worker: the same clip always gives the same text
         cache[key] = asr.recognize(clip, asr.prompt(VOCAB), lang, VOCAB)[0]
         with CACHE.open("a") as f:
             f.write(json.dumps([key, cache[key]], ensure_ascii=False) + "\n")

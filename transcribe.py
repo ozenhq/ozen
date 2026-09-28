@@ -14,7 +14,6 @@ import sys
 import time
 
 import numpy as np
-from mlx_whisper.audio import load_audio
 
 import asr  # Whisper setup shared with the eval (asr.py)
 import overlap  # several people in one utterance (overlap.py)
@@ -264,7 +263,7 @@ while True:
             continue
         began, wrote, sec, error = time.time(), 0, 0.0, None
         try:
-            audio = np.array(load_audio(str(f)))
+            audio = np.array(asr.load_audio(str(f)))
             sec = len(audio) / SR
             if tag in covered:
                 covered[tag] = max(covered[tag], t_chunk + len(audio) / SR)

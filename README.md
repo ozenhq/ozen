@@ -13,7 +13,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   - `mic`: your microphone
   - `local`: every other app, e.g. a video or the `say` command. Never transcribed; it only
     tells the transcriber when the computer itself is talking.
-- **Transcribes Hebrew and English.** On-device Whisper (MLX) per utterance, language picked between `he` and `en`
+- **Transcribes Hebrew and English.** On-device Whisper (large-v3-turbo, run on the GPU in Rust by `src/whisper.rs`) per utterance, language picked between `he` and `en`
   for each one: Hebrew goes to [ivrit.ai's Hebrew-trained turbo](https://huggingface.co/mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx),
   English to stock large-v3-turbo. Each call is hinted with `vocab.txt` (terms and names to spell right, e.g. Kev,
   PR, code review; edit freely) and the previous line. Known filler that Whisper invents
