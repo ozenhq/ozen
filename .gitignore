@@ -45,3 +45,7 @@ eval/data/
 
 # python env (uv run syncs it from uv.lock)
 .venv/
+
+# kept current by the locate watcher while some place has coordinates (ozen place)
+here.json
+here.json.*

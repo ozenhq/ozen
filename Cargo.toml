@@ -14,6 +14,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 hound = "3.5.1"
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
+objc2 = "0.6.4"
+objc2-core-location = { version = "0.3.2", features = ["CLLocation", "CLLocationManager"] }
+objc2-foundation = { version = "0.3.2", features = ["NSRunLoop", "NSDate"] }
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
 screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }

@@ -96,8 +96,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Always / Meetings; arriving or leaving applies right away, and a manual pause or start holds until then. Locate a
   place by typing its latitude and longitude, with **Use current location**, with **Pick on map** and a click, or
   by dragging its pin. Home and Work are there from the start with no location, so they do nothing until you set
-  them. Places are saved to `places.json` in the ozen folder as plain JSON (fields: `Place` in `menubar.swift`;
-  default radius: `defaultRadius`). The map is `map.html` (Leaflet + OpenStreetMap, no API key), which any web view
+  them. Places are saved to `places.json` in the ozen folder as plain JSON (fields and default radius: `Place` in
+  `src/places.rs`). Where you are and which place that is are decided in Rust: `ozen place` (polled by the panel)
+  keeps a `locate` watcher (`src/bin/locate.rs`, CoreLocation) running while some place has coordinates, and
+  **Use current location** runs `ozen places here N`. The watcher carries Ozen's bundle id and signing certificate,
+  so it uses the app's location permission; the app itself only shows the permission prompt. The map is `map.html` (Leaflet + OpenStreetMap, no API key), which any web view
   or browser can host.
 
 - **Hands meetings to an agent.** Switch the panel to **Meetings** for every past meeting (a silence of 10+ minutes
