@@ -3,7 +3,10 @@
 name = "ozen"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice", "pyarrow"]  # pyarrow: eval_overlap.py's datasets
+dependencies = ["mlx-whisper", "speechbrain", "torchaudio", "clearvoice"]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+eval = ["pyarrow"]  # eval_overlap.py reads its datasets with it: `uv run --group eval eval_overlap.py`

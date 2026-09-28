@@ -1,7 +1,7 @@
 """Score overlap.py on real speech: windows where two people talk at once, and solo windows, transcribed through
 asr.recognize (the live transcriber's Whisper) with utterances kept whole vs separated by overlap.voices.
 
-    uv run eval_overlap.py [ami] [he] [call] [--n 20]   # default: all three sets, 20 overlap windows each
+    uv run --group eval eval_overlap.py [ami] [he] [call] [--n 20]   # default: all three sets, 20 overlap windows each
 
 - ami:  real meetings, one far-field room mic, real overlaps (AMI, meetings EN2002a-c)
 - he:   real Hebrew speakers (FLEURS he_il), pairs of different people mixed 1s apart

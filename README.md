@@ -32,7 +32,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), on the GPU), splits each track where its
   voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
   the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
-  `uv run overlap.py` checks it on macOS voices; `uv run eval_overlap.py` scores it on real speech.
+  `uv run overlap.py` checks it on macOS voices; `uv run --group eval eval_overlap.py` scores it on real speech.
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
   Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
@@ -169,7 +169,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
 | `./check-split.sh` | Check the Advanced split toggle: off by default, and on it swaps Start/Pause for Record and Process (opens the bar app's panel, no recording) |
-| `uv run eval_overlap.py [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`overlap.py`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
+| `uv run --group eval eval_overlap.py [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`overlap.py`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
 | `./check-review.sh` | Check what Review asks about: unsure lines from the last 10 minutes, most uncertain first (opens the bar app's panel on sample lines) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 

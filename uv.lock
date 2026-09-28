@@ -1285,19 +1285,25 @@ source = { virtual = "." }
 dependencies = [
     { name = "clearvoice" },
     { name = "mlx-whisper" },
-    { name = "pyarrow" },
     { name = "speechbrain" },
     { name = "torchaudio" },
+]
+
+[package.dev-dependencies]
+eval = [
+    { name = "pyarrow" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "clearvoice" },
     { name = "mlx-whisper" },
-    { name = "pyarrow" },
     { name = "speechbrain" },
     { name = "torchaudio" },
 ]
+
+[package.metadata.requires-dev]
+eval = [{ name = "pyarrow" }]
 
 [[package]]
 name = "packaging"
