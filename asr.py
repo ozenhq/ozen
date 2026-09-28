@@ -47,15 +47,18 @@ def cached(repo: str) -> str:
 MODEL = cached("mlx-community/whisper-large-v3-turbo")  # English + language detection
 # Hebrew-trained Whisper (ivrit.ai); stock turbo mangles conversational Hebrew and English terms inside it.
 MODELS = {"he": cached("mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"), "en": MODEL}
-NOISE = {  # what Whisper invents on noise, per language
-    "en": {"thank you", "thanks", "you", "bye"},
-    "he": {"תודה", "תודה רבה", "רבה", "תודה לכם", "ביי"},
-}
-FILLER = {w for phrases in NOISE.values() for p in phrases for w in p.split()}
-
-
 def words_of(text: str) -> list[str]:
     return re.sub(r"[^\w\s]", " ", text.lower()).split()
+
+
+NOISE = {  # what Whisper invents on noise, per language
+    "en": {"thank you", "thanks", "you", "bye"},
+    # ivrit.ai's Hebrew model is trained heavily on Knesset recordings: on clicks and bumps it answers with
+    # the parliamentary openers ("חברי הכנסת,", "אדוני היושב-ראש, חברות וחברי הכנסת").
+    "he": {"תודה", "תודה רבה", "רבה", "תודה לכם", "ביי",
+           "חברי הכנסת", "חברות וחברי הכנסת", "חברות וחברות הכנסת", "אדוני היושב-ראש", "גבירתי היושבת-ראש"},
+}
+FILLER = {w for phrases in NOISE.values() for p in phrases for w in words_of(p)}  # same split as the check
 
 
 def noise(text: str) -> bool:
