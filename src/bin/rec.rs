@@ -249,6 +249,14 @@ fn default_device(selector: u32) -> Option<Device> {
     device(get(SYSTEM, selector, GLOBAL)?)
 }
 
+/// The default output's UID and rate; a Bluetooth headset changes rate when its mic opens or closes.
+fn output_route() -> Option<(String, u32)> {
+    let d = default_device(kAudioHardwarePropertyDefaultOutputDevice)?;
+    let rate =
+        get::<f64>(d.id, kAudioDevicePropertyNominalSampleRate, GLOBAL).unwrap_or(0.0) as u32;
+    Some((d.uid, rate))
+}
+
 fn input_by_uid(uid: &str) -> Option<Device> {
     ids(SYSTEM, kAudioHardwarePropertyDevices, GLOBAL)
         .into_iter()
@@ -510,7 +518,7 @@ struct Capture {
     tx: Sender<Samples>,
     taps: Vec<Stream>,
     meeting: Vec<AudioObjectID>, // the meeting processes the call tap was built for
-    output: Option<String>,      // UID of the output device the taps are clocked by
+    output: Option<(String, u32)>, // UID and rate of the output device the taps are clocked by
     mic: Option<Stream>,
     mic_device: Option<String>, // None = the default input; the built-in mic's UID while the default is silent
 }
@@ -523,7 +531,7 @@ impl Capture {
         self.rec.finish_tags(&["call", "local"]);
         self.meeting = meeting_processes();
         let output = default_device(kAudioHardwarePropertyDefaultOutputDevice);
-        self.output = output.as_ref().map(|d| d.uid.clone());
+        self.output = output_route();
         let Some(output) = output else {
             return Ok(()); // no output device: nothing plays, so there is nothing to tap
         };
@@ -538,9 +546,13 @@ impl Capture {
         Ok(())
     }
 
-    /// (Re)open the mic: the default input, or the built-in mic while falling back.
+    /// (Re)open the mic (the default input, or the built-in mic while falling back), then the taps. Opening a
+    /// Bluetooth headset's mic switches the headset to its call profile, which changes its output rate too
+    /// (JBL: 44.1 kHz to 16 kHz). With a tap's aggregate device running on that output, the mic's
+    /// AudioDeviceStart never returned, so the taps are closed first and rebuilt on the settled output.
     fn start_mic(&mut self, why: &str) -> Result<(), String> {
         println!("starting mic: {why}");
+        self.taps.clear();
         self.mic = None;
         self.rec.finish_tags(&["mic"]);
         self.rec.touch("mic");
@@ -553,7 +565,7 @@ impl Capture {
                 get::<f64>(d.id, kAudioDevicePropertyNominalSampleRate, GLOBAL).unwrap_or(48000.0);
             self.mic = Some(run(d.id, "mic", false, None, rate as u32, &self.tx)?);
         }
-        Ok(())
+        self.start_taps(why)
     }
 }
 
@@ -610,7 +622,6 @@ fn main() {
         mic: None,
         mic_device: None,
     };
-    cap.start_taps("start").unwrap_or_else(|e| fatal(e));
     cap.start_mic("start").unwrap_or_else(|e| fatal(e));
 
     // Meeting apps start and stop playing audio, and the output device changes (AirPods): rebuild the taps then.
@@ -637,9 +648,8 @@ fn main() {
         }
         last_tick = Instant::now();
         tick += 1;
-        let output = default_device(kAudioHardwarePropertyDefaultOutputDevice).map(|d| d.uid);
-        if output != cap.output {
-            cap.start_taps("output device changed")
+        if output_route() != cap.output {
+            cap.start_taps("output device or rate changed")
                 .unwrap_or_else(|e| fatal(e));
         } else if tick.is_multiple_of(5) && meeting_processes() != cap.meeting {
             cap.start_taps("meeting apps changed")
