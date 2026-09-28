@@ -12,7 +12,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | meetings | gather | app | bar
+ozen control: start | pause | resume | stop | status | health | look | fix | eval | tag | ignore | retrain | meetings | gather | live | open | app | bar
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -28,7 +28,12 @@ ozen control: start | pause | resume | stop | status | health | look | fix | eva
   meetings      list past meetings: id, start, minutes, lines, first words (tab separated)
   gather [--kev] ID...
                 write those meetings into context/<now>/ to start Claude Code or Hermes in; --kev also adds
-                the ones local Kev (localhost:8009) judges related. Prints the folder
+                the ones local Kev (localhost:8009) judges related. Prints the files written, then the folder
+  live [--open claude|hermes]
+                write the meeting happening now into context/live/ and print the folder; a background
+                live-sync keeps it current every 15s until the meeting ends. --open also starts that agent there
+  open DIR claude|hermes|finder
+                start that agent (or Finder) in a folder written by gather or live
   app           build Ozen.app into ~/Applications (open it from Spotlight/Launchpad)
   bar           build if needed and open Ozen.app (its buttons call this binary)";
 
@@ -39,6 +44,7 @@ const REC_BIN: &str = "target/recorder/ozen";
 const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so pgrep never matches shells that merely mention the command
 const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
+const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current while the meeting goes on
 const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
 
 fn home() -> String {
@@ -100,6 +106,10 @@ fn ours(pattern: &str) -> Vec<String> {
         .and_then(fs::canonicalize)
         .unwrap_or_default();
     pids_in(&String::from_utf8_lossy(&cwd.stdout), &here)
+}
+
+fn now() -> f64 {
+    chrono::Utc::now().timestamp_millis() as f64 / 1000.0
 }
 
 fn running(pattern: &str) -> bool {
@@ -506,6 +516,31 @@ fn main() {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let ids: Vec<String> = args.iter().filter(|a| *a != "--kev").cloned().collect();
             match meetings::gather(&ids, args.iter().any(|a| a == "--kev")) {
+                // the transcripts it wrote, then the folder on the last line
+                Ok((dir, files)) => println!(
+                    "{}{dir}",
+                    files.iter().map(|f| f.clone() + "\n").collect::<String>()
+                ),
+                Err(e) => {
+                    eprintln!("{e}");
+                    exit(1);
+                }
+            }
+        }
+        "live" => {
+            let open = std::env::args().skip_while(|a| a != "--open").nth(1);
+            match meetings::live(now()).and_then(|dir| {
+                if !running(LIVE_SYNC) {
+                    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+                    spawn_detached(
+                        Command::new(me).arg("live-sync"),
+                        Stdio::null(),
+                        Stdio::null(),
+                    );
+                }
+                open.map_or(Ok(()), |what| meetings::open(&dir, &what))?;
+                Ok(dir)
+            }) {
                 Ok(dir) => println!("{dir}"),
                 Err(e) => {
                     eprintln!("{e}");
@@ -521,6 +556,24 @@ fn main() {
             };
             ignore::tag(&[id], &std::env::args().nth(3).unwrap_or_default());
             retrain();
+        }
+        // Rewrites context/live/ every 15s until no line has arrived for 10 minutes: the meeting is over.
+        "live-sync" => {
+            while {
+                sleep(Duration::from_secs(15));
+                meetings::live(now()).is_ok()
+            } {}
+        }
+        "open" => {
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let [dir, what] = a.as_slice() else {
+                eprintln!("usage: ozen open DIR claude|hermes|finder");
+                exit(2);
+            };
+            if let Err(e) = meetings::open(dir, what) {
+                eprintln!("{e}");
+                exit(1);
+            }
         }
         "ignore" => {
             let ids: Vec<String> = std::env::args().skip(2).collect();
