@@ -274,7 +274,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var meetings: [[String]] = []  // `ozen meetings` rows: id, start, minutes, lines, first words
     let gatherButton = NSButton(title: "Open", target: nil, action: nil)
     let kevButton = NSButton(title: "Auto add with Kev", target: nil, action: nil)
-    let askButton = NSButton(title: "Ask about now", target: nil, action: nil)
+    let askButton = NSButton(title: "Ask AI", target: nil, action: nil)
     let quitButton = NSButton(title: "Quit", target: nil, action: nil)
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -308,6 +308,8 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         askButton.action = #selector(askMenu(_:))
         askButton.bezelStyle = .rounded
         askButton.controlSize = .small
+        askButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI")  // the usual mark for AI features
+        askButton.imagePosition = .imageLeading
         askButton.toolTip = "Start Claude Code or Hermes on the meeting happening now (ozen live)"
         let controls = NSStackView(views: [status, NSView(), askButton, modeControl, placesButton, reviewButton, startButton, pauseButton, stopButton, quitButton])
         controls.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)

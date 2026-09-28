@@ -87,7 +87,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   under `context/`, then start Claude Code or Hermes there in a new Terminal window; the folder's `AGENTS.md` (and
   `CLAUDE.md`) tells the agent what it holds, and its `claude.command` / `hermes.command` reopen it with a double-click. **Auto add with Kev** also adds every other meeting that local [Kev](https://github.com/jaredpalmer/kev)
   (`localhost:8009`) judges part of the same project or topic; its scores show before you pick the agent.
-- **Ask about the meeting happening now.** **Ask about now** in the panel starts Claude Code or Hermes on the current
+- **Ask about the meeting happening now.** **Ask AI** in the panel starts Claude Code or Hermes on the current
   meeting (one whose last line is under 10 minutes old), in `context/live/`. A background `ozen live-sync` rewrites
   that folder with the latest lines every 15s and exits when the meeting ends; the agent is told to reread it, and that
   `ozen look` shows your screen.
