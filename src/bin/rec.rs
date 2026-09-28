@@ -32,6 +32,7 @@ const BUILT_IN_MIC: &str = "BuiltInMicrophoneDevice";
 const SILENT_FLAG: &str = "mic-silent";
 const FALLBACK_FLAG: &str = "mic-fallback";
 const NO_DISPLAY_FLAG: &str = "no-display";
+const CAPTURE_ERROR_FLAG: &str = "capture-error"; // a rebuild failed; holds the error while retrying
 
 type Wav = hound::WavWriter<BufWriter<File>>;
 
@@ -311,6 +312,7 @@ impl Capture {
         self.local.clear_stopped();
         self.call.reset_mic();
         flag(NO_DISPLAY_FLAG, None);
+        flag(CAPTURE_ERROR_FLAG, None);
         println!("recording to {}", self.call.out.display());
         Ok(true)
     }
@@ -323,7 +325,16 @@ impl Capture {
     }
 }
 
-/// Anything but a missing display ends the recorder; `ozen health` recognizes the permission case by its text.
+/// Whether a failed capture rebuild is worth retrying. A missing permission or entitlement never fixes itself;
+/// everything else (audio not ready after wake, a mic that vanished, an interrupted service) usually does.
+fn retryable(e: &SCError) -> bool {
+    !matches!(
+        e.stream_error_code(),
+        Some(SCStreamErrorCode::UserDeclined | SCStreamErrorCode::MissingEntitlements)
+    )
+}
+
+/// A missing permission ends the recorder; `ozen health` recognizes that case by its text.
 fn fatal(e: SCError) -> ! {
     if e.stream_error_code() == Some(SCStreamErrorCode::UserDeclined) {
         eprintln!("recording permission missing: declined TCCs ({e})");
@@ -374,6 +385,7 @@ fn main() {
             cap.call.finish_all();
             cap.local.finish_all();
             flag(NO_DISPLAY_FLAG, None);
+            flag(CAPTURE_ERROR_FLAG, None);
             exit(0);
         }
         if last_tick.elapsed() < Duration::from_secs(2) {
@@ -381,7 +393,19 @@ fn main() {
         }
         last_tick = Instant::now();
         tick += 1;
-        let restart = |cap: &mut Capture, why: &str| cap.start(why).unwrap_or_else(|e| fatal(e));
+        // Once recording has worked, a failed rebuild is usually transient (right after wake, "Stream failed to
+        // start audio" while audio comes back), so retry it like a missing display instead of exiting and leaving
+        // the meeting unrecorded. Only a missing permission is final.
+        let restart = |cap: &mut Capture, why: &str| {
+            cap.start(why).unwrap_or_else(|e| {
+                if !retryable(&e) {
+                    fatal(e);
+                }
+                eprintln!("capture failed, retrying: {e}");
+                flag(CAPTURE_ERROR_FLAG, Some(&e.to_string()));
+                false
+            })
+        };
         let stopped = cap.call.is_stopped() || cap.local.is_stopped();
         if !live || stopped {
             if tick.is_multiple_of(5) || stopped {
@@ -390,7 +414,7 @@ fn main() {
                     if live {
                         "capture stopped"
                     } else {
-                        "waiting for a display"
+                        "retrying (no display, or the last start failed)"
                     },
                 );
             }
@@ -456,5 +480,23 @@ fn main() {
         if tick.is_multiple_of(5) {
             cap.refresh_filters();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable;
+    use screencapturekit::error::{SCError, SCStreamErrorCode as C};
+
+    #[test]
+    fn only_permission_errors_end_the_recorder() {
+        let e = SCError::from_stream_error_code;
+        assert!(!retryable(&e(C::UserDeclined)));
+        assert!(!retryable(&e(C::MissingEntitlements)));
+        // Seen live on wake from display sleep: "Stream failed to start audio".
+        assert!(retryable(&e(C::FailedToStartAudioCapture)));
+        assert!(retryable(&e(C::FailedToStartMicrophoneCapture)));
+        assert!(retryable(&e(C::NoCaptureSource)));
+        assert!(retryable(&e(C::InternalError)));
     }
 }

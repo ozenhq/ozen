@@ -12,6 +12,7 @@ start.log
 start.log.1
 mic-silent
 no-display
+capture-error
 mic-fallback
 .transcriber-started
 *.png

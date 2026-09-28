@@ -464,6 +464,9 @@ fn main() {
                     "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
                 );
             }
+            if let Ok(error) = fs::read_to_string("capture-error") {
+                println!("Recording paused: capture failed to start ({error}). Retrying every 10s");
+            }
             if let Ok(names) = fs::read_to_string("mic-fallback")
                 && let Some((using, silent)) = names.split_once('\n')
             {
