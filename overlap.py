@@ -8,6 +8,7 @@ voices; MossFormer2 kept single voices whole and recovered both voices in every 
     uv run overlap.py   # self-check on macOS voices: one voice stays whole; overlap and quick turns give each voice
 """
 import pathlib
+import select
 import struct
 import subprocess
 import threading
@@ -53,7 +54,8 @@ def embedder():
         if len(e) != 192:  # SystemExit passes the per-chunk handler: ozen restarts the transcriber, the chunk waits
             raise SystemExit("ozen embed stopped; is target/release/ozen built from this checkout?")
         return e / np.linalg.norm(e)
-    if ozen.stdout.readline() != b"ozen embed 1\n":  # an ozen built before this prints its usage instead
+    ready = select.select([ozen.stdout], [], [], 600)[0]  # first start downloads the weights (~80MB)
+    if not ready or ozen.stdout.readline() != b"ozen embed 1\n":  # an older ozen prints its usage instead
         raise SystemExit("ozen embed unavailable; rebuild target/release/ozen from this checkout")
     embed(np.zeros(SR, np.float32))  # fail at start, not on the first chunk
     return embed
