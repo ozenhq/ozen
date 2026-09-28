@@ -253,12 +253,7 @@ pub fn serve() -> std::result::Result<(), String> {
     while inp.read_exact(&mut n).is_ok() {
         let mut buf = vec![0u8; u32::from_le_bytes(n) as usize * 4];
         inp.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        let wav: Vec<f32> = buf
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect();
+        let wav = floats(&buf);
         let e = enc.embed(&wav).map_err(|e| e.to_string())?;
         let bytes: Vec<u8> = e.iter().flat_map(|v| v.to_le_bytes()).collect();
         out.write_all(&bytes)
@@ -268,8 +263,27 @@ pub fn serve() -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Little-endian f32 samples from the worker's byte stream (a trailing partial sample is ignored).
+fn floats(buf: &[u8]) -> Vec<f32> {
+    buf.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn floats_from_little_endian_bytes() {
+        let bytes: Vec<u8> = [1.5f32, -0.25, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .chain([7u8])
+            .collect();
+        assert_eq!(super::floats(&bytes), [1.5, -0.25, 0.0]);
+    }
+
     use super::*;
 
     #[test]
