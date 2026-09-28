@@ -5,7 +5,6 @@ share, so a configuration measured by the eval is the one that runs in meetings.
 
 Request: {"audio": path, "start": s, "duration": s, "words": [hint words], "replace": {wrong: right}, "lang": "he",
           "model": "stock" | "hebrew" (optional: that model in `lang`, no language detection; `ozen compare`)}
-         or {"heard": text, "replace": {...}} to only apply corrections (no audio, no model)
 Reply:   {"heard": Whisper's text, "text": after replace, "lang": language used,
           "raw": Whisper's text before any filter (only with "model")}
 The worker seeds MLX before every clip, so its output depends only on the request.
@@ -135,10 +134,6 @@ def corrected(text: str, replace: dict[str, str]) -> str:
 if __name__ == "__main__":
     for row in sys.stdin:
         q = json.loads(row)
-        if "audio" not in q:
-            print(json.dumps({"heard": q["heard"], "text": corrected(q["heard"], q.get("replace", {}))},
-                             ensure_ascii=False), flush=True)
-            continue
         audio = np.array(load_audio(q["audio"]))
         s = int(q.get("start", 0) * SR)
         clip = audio[s: s + int(q["duration"] * SR)] if q.get("duration") else audio[s:]
