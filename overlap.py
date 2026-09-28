@@ -16,6 +16,9 @@ SR = 16000
 SEPFORMER = "speechbrain/sepformer-whamr16k"
 WINDOW, HOP = 1.5, 0.75  # seconds; voiceprints this short are noisy, but only decide whether to try separating
 MIN_SOURCE = 0.25  # the quieter separated track must be this loud vs the louder one, else it's residue of one voice
+# (LibriSpeech: one voice leaves residue at <=0.07 of the louder track; two voices at once 0.4-1.0)
+SAME_TRACKS = 0.5  # tracks this alike are one voice split in two. Not the same-voice cutoff: separated tracks
+# leak into each other, so two real people's tracks still score up to ~0.45
 _separator = None
 
 
@@ -56,7 +59,7 @@ def voices(clip: np.ndarray, embed, same: float) -> list[np.ndarray]:
     loud = sorted(rms(t) for t in tracks)
     if loud[-1] == 0 or loud[0] / loud[-1] < MIN_SOURCE:
         return [clip]  # one voice; the other track is residue
-    if float(embed(tracks[0]) @ embed(tracks[1])) >= same:
+    if float(embed(tracks[0]) @ embed(tracks[1])) >= SAME_TRACKS:
         return [clip]  # one voice split in two
     peak = float(np.abs(clip).max())
     # SepFormer's output level is arbitrary: bring each track back to the clip's level so silence thresholds hold
