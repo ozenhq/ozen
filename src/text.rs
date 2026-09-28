@@ -72,7 +72,10 @@ pub fn looped(text: &str) -> bool {
 }
 
 /// Applies your repeated corrections (learned.json "replace"), whole words only, in order.
-pub fn corrected(text: &str, replace: &serde_json::Map<String, Value>) -> String {
+pub fn corrected<'a>(
+    text: &str,
+    replace: impl IntoIterator<Item = (&'a String, &'a Value)>,
+) -> String {
     let mut text = text.to_string();
     for (wrong, right) in replace {
         let Some(right) = right.as_str() else {
@@ -101,6 +104,42 @@ pub fn corrected(text: &str, replace: &serde_json::Map<String, Value>) -> String
         text = out;
     }
     text
+}
+
+/// "Kev. Kev. Kev." on noise: Whisper repeats terms from its own prompt. A line made only of hint words (and
+/// filler) that repeats itself is that echo. A single "Kev." can be real speech, so it stays.
+pub fn hint_echo(text: &str, hint: &[String]) -> bool {
+    let words = words_of(text);
+    let set: HashSet<&String> = words.iter().collect();
+    let allowed: HashSet<String> = hint
+        .iter()
+        .flat_map(|h| words_of(h))
+        .chain(filler())
+        .collect();
+    words.len() > set.len() && set.iter().all(|w| allowed.contains(*w))
+}
+
+/// The text, or "" when it is noise, the hint echoed back, or a loop.
+pub fn kept(text: &str, hint: &[String]) -> String {
+    if noise(text) || hint_echo(text, hint) || looped(text) {
+        String::new()
+    } else {
+        text.to_string()
+    }
+}
+
+/// Whisper's initial prompt: hint words (deduplicated, in order), then the last 200 characters of the previous
+/// line as context.
+pub fn prompt(words: &[String], previous: &str) -> String {
+    let mut seen = HashSet::new();
+    let hint: Vec<&str> = words
+        .iter()
+        .filter(|w| seen.insert(*w))
+        .map(String::as_str)
+        .collect();
+    let n = previous.chars().count();
+    let tail: String = previous.chars().skip(n.saturating_sub(200)).collect();
+    format!("{}. {tail}", hint.join(", ")).trim().to_string()
 }
 
 /// Lines written before the filters existed that they would have dropped: filler, phrase loops, and Whisper
@@ -155,6 +194,18 @@ mod tests {
         // asr.py's doctest
         assert!(looped("Amen. Amen. Amen. Amen. Yeah."));
         assert!(!looped("Yeah. Yeah.") && !looped("זה קורה קורה קורה."));
+    }
+
+    #[test]
+    fn hint_echo_and_prompt_match_asr_py() {
+        let hint = ["Kev".to_string(), "PR".to_string(), "Kev".to_string()];
+        assert!(hint_echo("Kev. Kev. Kev.", &hint) && hint_echo("Kev, thanks. Kev.", &hint));
+        assert!(!hint_echo("Kev.", &hint) && !hint_echo("Kev said Kev", &hint));
+        assert_eq!(kept("Kev. Kev.", &hint), "");
+        assert_eq!(kept("Open the PR, Kev.", &hint), "Open the PR, Kev.");
+        assert_eq!(prompt(&hint, "hello"), "Kev, PR. hello");
+        assert_eq!(prompt(&[], ""), ".");
+        assert_eq!(prompt(&[], &"א".repeat(250)).chars().count(), 202);
     }
 
     #[test]

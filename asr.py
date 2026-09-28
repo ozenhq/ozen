@@ -1,5 +1,6 @@
-"""Speech to text for one clip: the Whisper setup the live transcriber (transcribe.py) and the eval (`ozen eval`)
-share, so a configuration measured by the eval is the one that runs in meetings.
+"""Speech to text for one clip, for the evals (`ozen eval`, `ozen compare`, eval_overlap.py): the Whisper setup and
+filters the live transcriber runs in Rust (src/transcribe.rs, src/text.rs), so a configuration measured by the eval is
+the one that runs in meetings.
 
     uv run asr.py    # eval worker: JSON lines on stdin -> JSON lines on stdout, same order
 

@@ -79,7 +79,7 @@ enum Edit {
 }
 
 /// lines.jsonl open for appending and locked. `rewrite` swaps in a new file while holding the old one's
-/// lock, so a lock won on a swapped-out file is retried on the current one (transcribe.py does the same).
+/// lock, so a lock won on a swapped-out file is retried on the current one (src/transcribe.rs does the same).
 fn locked() -> Result<File, String> {
     loop {
         let f = OpenOptions::new()

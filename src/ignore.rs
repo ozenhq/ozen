@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 
-pub const IGNORE: &str = "Ignored"; // reserved tag, same in transcribe.py, src/train.rs and menubar.swift
+pub const IGNORE: &str = "Ignored"; // reserved tag, same in src/transcribe.rs, src/train.rs and menubar.swift
 
 /// IGNORE or one of its numbered voices ("Ignored 2"), same as menubar.swift's isIgnored.
 pub fn is_ignored(name: &str) -> bool {
@@ -32,7 +32,7 @@ pub fn fresh(tags: &Map<String, Value>) -> String {
 }
 /// Ignoring needs the same-voice threshold plus this: dropping someone's speech costs more than keeping noise.
 /// At the bare threshold a different voice (0.43) was dropped; the ignored voice itself scores 0.87-0.90.
-pub const MARGIN: f32 = 0.1; // same as transcribe.py
+pub const MARGIN: f32 = 0.1; // src/transcribe.rs uses it
 const TAGS: &str = "tags.json";
 const LABELS: &str = "labels.json";
 const STATS: &str = "stats.json";

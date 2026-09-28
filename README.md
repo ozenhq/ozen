@@ -28,17 +28,17 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   already heard, so a person keeps one label for the whole meeting. Known people come from the
   [voices registry](https://github.com/tupe12334/voices-embedding-registry) and show by name.
 - **Hears people talking at once.** In the room, on the call, or both: when voiceprints across an utterance
-  disagree (two people at once, or one cutting in without a pause), `overlap.py` separates it into one track per
+  disagree (two people at once, or one cutting in without a pause), `src/overlap.rs` separates it into one track per
   voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), run in Rust on the GPU by `src/separate.rs`), splits each track where its
   voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
   the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
-  `uv run overlap.py` checks it on macOS voices; `uv run --group eval eval_overlap.py` scores it on real speech.
+  `uv run --group eval eval_overlap.py` scores it on real speech (through `overlap.py`, the same steps in Python).
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
   Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
   prints, and the live transcriber reloads them.
 - **Shares voices across your Macs.** The registry is a git repo that every Mac clones into `~/ozen/voices`.
-  `ozen start` pulls it, the running transcriber pulls again every few minutes (`PULL_EVERY` in `transcribe.py`),
+  `ozen start` pulls it, the running transcriber pulls again every few minutes (`PULL_EVERY` in `src/transcribe.rs`),
   and every retrain starts from the newest registry and pushes when it's done. Tags made on two Macs at the same
   time both survive: a push that loses the race rebuilds on top of the other Mac's and pushes again. Offline, the
   retrain commits locally and the next one pushes it. Because each retrain resets `~/ozen/voices` to the remote
