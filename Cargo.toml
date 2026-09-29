@@ -29,8 +29,8 @@ objc2 = "0.6"
 objc2-app-kit = "0.3"  # AppKit, all of it: the menu bar app (src/bin/bar.rs) uses most classes
 objc2-core-location = { version = "0.3.2", features = ["CLLocation", "CLLocationManager", "CLLocationManagerDelegate", "block2"] }
 objc2-foundation = "0.3"
+objc2-map-kit = "0.3.2"  # the Places map (src/bin/bar/map.rs)
 objc2-metal = "0.3.2"
-objc2-web-kit = "0.3"
 plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }

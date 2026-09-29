@@ -11,6 +11,7 @@
 mod auto;
 mod cli;
 mod install;
+mod map;
 mod places;
 mod timebar;
 mod timeline;
@@ -33,7 +34,6 @@ use objc2_foundation::{
     MainThreadMarker, NSDictionary, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol,
     NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSTimer, ns_string,
 };
-use objc2_web_kit::{WKNavigationDelegate, WKScriptMessageHandler};
 use serde_json::Value;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -80,7 +80,7 @@ struct Ivars {
     timebar_timer: RefCell<Option<Retained<NSTimer>>>,
     places_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
     places_stack: OnceCell<Retained<NSStackView>>,
-    places_map: OnceCell<Retained<objc2_web_kit::WKWebView>>,
+    places_map: OnceCell<map::Map>,
     places_note: OnceCell<Retained<NSTextField>>,
     setting_place: Cell<Option<usize>>, // row waiting for a location fix after "Use current location"
     picking_place: Cell<Option<usize>>, // row waiting for a map click after "Pick on map"
@@ -480,25 +480,6 @@ define_class!(
                     objc2::runtime::Bool::YES
                 }
                 _ => objc2::runtime::Bool::NO,
-            }
-        }
-    }
-
-    unsafe impl WKNavigationDelegate for App {
-        #[unsafe(method(webView:didFinishNavigation:))]
-        fn did_finish(&self, _view: &objc2_web_kit::WKWebView, _n: Option<&objc2_web_kit::WKNavigation>) {
-            self.show_places_on_map(true);
-        }
-    }
-
-    unsafe impl WKScriptMessageHandler for App {
-        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
-        fn did_receive(&self, _c: &objc2_web_kit::WKUserContentController, message: &objc2_web_kit::WKScriptMessage) {
-            // SAFETY: the message body is a plain JSON-compatible object from map.html.
-            let body = unsafe { message.body() };
-            let json = unsafe { objc2_foundation::NSJSONSerialization::dataWithJSONObject_options_error(&body, objc2_foundation::NSJSONWritingOptions::empty()) };
-            if let Some(v) = json.ok().and_then(|d| serde_json::from_slice::<Value>(&d.to_vec()).ok()) {
-                self.map_message(&v);
             }
         }
     }
@@ -1787,15 +1768,11 @@ impl App {
         out
     }
 
-    /// The render check's Places part: open the window, then the same scripted edits as the Swift harness (a map
-    /// click while picking, a pin drag, Add place, a typed latitude, an invalid radius), dumping the window and
+    /// The render check's Places part: open the window, then scripted edits (a map click while picking, a pin move,
+    /// a real pin drag with Add place, a typed latitude, an invalid radius), dumping the window and the map and
     /// saving places.json after each. Writes the dump and quits.
     fn dump_places(&self, file: String, out: String) {
         self.show_places();
-        let js = |app: &App, js: &str| unsafe {
-            app.places_map()
-                .evaluateJavaScript_completionHandler(&NSString::from_str(js), None)
-        };
         fn field(v: &NSView, key: &str, row: isize) -> Option<Retained<NSTextField>> {
             if let Some(t) = v.downcast_ref::<NSTextField>()
                 && t.identifier().is_some_and(|k| k.to_string() == key)
@@ -1815,23 +1792,23 @@ impl App {
                 app.ivars().places_window.borrow().as_ref(),
                 &format!("{file}.places{step}.png"),
             );
+            *out += &format!("\n{}", app.places_map_parts().dump().join("\n"));
         };
         later(4.0, move |app| {
             let mut out = out;
             snap(app, 1, &mut out);
             app.pick_on_map(0);
-            js(
-                app,
-                "window.webkit.messageHandlers.ozen.postMessage({type: 'click', lat: 32.1, lon: 34.9})",
-            );
+            app.places_map_parts().click_center(); // picks the map's center for Home
             later(1.5, move |app| {
                 snap(app, 2, &mut out);
-                js(
-                    app,
-                    "window.webkit.messageHandlers.ozen.postMessage({type: 'move', index: 1, lat: 31.5, lon: 35.25})",
+                app.map_message(
+                    &serde_json::json!({"type": "move", "index": 1, "lat": 31.5, "lon": 35.25}),
                 );
                 later(1.5, move |app| {
                     snap(app, 3, &mut out);
+                    // Gym's pin dragged for real: its view, and MapKit's drag-ended delegate call
+                    let dragged = app.places_map_parts().drag(2, 32.105, 34.81);
+                    out += &format!("\nDRAGGED Gym {dragged}");
                     app.add_place();
                     later(1.0, move |app| {
                         snap(app, 4, &mut out);

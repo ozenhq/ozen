@@ -1,6 +1,6 @@
 //! The Places window: labeled places that override the record mode while you're within their radius. Each can be
 //! located by typing coordinates, "Use current location" (`ozen places here N`), clicking the map or dragging its
-//! pin (map.html, Leaflet + OpenStreetMap, in a web view). places.json is plain JSON in the ozen folder.
+//! pin (map.rs, MapKit). places.json is plain JSON in the ozen folder.
 //!
 //! Also the app's side of location: only the app can show the location prompt (the locate binary uses the
 //! answer), and it writes here.json itself when the locate binary can't (here.json.error).
@@ -15,23 +15,7 @@ use objc2_app_kit::{
 };
 use objc2_core_location::{CLAuthorizationStatus, CLLocationManager};
 use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize, NSString, ns_string};
-use objc2_web_kit::WKWebView;
 use serde_json::{Value, json};
-
-/// map.html as shipped in Ozen.app (by `ozen app`), else the checkout's copy (a checkout run: `Ozen [dir]`).
-fn load_map(view: &WKWebView) {
-    let url = objc2_foundation::NSBundle::mainBundle()
-        .URLForResource_withExtension(Some(ns_string!("map")), Some(ns_string!("html")))
-        .unwrap_or_else(|| {
-            objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(
-                &cli::dir().join("map.html").display().to_string(),
-            ))
-        });
-    if let Some(dir) = url.URLByDeletingLastPathComponent() {
-        // SAFETY: loading a local file with read access to its folder.
-        unsafe { view.loadFileURL_allowingReadAccessToURL(&url, &dir) };
-    }
-}
 
 const DEFAULT_RADIUS: f64 = 150.0; // meters
 const ACTIONS: [(&str, &str); 3] = [
@@ -90,29 +74,6 @@ pub fn row_of(sender: &AnyObject) -> usize {
 }
 
 impl App {
-    pub fn places_map(&self) -> &Retained<WKWebView> {
-        self.ivars().places_map.get_or_init(|| {
-            let mtm = self.mtm();
-            // SAFETY: a default web view on the main thread; the delegate and handler are the app delegate.
-            unsafe {
-                let v = WKWebView::new(mtm);
-                v.setNavigationDelegate(Some(ProtocolObject::from_ref(self)));
-                // map.html → pin drags and map clicks
-                v.configuration()
-                    .userContentController()
-                    .addScriptMessageHandler_name(
-                        ProtocolObject::from_ref(self),
-                        ns_string!("ozen"),
-                    );
-                v.setCustomUserAgent(Some(ns_string!("Ozen (https://github.com/ozenhq/ozen)"))); // OSM tile policy: identify the app
-                v.heightAnchor()
-                    .constraintEqualToConstant(280.0)
-                    .setActive(true);
-                v
-            }
-        })
-    }
-
     pub fn show_places(&self) {
         let mtm = self.mtm();
         let iv = self.ivars();
@@ -144,7 +105,6 @@ impl App {
             note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
             note.setTextColor(Some(&NSColor::secondaryLabelColor()));
             w.setContentView(Some(stack));
-            load_map(self.places_map());
             *iv.places_window.borrow_mut() = Some(w);
         }
         self.build_places(true);
@@ -346,21 +306,13 @@ impl App {
         }
     }
 
-    /// Hand the places to map.html, which draws each located one with its radius; red records, gray turns it off.
+    /// Draw each located place with its radius on the map; red records, gray turns it off.
     pub fn show_places_on_map(&self, fit: bool) {
-        let places = serde_json::to_string(&load()).unwrap_or_else(|_| "[]".into());
-        let here = self.ivars().here.get().map_or("null".into(), |(lat, lon)| {
-            json!({"lat": lat, "lon": lon}).to_string()
-        });
-        let js = format!("show({places}, {DEFAULT_RADIUS}, {here}, {fit})"); // before the page loads this is a no-op
-        // SAFETY: calling the page's own show().
-        unsafe {
-            self.places_map()
-                .evaluateJavaScript_completionHandler(&NSString::from_str(&js), None)
-        };
+        self.places_map_parts()
+            .show(&load(), DEFAULT_RADIUS, self.ivars().here.get(), fit);
     }
 
-    /// From map.html: {type: "move", index, lat, lon} when a pin is dragged, {type: "click", lat, lon} for a map click.
+    /// From the map (map.rs): {type: "move", index, lat, lon} when a pin is dragged, {type: "click", lat, lon} for a map click.
     pub fn map_message(&self, m: &Value) {
         let (Some(lat), Some(lon)) = (m["lat"].as_f64(), m["lon"].as_f64()) else {
             return;
@@ -373,11 +325,6 @@ impl App {
         let Some(i) = i else { return };
         self.commit_edits();
         self.ivars().picking_place.set(None);
-        // SAFETY: the page's own picking().
-        unsafe {
-            self.places_map()
-                .evaluateJavaScript_completionHandler(ns_string!("picking(false)"), None)
-        };
         self.edit_places(
             |p| {
                 if let Some(p) = p.get_mut(i) {
@@ -509,11 +456,6 @@ impl App {
         self.commit_edits();
         self.note("");
         self.ivars().picking_place.set(Some(i));
-        // SAFETY: the page's own picking().
-        unsafe {
-            self.places_map()
-                .evaluateJavaScript_completionHandler(ns_string!("picking(true)"), None)
-        };
         self.build_places(false);
     }
 
