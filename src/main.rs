@@ -9,12 +9,14 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod overlap;
 mod panel;
 mod places;
 mod separate;
 mod text;
 mod timebar;
 mod train;
+mod transcribe;
 mod voices;
 mod whisper;
 
@@ -84,7 +86,9 @@ const LOCATE: &str = r"^target/locator/locate watch"; // the watcher `place` kee
 const REC_BIN: &str = "target/recorder/ozen";
 // The old path too, so pause/stop still reach a recorder started before the rename.
 const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so pgrep never matches shells that merely mention the command
-const TR: &str = r"uv run transcribe\.py chunks|python3 transcribe\.py chunks";
+// The Python transcriber too, so stop and restarts still reach one started before the port to Rust.
+const TR: &str =
+    r"/ozen transcribe chunks|uv run transcribe\.py chunks|python3 transcribe\.py chunks";
 const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const PROCESS: &str = r"/ozen process-queue$"; // the detached helper `process` leaves behind
 const RECORD_ONLY: &str = ".record-only"; // recording started by `record`: no transcriber is kept running for it
@@ -150,7 +154,7 @@ fn pids_in(lsof: &str, dir: &Path) -> Vec<String> {
 }
 
 /// Processes matching `pattern` that run in this checkout. The same commands run from another checkout,
-/// worktree or test copy (`uv run transcribe.py chunks` anywhere) are someone else's: never count or kill them.
+/// worktree or test copy (`ozen transcribe chunks` anywhere) are someone else's: never count or kill them.
 fn ours(pattern: &str) -> Vec<String> {
     let Ok(found) = cmd("pgrep").args(["-f", pattern]).output() else {
         return Vec::new();
@@ -344,7 +348,11 @@ fn start_transcriber() {
     let _ = File::create(TR_STARTED);
     text::mark_junk();
     spawn_detached(
-        cmd("uv").args(["run", "transcribe.py", "chunks", "transcript.txt"]),
+        Command::new(std::env::current_exe().expect("own path")).args([
+            "transcribe",
+            "chunks",
+            "transcript.txt",
+        ]),
         log().into(),
         log().into(),
     );
@@ -945,6 +953,13 @@ fn main() {
             }
         }
         // The transcriber's voiceprint encoder (src/ecapa.rs), fed audio on stdin.
+        "transcribe" => {
+            let arg = |i| std::env::args().nth(i).unwrap_or_default();
+            if let Err(e) = transcribe::run(Path::new(&arg(2)), Path::new(&arg(3))) {
+                eprintln!("{e}");
+                exit(1);
+            }
+        }
         "separate" => {
             if let Err(e) = separate::serve() {
                 eprintln!("{e}");

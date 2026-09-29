@@ -47,7 +47,7 @@ if args.isEmpty, let res = Bundle.main.resourceURL {
 }
 
 let maxLines = 400
-let ignoreTag = "Ignored"  // reserved tag, same as src/ignore.rs / transcribe.py
+let ignoreTag = "Ignored"  // reserved tag, same as src/ignore.rs / src/transcribe.rs
 /// ignoreTag or one of its numbered voices ("Ignored 2"), same as src/ignore.rs is_ignored.
 func isIgnored(_ name: String) -> Bool { name.range(of: "^Ignored( [0-9]+)?$", options: .regularExpression) != nil }
 
