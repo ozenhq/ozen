@@ -949,6 +949,11 @@ impl App {
                             app.ivars().voices_window.borrow().as_ref(),
                             &format!("{file}.voices.png"),
                         );
+                        app.advanced();
+                        out += &app.dump_window(
+                            app.ivars().advanced_window.borrow().as_ref(),
+                            &format!("{file}.advanced.png"),
+                        );
                         app.show_timebar();
                         later(4.0, move |app| {
                             let out = format!(
@@ -1286,11 +1291,7 @@ impl App {
                     return;
                 };
                 let b = app.ivars().buttons.get().unwrap();
-                for (btn, name) in [
-                    (&b.start, "start"),
-                    (&b.pause, "pause"),
-                    (&b.stop, "stop"),
-                ] {
+                for (btn, name) in [(&b.start, "start"), (&b.pause, "pause"), (&b.stop, "stop")] {
                     let c = &c[name];
                     if let Some(t) = c["title"].as_str() {
                         btn.setTitle(&NSString::from_str(t));
@@ -1742,6 +1743,9 @@ impl App {
                 *out += &format!("\nLABEL {}", t.stringValue());
             } else if let Some(b) = v.downcast_ref::<NSButton>() {
                 *out += &format!("\nBUTTON {}", b.title());
+            } else if let Some(s) = v.downcast_ref::<objc2_app_kit::NSSwitch>() {
+                let on = s.state() == objc2_app_kit::NSControlStateValueOn;
+                *out += &format!("\nSWITCH {}", if on { "on" } else { "off" });
             }
             for sub in v.subviews().iter() {
                 walk(&sub, out);

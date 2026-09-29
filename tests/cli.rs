@@ -91,8 +91,14 @@ fn split_counts_queued_chunks() {
         ("chunks/1-mic.wav", String::new()),
     ]);
     let c = ozen(&dir, &["controls", "stopped", "split"]);
-    assert_eq!((c["queued"].as_i64(), c["pause"]["hidden"].as_bool()), (Some(2), Some(true)));
-    assert_eq!(ozen(&dir, &["controls", "stopped"])["pause"]["hidden"], false);
+    assert_eq!(
+        (c["queued"].as_i64(), c["pause"]["hidden"].as_bool()),
+        (Some(2), Some(true))
+    );
+    assert_eq!(
+        ozen(&dir, &["controls", "stopped"])["pause"]["hidden"],
+        false
+    );
 }
 
 #[test]
