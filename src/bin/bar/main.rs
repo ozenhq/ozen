@@ -11,6 +11,7 @@
 //! the render check against the Swift app.
 mod auto;
 mod cli;
+mod places;
 mod timebar;
 mod timeline;
 mod transcript;
@@ -27,11 +28,12 @@ use objc2_app_kit::{
     NSTextViewDelegate, NSUserInterfaceItemIdentification, NSUserInterfaceLayoutOrientation,
     NSView, NSViewController,
 };
+use objc2_core_location::CLLocationManagerDelegate;
 use objc2_foundation::{
     MainThreadMarker, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
     NSRectEdge, NSSize, NSString, NSTimer, ns_string,
 };
-use objc2_web_kit::WKNavigationDelegate;
+use objc2_web_kit::{WKNavigationDelegate, WKScriptMessageHandler};
 use serde_json::Value;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,10 +78,21 @@ struct Ivars {
     timebar_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
     timebar_view: OnceCell<Retained<objc2_web_kit::WKWebView>>,
     timebar_timer: RefCell<Option<Retained<NSTimer>>>,
+    places_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
+    places_stack: OnceCell<Retained<NSStackView>>,
+    places_map: OnceCell<Retained<objc2_web_kit::WKWebView>>,
+    places_note: OnceCell<Retained<NSTextField>>,
+    setting_place: Cell<Option<usize>>, // row waiting for a location fix after "Use current location"
+    picking_place: Cell<Option<usize>>, // row waiting for a map click after "Pick on map"
+    rebuilding: Cell<bool>, // removing a focused field fires its action; ignore those echoes
+    location: OnceCell<Retained<objc2_core_location::CLLocationManager>>,
+    supplying_location: Cell<bool>, // the app writes here.json because the locate binary can't
+    here: Cell<Option<(f64, f64)>>, // from `ozen place`; None until the first fix
 }
 
 struct Extra {
     ask: Retained<NSButton>,
+    places: Retained<NSButton>,
     voices: Retained<NSButton>,
     timebar: Retained<NSButton>,
     advanced: Retained<NSButton>,
@@ -314,6 +327,46 @@ define_class!(
             self.timebar_tick();
         }
 
+        #[unsafe(method(showPlaces:))]
+        fn show_places_action(&self, _s: Option<&AnyObject>) {
+            self.show_places();
+        }
+
+        #[unsafe(method(renamePlace:))]
+        fn rename_place_action(&self, sender: &NSTextField) {
+            self.rename_place(sender);
+        }
+
+        #[unsafe(method(placeActionChanged:))]
+        fn place_action_action(&self, sender: &objc2_app_kit::NSPopUpButton) {
+            self.place_action_changed(sender);
+        }
+
+        #[unsafe(method(placeValueChanged:))]
+        fn place_value_action(&self, sender: &NSTextField) {
+            self.place_value_changed(sender);
+        }
+
+        #[unsafe(method(setPlaceHere:))]
+        fn set_place_here_action(&self, sender: &AnyObject) {
+            self.set_place_here(places::row_of(sender));
+        }
+
+        #[unsafe(method(pickOnMap:))]
+        fn pick_on_map_action(&self, sender: &AnyObject) {
+            self.pick_on_map(places::row_of(sender));
+        }
+
+        #[unsafe(method(removePlace:))]
+        fn remove_place_action(&self, sender: &AnyObject) {
+            self.remove_place(places::row_of(sender));
+        }
+
+        #[unsafe(method(addPlace:))]
+        fn add_place_action(&self, _s: Option<&AnyObject>) {
+            self.add_place();
+        }
+
         #[unsafe(method(showAdvanced:))]
         fn show_advanced(&self, _s: Option<&AnyObject>) {
             self.advanced();
@@ -436,7 +489,37 @@ define_class!(
         fn did_finish(&self, view: &objc2_web_kit::WKWebView, _n: Option<&objc2_web_kit::WKNavigation>) {
             if self.ivars().timebar_view.get().is_some_and(|t| std::ptr::eq(&**t, view)) {
                 self.refresh_timebar();
+            } else {
+                self.show_places_on_map(true);
             }
+        }
+    }
+
+    unsafe impl WKScriptMessageHandler for App {
+        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
+        fn did_receive(&self, _c: &objc2_web_kit::WKUserContentController, message: &objc2_web_kit::WKScriptMessage) {
+            // SAFETY: the message body is a plain JSON-compatible object from map.html.
+            let body = unsafe { message.body() };
+            let json = unsafe { objc2_foundation::NSJSONSerialization::dataWithJSONObject_options_error(&body, objc2_foundation::NSJSONWritingOptions::empty()) };
+            if let Some(v) = json.ok().and_then(|d| serde_json::from_slice::<Value>(&d.to_vec()).ok()) {
+                self.map_message(&v);
+            }
+        }
+    }
+
+    unsafe impl CLLocationManagerDelegate for App {
+        #[unsafe(method(locationManager:didUpdateLocations:))]
+        fn did_update(&self, _m: &objc2_core_location::CLLocationManager, locations: &objc2_foundation::NSArray<objc2_core_location::CLLocation>) {
+            if let Some(fix) = locations.lastObject() {
+                // SAFETY: reading a delivered location.
+                let (c, t) = unsafe { (fix.coordinate(), fix.timestamp().timeIntervalSince1970()) };
+                self.location_update(c.latitude, c.longitude, t);
+            }
+        }
+
+        #[unsafe(method(locationManagerDidChangeAuthorization:))]
+        fn did_change_authorization(&self, _m: &objc2_core_location::CLLocationManager) {
+            self.authorization_changed();
         }
     }
 
@@ -625,6 +708,7 @@ impl App {
         mode_control.setToolTip(Some(ns_string!("Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls.")));
         let extra = Extra {
             ask: small_button(ns_string!("Ask AI"), self, sel!(askMenu:), mtm),
+            places: small_button(ns_string!("Places…"), self, sel!(showPlaces:), mtm),
             voices: small_button(ns_string!("Voices…"), self, sel!(showVoices:), mtm),
             timebar: small_button(ns_string!("Timebar…"), self, sel!(showTimebar:), mtm),
             advanced: small_button(ns_string!(""), self, sel!(showAdvanced:), mtm),
@@ -656,11 +740,12 @@ impl App {
         extra
             .advanced
             .setToolTip(Some(ns_string!("Advanced settings")));
-        let row: [&NSView; 13] = [
+        let row: [&NSView; 14] = [
             &status,
             &spacer,
             &extra.ask,
             &mode_control,
+            &extra.places,
             &extra.voices,
             &extra.timebar,
             &buttons.review,
@@ -843,6 +928,7 @@ impl App {
         let _ = iv.warning.set(warning);
         let _ = iv.buttons.set(buttons);
         *iv.state.borrow_mut() = "stopped".into();
+        self.ask_location();
         self.apply_view();
         // SAFETY: the target is the app delegate, alive for the process.
         unsafe {
@@ -893,9 +979,9 @@ impl App {
                                     let text = unsafe { r.as_ref() }
                                         .and_then(|r| r.downcast_ref::<NSString>())
                                         .map_or(String::new(), ToString::to_string);
-                                    std::fs::write(&file, format!("{out}\n\n== timebar\n{text}"))
-                                        .expect("write dump");
-                                    std::process::exit(0);
+                                    let out = format!("{out}\n\n== timebar\n{text}");
+                                    let file = file.clone();
+                                    later(0.0, move |app| app.dump_places(file, out));
                                 },
                             );
                             // SAFETY: reading the page's text.
@@ -998,6 +1084,7 @@ impl App {
                 objc2_app_kit::NSControlStateValueOff
             });
         }
+        add("Places…", Some(sel!(showPlaces:)), "");
         add("Voices…", Some(sel!(showVoices:)), "");
         add("Timebar…", Some(sel!(showTimebar:)), "");
         add("Advanced…", Some(sel!(showAdvanced:)), "");
@@ -1423,6 +1510,8 @@ impl App {
         iv.heard.set((status, true));
         iv.located
             .set(r["here"]["lat"].is_f64() && r["here"]["lon"].is_f64());
+        iv.here
+            .set(r["here"]["lat"].as_f64().zip(r["here"]["lon"].as_f64()));
         let place = r["place"]["label"].as_str().map(|l| auto::Place {
             label: l.into(),
             action: r["place"]["action"].as_str().unwrap_or("off").into(),
@@ -1430,7 +1519,16 @@ impl App {
         if place != *iv.place_now.borrow() || !first {
             *iv.place_now.borrow_mut() = place;
             self.auto_control();
+            if iv
+                .places_window
+                .borrow()
+                .as_ref()
+                .is_some_and(|w| w.isVisible())
+            {
+                self.show_places_on_map(false);
+            }
         }
+        self.supply_location_if_needed();
     }
 
     fn auto_control(&self) {
@@ -1442,10 +1540,7 @@ impl App {
         }
         let mic = cli::json(&["mic"]);
         let place = iv.place_now.borrow().clone();
-        let places: Value = std::fs::read(cli::dir().join("places.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(Value::Null);
+        let places_set = places::located(&places::load());
         let state = iv.state.borrow().clone();
         let mode = mode();
         let facts = auto::Facts {
@@ -1454,9 +1549,7 @@ impl App {
             mic_app: mic["app"].as_str(),
             place: place.as_ref(),
             located: iv.located.get(),
-            places_set: places
-                .as_array()
-                .is_some_and(|p| p.iter().any(|p| p["lat"].is_number())),
+            places_set,
             mode: &mode,
             state: &state,
         };
@@ -1702,6 +1795,74 @@ impl App {
             }
         }
         out
+    }
+
+    /// The render check's Places part: open the window, then the same scripted edits as the Swift harness (a map
+    /// click while picking, a pin drag, Add place, a typed latitude, an invalid radius), dumping the window and
+    /// saving places.json after each. Writes the dump and quits.
+    fn dump_places(&self, file: String, out: String) {
+        self.show_places();
+        let js = |app: &App, js: &str| unsafe {
+            app.places_map()
+                .evaluateJavaScript_completionHandler(&NSString::from_str(js), None)
+        };
+        fn field(v: &NSView, key: &str, row: isize) -> Option<Retained<NSTextField>> {
+            if let Some(t) = v.downcast_ref::<NSTextField>()
+                && t.identifier().is_some_and(|k| k.to_string() == key)
+                && places::row_of(t) as isize == row
+            {
+                return Some(objc2::Message::retain(t));
+            }
+            v.subviews().iter().find_map(|s| field(&s, key, row))
+        }
+        let file2 = file.clone();
+        let snap = move |app: &App, step: usize, out: &mut String| {
+            let _ = std::fs::copy(
+                cli::dir().join("places.json"),
+                format!("{file}.places{step}.json"),
+            );
+            *out += &app.dump_window(
+                app.ivars().places_window.borrow().as_ref(),
+                &format!("{file}.places{step}.png"),
+            );
+        };
+        later(4.0, move |app| {
+            let mut out = out;
+            snap(app, 1, &mut out);
+            app.pick_on_map(0);
+            js(
+                app,
+                "window.webkit.messageHandlers.ozen.postMessage({type: 'click', lat: 32.1, lon: 34.9})",
+            );
+            later(1.5, move |app| {
+                snap(app, 2, &mut out);
+                js(
+                    app,
+                    "window.webkit.messageHandlers.ozen.postMessage({type: 'move', index: 1, lat: 31.5, lon: 35.25})",
+                );
+                later(1.5, move |app| {
+                    snap(app, 3, &mut out);
+                    app.add_place();
+                    later(1.0, move |app| {
+                        snap(app, 4, &mut out);
+                        let stack = app.ivars().places_stack.get().unwrap().clone();
+                        if let Some(f) = field(&stack, "lat", 2) {
+                            f.setStringValue(ns_string!("33.5"));
+                            app.place_value_changed(&f);
+                        }
+                        if let Some(f) = field(&stack, "radius", 0) {
+                            f.setStringValue(ns_string!("abc"));
+                            app.place_value_changed(&f);
+                        }
+                        later(1.0, move |app| {
+                            snap(app, 5, &mut out);
+                            std::fs::write(&file2, out).expect("write dump");
+                            std::process::exit(0);
+                        });
+                    });
+                });
+            });
+        });
     }
 
     /// The Meetings table's cells, row by row, as the render check prints them.
