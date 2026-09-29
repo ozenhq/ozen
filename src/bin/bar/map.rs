@@ -6,7 +6,10 @@ use crate::App;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSClickGestureRecognizer, NSColor, NSGestureRecognizer};
+use objc2_app_kit::{
+    NSApplication, NSClickGestureRecognizer, NSColor, NSEvent, NSEventModifierFlags, NSEventType,
+    NSGestureRecognizer,
+};
 use objc2_core_location::CLLocationCoordinate2D;
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSString};
 use objc2_map_kit::{
@@ -248,13 +251,26 @@ impl Map {
         }
     }
 
-    /// For the render check: a click at the map's center, through the same code as a real click.
-    pub fn click_center(&self) {
-        let b = self.view.bounds();
-        click_at(
-            &self.view,
-            NSPoint::new(b.size.width / 2.0, b.size.height / 2.0),
+    /// For the render check: a mouse event at map point `p`, posted to the app's event queue so AppKit and MapKit
+    /// handle it as they would the real mouse's.
+    pub fn mouse(&self, kind: NSEventType, p: NSPoint) {
+        let Some(w) = self.view.window() else { return };
+        let at = self.view.convertPoint_toView(p, None);
+        let time = objc2_foundation::NSProcessInfo::processInfo().systemUptime();
+        let e = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            kind,
+            at,
+            NSEventModifierFlags::empty(),
+            time,
+            w.windowNumber(),
+            None,
+            0,
+            1,
+            1.0,
         );
+        if let Some(e) = e {
+            NSApplication::sharedApplication(self.view.mtm()).postEvent_atStart(&e, false);
+        }
     }
 
     /// For the render check: drag place `index`'s pin to (lat, lon) and let go, through MapKit's drag delegate
@@ -280,6 +296,16 @@ impl Map {
             let _: () = msg_send![&*self.delegate, mapView: &*self.view, annotationView: &*v, didChangeDragState: MKAnnotationViewDragState::Ending, fromOldState: MKAnnotationViewDragState::Dragging];
         }
         true
+    }
+
+    /// The coordinate under map point `p`.
+    pub fn coordinate_at(&self, p: NSPoint) -> (f64, f64) {
+        // SAFETY: converting a point in the map view to a coordinate.
+        let c = unsafe {
+            self.view
+                .convertPoint_toCoordinateFromView(p, Some(&self.view))
+        };
+        (c.latitude, c.longitude)
     }
 
     /// What the map shows, for the render check.

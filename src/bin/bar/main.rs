@@ -1798,7 +1798,13 @@ impl App {
             let mut out = out;
             snap(app, 1, &mut out);
             app.pick_on_map(0);
-            app.places_map_parts().click_center(); // picks the map's center for Home
+            // a click on the map, posted as mouse events: picks that spot for Home
+            let map = app.places_map_parts();
+            let b = map.view.bounds();
+            let p = NSPoint::new(b.size.width * 0.3, b.size.height * 0.6);
+            out += &format!("\nCLICK expect {:?}", map.coordinate_at(p));
+            map.mouse(objc2_app_kit::NSEventType::LeftMouseDown, p);
+            map.mouse(objc2_app_kit::NSEventType::LeftMouseUp, p);
             later(1.5, move |app| {
                 snap(app, 2, &mut out);
                 app.map_message(
@@ -1806,7 +1812,8 @@ impl App {
                 );
                 later(1.5, move |app| {
                     snap(app, 3, &mut out);
-                    // Gym's pin dragged for real: its view, and MapKit's drag-ended delegate call
+                    // Gym's pin dragged: its real view, and MapKit's drag-ended delegate call (MapKit ignores
+                    // synthesized drag events)
                     let dragged = app.places_map_parts().drag(2, 32.105, 34.81);
                     out += &format!("\nDRAGGED Gym {dragged}");
                     app.add_place();
