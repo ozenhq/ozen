@@ -11,6 +11,7 @@
 //! the render check against the Swift app.
 mod auto;
 mod cli;
+mod timebar;
 mod timeline;
 mod transcript;
 mod voices;
@@ -30,6 +31,7 @@ use objc2_foundation::{
     MainThreadMarker, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
     NSRectEdge, NSSize, NSString, NSTimer, ns_string,
 };
+use objc2_web_kit::WKNavigationDelegate;
 use serde_json::Value;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -71,11 +73,15 @@ struct Ivars {
     voices_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
     voices_stack: OnceCell<Retained<NSStackView>>,
     voices: RefCell<Vec<Value>>, // `ozen voices`: people, this run's unnamed speakers, ignored
+    timebar_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
+    timebar_view: OnceCell<Retained<objc2_web_kit::WKWebView>>,
+    timebar_timer: RefCell<Option<Retained<NSTimer>>>,
 }
 
 struct Extra {
     ask: Retained<NSButton>,
     voices: Retained<NSButton>,
+    timebar: Retained<NSButton>,
     advanced: Retained<NSButton>,
     quit: Retained<NSButton>,
 }
@@ -298,6 +304,16 @@ define_class!(
             }
         }
 
+        #[unsafe(method(showTimebar:))]
+        fn show_timebar_action(&self, _s: Option<&AnyObject>) {
+            self.show_timebar();
+        }
+
+        #[unsafe(method(timebarTick:))]
+        fn timebar_tick_action(&self, _t: Option<&AnyObject>) {
+            self.timebar_tick();
+        }
+
         #[unsafe(method(showAdvanced:))]
         fn show_advanced(&self, _s: Option<&AnyObject>) {
             self.advanced();
@@ -411,6 +427,15 @@ define_class!(
                     objc2::runtime::Bool::YES
                 }
                 _ => objc2::runtime::Bool::NO,
+            }
+        }
+    }
+
+    unsafe impl WKNavigationDelegate for App {
+        #[unsafe(method(webView:didFinishNavigation:))]
+        fn did_finish(&self, view: &objc2_web_kit::WKWebView, _n: Option<&objc2_web_kit::WKNavigation>) {
+            if self.ivars().timebar_view.get().is_some_and(|t| std::ptr::eq(&**t, view)) {
+                self.refresh_timebar();
             }
         }
     }
@@ -601,6 +626,7 @@ impl App {
         let extra = Extra {
             ask: small_button(ns_string!("Ask AI"), self, sel!(askMenu:), mtm),
             voices: small_button(ns_string!("Voices…"), self, sel!(showVoices:), mtm),
+            timebar: small_button(ns_string!("Timebar…"), self, sel!(showTimebar:), mtm),
             advanced: small_button(ns_string!(""), self, sel!(showAdvanced:), mtm),
             quit: small_button(ns_string!("Quit"), self, sel!(quitOzen:), mtm),
         };
@@ -630,12 +656,13 @@ impl App {
         extra
             .advanced
             .setToolTip(Some(ns_string!("Advanced settings")));
-        let row: [&NSView; 12] = [
+        let row: [&NSView; 13] = [
             &status,
             &spacer,
             &extra.ask,
             &mode_control,
             &extra.voices,
+            &extra.timebar,
             &buttons.review,
             &buttons.start,
             &buttons.pause,
@@ -857,8 +884,28 @@ impl App {
                             app.ivars().voices_window.borrow().as_ref(),
                             &format!("{file}.voices.png"),
                         );
-                        std::fs::write(&file, out).expect("write dump");
-                        std::process::exit(0);
+                        app.show_timebar();
+                        later(4.0, move |app| {
+                            let view = app.timebar_view().clone();
+                            let block = block2::RcBlock::new(
+                                move |r: *mut AnyObject, _e: *mut objc2_foundation::NSError| {
+                                    // SAFETY: WebKit hands the script's result (a string here) or null.
+                                    let text = unsafe { r.as_ref() }
+                                        .and_then(|r| r.downcast_ref::<NSString>())
+                                        .map_or(String::new(), |s| s.to_string());
+                                    std::fs::write(&file, format!("{out}\n\n== timebar\n{text}"))
+                                        .expect("write dump");
+                                    std::process::exit(0);
+                                },
+                            );
+                            // SAFETY: reading the page's text.
+                            unsafe {
+                                view.evaluateJavaScript_completionHandler(
+                                    ns_string!("document.body.innerText"),
+                                    Some(&block),
+                                )
+                            };
+                        });
                     });
                 });
             });
@@ -952,6 +999,7 @@ impl App {
             });
         }
         add("Voices…", Some(sel!(showVoices:)), "");
+        add("Timebar…", Some(sel!(showTimebar:)), "");
         add("Advanced…", Some(sel!(showAdvanced:)), "");
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         add("Quit ozen", Some(sel!(quitOzen:)), "q");
