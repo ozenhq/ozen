@@ -136,22 +136,17 @@ fn unsure(rows: &[Row], tags: &Row, labels: &Row, threshold: Option<f64>) -> Vec
     out.into_iter().map(|(_, v)| v).collect()
 }
 
-/// The panel's buttons for recorder `state`, with split on (record now, transcribe later) or off, `queued`
-/// chunks not yet transcribed and whether `ozen process` is running.
-fn controls(state: &str, split: bool, queued: usize, processing: bool) -> Value {
+/// The panel's buttons for recorder `state`, with transcription off (split: record now, transcribe later) or on,
+/// and `queued` chunks not yet transcribed.
+fn controls(state: &str, split: bool, queued: usize) -> Value {
     json!({
         "start": {
-            "title": if state == "paused" { "Resume" } else if split { "Record" } else { "Start" },
+            "title": if state == "paused" { "Resume" } else { "Start" },
             "enabled": matches!(state, "stopped" | "paused" | "processing"),
         },
         // a recording without a transcriber has nothing to keep loaded: Stop is the same
         "pause": {"enabled": state == "recording", "hidden": split},
         "stop": {"enabled": matches!(state, "recording" | "paused")},
-        "process": {
-            "title": if processing { "Stop processing".into() } else if queued > 0 { format!("Process {queued}") } else { "Process".into() },
-            "enabled": processing || queued > 0,
-            "hidden": !split,
-        },
         "queued": queued,
     })
 }
@@ -191,12 +186,7 @@ pub fn controls_json(state: &str, split: bool) -> Value {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".wav"))
             .count()
     });
-    controls(
-        state,
-        split,
-        queued,
-        fs::exists(".processing").unwrap_or(false),
-    )
+    controls(state, split, queued)
 }
 
 /// The transcript as the panel shows it, from the last HISTORY rows of lines.jsonl (`raw`, file order):
@@ -443,33 +433,18 @@ mod tests {
     }
 
     #[test]
-    fn split_swaps_start_and_pause_for_record_and_process() {
-        let off = controls("stopped", false, 2, false);
+    fn transcription_off_hides_pause() {
+        let on = controls("stopped", false, 2);
         assert_eq!(
             (
-                off["start"]["title"].as_str(),
-                off["pause"]["hidden"].as_bool()
+                on["start"]["title"].as_str(),
+                on["pause"]["hidden"].as_bool()
             ),
             (Some("Start"), Some(false))
         );
-        assert_eq!(off["process"]["hidden"], true);
-        insta::assert_json_snapshot!(controls("stopped", true, 2, false));
-        let busy = controls("processing", true, 2, true);
-        assert_eq!(
-            (
-                busy["process"]["title"].as_str(),
-                busy["start"]["enabled"].as_bool()
-            ),
-            (Some("Stop processing"), Some(true))
-        );
-        assert_eq!(
-            controls("paused", true, 0, false)["start"]["title"],
-            "Resume"
-        );
-        assert_eq!(
-            controls("stopped", true, 0, false)["process"]["enabled"],
-            false
-        );
+        insta::assert_json_snapshot!(controls("stopped", true, 2));
+        assert_eq!(controls("processing", true, 2)["start"]["enabled"], true);
+        assert_eq!(controls("paused", true, 0)["start"]["title"], "Resume");
     }
 
     #[test]

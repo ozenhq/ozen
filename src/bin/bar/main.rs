@@ -110,7 +110,6 @@ struct Buttons {
     start: Retained<NSButton>,
     pause: Retained<NSButton>,
     stop: Retained<NSButton>,
-    process: Retained<NSButton>,
     review: Retained<NSButton>,
 }
 
@@ -156,12 +155,6 @@ define_class!(
         #[unsafe(method(stopCapture:))]
         fn stop_capture(&self, _s: Option<&AnyObject>) {
             self.stop();
-        }
-
-        #[unsafe(method(processQueue:))]
-        fn process_queue(&self, _s: Option<&AnyObject>) {
-            let stop = cli::dir().join(".processing").exists();
-            cli::run(if stop { &["process", "stop"] } else { &["process"] }, |_, _, _| later(1.0, App::refresh_state));
         }
 
         #[unsafe(method(reviewNext:))]
@@ -373,13 +366,19 @@ define_class!(
         }
 
         #[unsafe(method(splitChanged:))]
-        fn split_changed(&self, sender: &NSButton) {
-            objc2_foundation::NSUserDefaults::standardUserDefaults().setBool_forKey(sender.state() == objc2_app_kit::NSControlStateValueOn, ns_string!("split"));
-            // A recording in progress switches now. Turning split on keeps the live transcriber going as processing
-            // (Stop processing ends it), so nothing already heard waits.
+        fn split_changed(&self, sender: &objc2_app_kit::NSSwitch) {
+            // The switch is "Transcribe", so off means split: record now, transcribe later.
+            objc2_foundation::NSUserDefaults::standardUserDefaults().setBool_forKey(sender.state() == objc2_app_kit::NSControlStateValueOff, ns_string!("split"));
+            // Applies right away. Off stops the transcriber and the audio waits in chunks/ (the recording goes on);
+            // on transcribes what's waiting, then keeps going live if recording.
             let state = self.ivars().state.borrow().clone();
-            if state == "recording" {
-                cli::run(&[if split() { "record" } else { "start" }], |_, _, _| APP.with(|a| a.get().unwrap().refresh_state()));
+            let refresh = |_: String, _: String, _: i32| APP.with(|a| a.get().unwrap().refresh_state());
+            match (split(), state.as_str()) {
+                (true, "recording") => cli::run(&["record"], move |_, _, _| cli::run(&["process", "stop"], refresh)),
+                (true, "paused" | "processing") => cli::run(&["process", "stop"], refresh),
+                (false, "recording") => cli::run(&["start"], refresh),
+                (false, _) if self.ivars().queued.get() > 0 => cli::run(&["process"], refresh),
+                _ => {}
             }
             self.show_state(&state);
         }
@@ -667,12 +666,8 @@ impl App {
             start: small_button(ns_string!("Start"), self, sel!(startCapture:), mtm),
             pause: small_button(ns_string!("Pause"), self, sel!(pauseCapture:), mtm),
             stop: small_button(ns_string!("Stop"), self, sel!(stopCapture:), mtm),
-            process: small_button(ns_string!("Process"), self, sel!(processQueue:), mtm),
             review: small_button(ns_string!("Review"), self, sel!(reviewNext:), mtm),
         };
-        buttons.process.setToolTip(Some(ns_string!(
-            "Transcribe the recorded audio that's waiting, then stop"
-        )));
         let spacer = NSView::new(mtm);
         let mode_labels = objc2_foundation::NSArray::from_retained_slice(&[
             NSString::from_str("Always"),
@@ -725,7 +720,7 @@ impl App {
         extra
             .advanced
             .setToolTip(Some(ns_string!("Advanced settings")));
-        let row: [&NSView; 14] = [
+        let row: [&NSView; 13] = [
             &status,
             &spacer,
             &extra.ask,
@@ -737,7 +732,6 @@ impl App {
             &buttons.start,
             &buttons.pause,
             &buttons.stop,
-            &buttons.process,
             &extra.advanced,
             &extra.quit,
         ];
@@ -1030,7 +1024,6 @@ impl App {
             (&b.start, sel!(startCapture:)),
             (&b.pause, sel!(pauseCapture:)),
             (&b.stop, sel!(stopCapture:)),
-            (&b.process, sel!(processQueue:)),
         ] {
             if !btn.isHidden() && btn.isEnabled() {
                 add(&btn.title().to_string(), Some(sel), "");
@@ -1297,7 +1290,6 @@ impl App {
                     (&b.start, "start"),
                     (&b.pause, "pause"),
                     (&b.stop, "stop"),
-                    (&b.process, "process"),
                 ] {
                     let c = &c[name];
                     if let Some(t) = c["title"].as_str() {
@@ -1533,7 +1525,7 @@ impl App {
         }
     }
 
-    /// Advanced settings: record and process separately.
+    /// Advanced settings: live transcription on or off.
     fn advanced(&self) {
         let mtm = self.mtm();
         if self.ivars().advanced_window.borrow().is_none() {
@@ -1550,27 +1542,30 @@ impl App {
             };
             w.setTitle(ns_string!("Ozen Advanced Settings"));
             unsafe { w.setReleasedWhenClosed(false) };
-            let header = NSTextField::labelWithString(ns_string!("Recording and processing"), mtm);
+            let header = NSTextField::labelWithString(ns_string!("Transcription"), mtm);
             header.setFont(Some(&NSFont::boldSystemFontOfSize(12.0)));
+            let switch = objc2_app_kit::NSSwitch::new(mtm);
             // SAFETY: the target is the app delegate, alive for the process.
-            let bx = unsafe {
-                NSButton::checkboxWithTitle_target_action(
-                    ns_string!("Split recording and processing"),
-                    Some(self),
-                    Some(sel!(splitChanged:)),
-                    mtm,
-                )
-            };
-            bx.setState(if split() {
-                objc2_app_kit::NSControlStateValueOn
-            } else {
+            unsafe {
+                switch.setTarget(Some(self));
+                switch.setAction(Some(sel!(splitChanged:)));
+            }
+            switch.setState(if split() {
                 objc2_app_kit::NSControlStateValueOff
+            } else {
+                objc2_app_kit::NSControlStateValueOn
             });
+            let label = NSTextField::labelWithString(ns_string!("Transcribe"), mtm);
+            let bx = NSStackView::stackViewWithViews(
+                &objc2_foundation::NSArray::from_slice(&[&*label as &NSView, &switch]),
+                mtm,
+            );
+            bx.setSpacing(12.0);
             let note = NSTextField::wrappingLabelWithString(
                 &NSString::from_str(concat!(
-                    "Record then only records: nothing is transcribed while it runs, and the audio ",
-                    "waits in the chunks folder (it takes disk space until processed). Process transcribes the waiting audio, ",
-                    "with or without a recording going on, and stops once it's done. Off: Start records and transcribes together."
+                    "Off: recording goes on, but nothing is transcribed and the audio waits in the chunks folder ",
+                    "(it takes disk space). Turning it back on transcribes what's waiting, then keeps up live. ",
+                    "Takes effect right away, mid-recording too."
                 )),
                 mtm,
             );
@@ -1859,10 +1854,10 @@ impl App {
     fn start(&self) {
         let paused = *self.ivars().state.borrow() == "paused";
         self.control(
-            if paused {
+            if split() {
+                "record" // also resumes, without the transcriber
+            } else if paused {
                 "resume"
-            } else if split() {
-                "record"
             } else {
                 "start"
             },
