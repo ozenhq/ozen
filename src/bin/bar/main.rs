@@ -374,6 +374,12 @@ define_class!(
             self.show_state(&state);
         }
 
+        #[unsafe(method(lowPriorityChanged:))]
+        fn low_priority_changed(&self, sender: &objc2_app_kit::NSSwitch) {
+            let low = sender.state() == objc2_app_kit::NSControlStateValueOn;
+            cli::run(&["priority", if low { "low" } else { "normal" }], |_, _, _| {});
+        }
+
         #[unsafe(method(switchView:))]
         fn switch_view(&self, _s: Option<&AnyObject>) {
             self.view_switched();
@@ -1536,7 +1542,35 @@ impl App {
         }
     }
 
-    /// Advanced settings: live transcription on or off.
+    /// A label and a switch that calls `action` on this app delegate.
+    fn switch_row(
+        &self,
+        title: &str,
+        on: bool,
+        action: objc2::runtime::Sel,
+    ) -> Retained<NSStackView> {
+        let mtm = self.mtm();
+        let switch = objc2_app_kit::NSSwitch::new(mtm);
+        // SAFETY: the target is the app delegate, alive for the process.
+        unsafe {
+            switch.setTarget(Some(self));
+            switch.setAction(Some(action));
+        }
+        switch.setState(if on {
+            objc2_app_kit::NSControlStateValueOn
+        } else {
+            objc2_app_kit::NSControlStateValueOff
+        });
+        let label = NSTextField::labelWithString(&NSString::from_str(title), mtm);
+        let row = NSStackView::stackViewWithViews(
+            &objc2_foundation::NSArray::from_slice(&[&*label as &NSView, &switch]),
+            mtm,
+        );
+        row.setSpacing(12.0);
+        row
+    }
+
+    /// Advanced settings: live transcription on or off, and its priority.
     fn advanced(&self) {
         let mtm = self.mtm();
         if self.ivars().advanced_window.borrow().is_none() {
@@ -1545,7 +1579,7 @@ impl App {
             let w = unsafe {
                 NSWindow::initWithContentRect_styleMask_backing_defer(
                     NSWindow::alloc(mtm),
-                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 170.0)),
+                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 250.0)),
                     NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
                     NSBackingStoreType::Buffered,
                     false,
@@ -1555,23 +1589,7 @@ impl App {
             unsafe { w.setReleasedWhenClosed(false) };
             let header = NSTextField::labelWithString(ns_string!("Transcription"), mtm);
             header.setFont(Some(&NSFont::boldSystemFontOfSize(12.0)));
-            let switch = objc2_app_kit::NSSwitch::new(mtm);
-            // SAFETY: the target is the app delegate, alive for the process.
-            unsafe {
-                switch.setTarget(Some(self));
-                switch.setAction(Some(sel!(splitChanged:)));
-            }
-            switch.setState(if split() {
-                objc2_app_kit::NSControlStateValueOff
-            } else {
-                objc2_app_kit::NSControlStateValueOn
-            });
-            let label = NSTextField::labelWithString(ns_string!("Transcribe"), mtm);
-            let bx = NSStackView::stackViewWithViews(
-                &objc2_foundation::NSArray::from_slice(&[&*label as &NSView, &switch]),
-                mtm,
-            );
-            bx.setSpacing(12.0);
+            let bx = self.switch_row("Transcribe", !split(), sel!(splitChanged:));
             let note = NSTextField::wrappingLabelWithString(
                 &NSString::from_str(concat!(
                     "Off: recording goes on, but nothing is transcribed and the audio waits in the chunks folder ",
@@ -1583,7 +1601,22 @@ impl App {
             note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
             note.setTextColor(Some(&NSColor::secondaryLabelColor()));
             note.setPreferredMaxLayoutWidth(420.0);
-            let views: [&NSView; 3] = [&header, &bx, &note];
+            let low = self.switch_row(
+                "Low priority",
+                cli::dir().join(".low-priority").exists(),
+                sel!(lowPriorityChanged:),
+            );
+            let low_note = NSTextField::wrappingLabelWithString(
+                &NSString::from_str(concat!(
+                    "The transcriber gives way to other apps: macOS runs it at background priority, so it slows down ",
+                    "for your CPU, disk and GPU work and the transcript may lag behind. Takes effect right away."
+                )),
+                mtm,
+            );
+            low_note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+            low_note.setTextColor(Some(&NSColor::secondaryLabelColor()));
+            low_note.setPreferredMaxLayoutWidth(420.0);
+            let views: [&NSView; 5] = [&header, &bx, &note, &low, &low_note];
             let stack = NSStackView::stackViewWithViews(
                 &objc2_foundation::NSArray::from_slice(&views),
                 mtm,

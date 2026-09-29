@@ -29,7 +29,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -37,6 +37,9 @@ ozen control: start | pause | resume | stop | record | process | status | health
   process [stop]
                 transcribe the queued chunks without recording, then exit; while recording, keeps
                 transcribing live until the recording stops. `process stop` stops transcribing
+  priority [low|normal]
+                low runs the transcriber at macOS background priority (it yields CPU, disk and GPU to other
+                apps, so the transcript can lag), now and on every start; no argument prints the current one
   status        prints recording | paused | stopping | processing | stopped
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   eval [--vocab 0,10,30,60] [--repeat 0,1,2,3] [--real] [--fresh]
@@ -54,7 +57,7 @@ ozen control: start | pause | resume | stop | record | process | status | health
                 PENDING is {\"tags\": {id: name}, \"fixes\": {id: text}} the panel set but hasn't written yet
   unsure        JSON: untagged lines ozen isn't sure who said, most uncertain first, and when each leaves Review
   controls STATE [split]
-                JSON: the panel's Start/Pause/Stop/Process buttons for that recorder state
+                JSON: the panel's Start/Pause/Stop buttons for that recorder state
   voices        JSON: people, this run's unnamed speakers and ignored voices, with line counts and recent lines
   name NAME ID...
                 tag those lines as NAME (an unnamed speaker's lines, from `voices`), then retrain
@@ -98,6 +101,7 @@ const DRAIN: &str = r"/ozen drain$"; // the detached helper `stop` leaves behind
 const PROCESS: &str = r"/ozen process-queue$"; // the detached helper `process` leaves behind
 const RECORD_ONLY: &str = ".record-only"; // recording started by `record`: no transcriber is kept running for it
 const PROCESSING: &str = ".processing"; // `process` asked to transcribe the queue; removed when it's done or stopped
+const LOW_PRIORITY: &str = ".low-priority"; // `priority low`: the transcriber runs at macOS background priority
 const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current while the meeting goes on
 /// Tests that chdir into a temp dir hold this: the working directory is shared by every test thread.
 #[cfg(test)]
@@ -353,12 +357,16 @@ fn start_transcriber() {
         );
     }
     text::mark_junk();
+    let me = std::env::current_exe().expect("own path");
+    let mut c = if Path::new(LOW_PRIORITY).exists() {
+        let mut c = cmd("taskpolicy");
+        c.arg("-b").arg(me);
+        c
+    } else {
+        Command::new(me)
+    };
     spawn_detached(
-        Command::new(std::env::current_exe().expect("own path")).args([
-            "transcribe",
-            "chunks",
-            "transcript.txt",
-        ]),
+        c.args(["transcribe", "chunks", "transcript.txt"]),
         log().into(),
         log().into(),
     );
@@ -577,6 +585,33 @@ fn main() {
             }
             if !running(REC) {
                 spawn_detached(cmd(REC_BIN).arg("chunks"), log().into(), log().into());
+            }
+        }
+        "priority" => {
+            let flag = match std::env::args().nth(2).as_deref() {
+                Some("low") => {
+                    File::create(LOW_PRIORITY).expect("create .low-priority");
+                    "-b"
+                }
+                Some("normal") => {
+                    let _ = fs::remove_file(LOW_PRIORITY);
+                    "-B"
+                }
+                _ => {
+                    println!(
+                        "{}",
+                        if Path::new(LOW_PRIORITY).exists() {
+                            "low"
+                        } else {
+                            "normal"
+                        }
+                    );
+                    return;
+                }
+            };
+            // A running transcriber switches now; one started later reads the file.
+            for pid in ours(TR) {
+                let _ = cmd("taskpolicy").args([flag, "-p", &pid]).status();
             }
         }
         "process" if std::env::args().nth(2).as_deref() == Some("stop") => {

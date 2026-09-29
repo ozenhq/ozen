@@ -88,7 +88,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   menu) has a **Transcribe** switch, on by default, that applies right away. Off, recording goes on but nothing is
   transcribed (the audio waits in `chunks/`, taking disk space); back on, it transcribes what's waiting, then keeps up
   live, or stops once done if nothing is recording. Pause is hidden while off: without a transcriber loaded it would
-  be the same as Stop.
+  be the same as Stop. **Low priority** in the same window runs the transcriber at macOS background priority
+  (`ozen priority low`), so it gives way to your other apps' CPU, disk and GPU work; the transcript can lag behind.
 - **Timeline view.** Switch the panel to **Timeline** for one lane per speaker (with their total talk time) and a
   bar for every line they spoke, on a scrollable time axis; **− / +** zoom. Silences over 2 minutes shrink to a
   short break marker. Hover a bar for what was said; click it to jump to that line in the transcript.
