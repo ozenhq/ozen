@@ -18,6 +18,21 @@ use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize, NSString, ns_strin
 use objc2_web_kit::WKWebView;
 use serde_json::{Value, json};
 
+/// map.html as shipped in Ozen.app (by `ozen app`), else the checkout's copy (a checkout run: `Ozen [dir]`).
+fn load_map(view: &WKWebView) {
+    let url = objc2_foundation::NSBundle::mainBundle()
+        .URLForResource_withExtension(Some(ns_string!("map")), Some(ns_string!("html")))
+        .unwrap_or_else(|| {
+            objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(
+                &cli::dir().join("map.html").display().to_string(),
+            ))
+        });
+    if let Some(dir) = url.URLByDeletingLastPathComponent() {
+        // SAFETY: loading a local file with read access to its folder.
+        unsafe { view.loadFileURL_allowingReadAccessToURL(&url, &dir) };
+    }
+}
+
 const DEFAULT_RADIUS: f64 = 150.0; // meters
 const ACTIONS: [(&str, &str); 3] = [
     ("record", "Auto record"),
@@ -129,7 +144,7 @@ impl App {
             note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
             note.setTextColor(Some(&NSColor::secondaryLabelColor()));
             w.setContentView(Some(stack));
-            crate::timebar::load(self.places_map(), "map.html");
+            load_map(self.places_map());
             *iv.places_window.borrow_mut() = Some(w);
         }
         self.build_places(true);

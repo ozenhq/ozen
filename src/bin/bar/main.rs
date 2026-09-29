@@ -76,7 +76,7 @@ struct Ivars {
     voices_stack: OnceCell<Retained<NSStackView>>,
     voices: RefCell<Vec<Value>>, // `ozen voices`: people, this run's unnamed speakers, ignored
     timebar_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
-    timebar_view: OnceCell<Retained<objc2_web_kit::WKWebView>>,
+    timebar_view: OnceCell<Retained<timebar::TimebarView>>,
     timebar_timer: RefCell<Option<Retained<NSTimer>>>,
     places_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
     places_stack: OnceCell<Retained<NSStackView>>,
@@ -486,12 +486,8 @@ define_class!(
 
     unsafe impl WKNavigationDelegate for App {
         #[unsafe(method(webView:didFinishNavigation:))]
-        fn did_finish(&self, view: &objc2_web_kit::WKWebView, _n: Option<&objc2_web_kit::WKNavigation>) {
-            if self.ivars().timebar_view.get().is_some_and(|t| std::ptr::eq(&**t, view)) {
-                self.refresh_timebar();
-            } else {
-                self.show_places_on_map(true);
-            }
+        fn did_finish(&self, _view: &objc2_web_kit::WKWebView, _n: Option<&objc2_web_kit::WKNavigation>) {
+            self.show_places_on_map(true);
         }
     }
 
@@ -980,25 +976,11 @@ impl App {
                         );
                         app.show_timebar();
                         later(4.0, move |app| {
-                            let view = app.timebar_view().clone();
-                            let block = block2::RcBlock::new(
-                                move |r: *mut AnyObject, _e: *mut objc2_foundation::NSError| {
-                                    // SAFETY: WebKit hands the script's result (a string here) or null.
-                                    let text = unsafe { r.as_ref() }
-                                        .and_then(|r| r.downcast_ref::<NSString>())
-                                        .map_or(String::new(), ToString::to_string);
-                                    let out = format!("{out}\n\n== timebar\n{text}");
-                                    let file = file.clone();
-                                    later(0.0, move |app| app.dump_places(file, out));
-                                },
+                            let out = format!(
+                                "{out}\n\n== timebar\n{}",
+                                app.timebar_view().dump(&format!("{file}.timebar.png"))
                             );
-                            // SAFETY: reading the page's text.
-                            unsafe {
-                                view.evaluateJavaScript_completionHandler(
-                                    ns_string!("document.body.innerText"),
-                                    Some(&block),
-                                )
-                            };
+                            later(0.0, move |app| app.dump_places(file, out));
                         });
                     });
                 });

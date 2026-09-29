@@ -1,4 +1,4 @@
-//! Every recorded chunk and whether it's transcribed yet, for the menu bar's Timebar window (chunks.html)
+//! Every recorded chunk and whether it's transcribed yet, for the menu bar's Timebar window (src/bin/bar/timebar.rs)
 //! and `ozen timebar`.
 //!
 //! A chunk is one 15s stream file (`<start ms>-<call|mic|local>.wav`). Waiting ones are the files still in
