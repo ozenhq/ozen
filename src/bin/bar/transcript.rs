@@ -22,7 +22,7 @@ pub struct Shown {
     pub ids: Vec<String>,
     pub review: Vec<(String, f64)>, // unsure lines shown, most uncertain first, and when each ages out
     pub footer: String,
-    pub segments: Vec<String>, // timeline bars, as the render check prints them (the timeline view comes later)
+    pub segments: Vec<crate::timeline::Segment>, // the timeline's bars
 }
 
 fn attrs(
@@ -183,17 +183,13 @@ pub fn render(
         .as_array()
         .into_iter()
         .flatten()
-        .map(|g| {
-            let f = |k: &str| swift_double(g[k].as_f64().unwrap_or(0.0));
-            format!(
-                "SEG {} {} {} {} {} {}",
-                g["id"].as_str().unwrap_or(""),
-                f("t"),
-                f("d"),
-                g["speaker"].as_str().unwrap_or(""),
-                g["unsure"].as_bool().unwrap_or(false),
-                g["text"].as_str().unwrap_or("")
-            )
+        .map(|g| crate::timeline::Segment {
+            id: g["id"].as_str().unwrap_or("").into(),
+            t: g["t"].as_f64().unwrap_or(0.0),
+            d: g["d"].as_f64().unwrap_or(1.0),
+            speaker: g["speaker"].as_str().unwrap_or("?").into(),
+            text: g["text"].as_str().unwrap_or("").into(),
+            unsure: g["unsure"].as_bool().unwrap_or(false),
         })
         .collect();
     (out, shown)
