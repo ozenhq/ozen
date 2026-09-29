@@ -892,7 +892,7 @@ impl App {
                                     // SAFETY: WebKit hands the script's result (a string here) or null.
                                     let text = unsafe { r.as_ref() }
                                         .and_then(|r| r.downcast_ref::<NSString>())
-                                        .map_or(String::new(), |s| s.to_string());
+                                        .map_or(String::new(), ToString::to_string);
                                     std::fs::write(&file, format!("{out}\n\n== timebar\n{text}"))
                                         .expect("write dump");
                                     std::process::exit(0);
