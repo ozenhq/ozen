@@ -109,8 +109,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   **Use current location** runs `ozen places here N`. The watcher carries Ozen's bundle id and signing certificate,
   so it uses the app's location permission; the app itself only shows the permission prompt. If the watcher
   can't get a location while the app can, the app supplies it until the watcher recovers, and `ozen health` warns only
-  when neither can. The map is `map.html` (Leaflet + OpenStreetMap, no API key), which any web view
-  or browser can host.
+  when neither can. The map is Apple's (MapKit): drag a pin to move a place, or **Pick on map** and click.
 
 - **Hands meetings to an agent.** Switch the panel to **Meetings** for every past meeting (a silence of 10+ minutes
   starts a new one). Select one or more (⌘/⇧-click) and press **Open** to put their transcripts in a fresh folder
