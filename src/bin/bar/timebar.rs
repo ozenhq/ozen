@@ -953,6 +953,24 @@ impl TimebarView {
             unsafe { now_b.performClick(None) };
             out.push(format!("CLICK Now {:?}", iv.nav.get()));
         }
+        // a scroll, then a ⌘-scroll, mid-lanes, as AppKit delivers them
+        let f = frames(self.bounds().size.width);
+        let p = NSPoint::new(
+            f.lanes.origin.x + GUTTER + (f.lanes.size.width - GUTTER) / 4.0,
+            f.lanes.origin.y + 40.0,
+        );
+        for (dy, cmd) in [(30, false), (50, true)] {
+            if let Some(e) = scroll_event(self, p, dy, cmd) {
+                self.scrollWheel(&e);
+                out.push(format!(
+                    "SCROLL {:?} precise {} cmd {cmd} at {:?} {:?}",
+                    e.scrollingDeltaY(),
+                    e.hasPreciseScrollingDeltas(),
+                    self.time_at(&e, f.lanes.size.width),
+                    iv.nav.get()
+                ));
+            }
+        }
         if let Some(rep) = self.bitmapImageRepForCachingDisplayInRect(self.bounds()) {
             self.cacheDisplayInRect_toBitmapImageRep(self.bounds(), &rep);
             // SAFETY: PNG encoding of our own bitmap.
@@ -966,6 +984,53 @@ impl TimebarView {
             }
         }
         out.join("\n")
+    }
+}
+
+#[repr(C)]
+struct CGEvent([u8; 0]);
+
+// SAFETY: CGEventRef as the runtime encodes it.
+unsafe impl objc2::encode::RefEncode for CGEvent {
+    const ENCODING_REF: objc2::encode::Encoding =
+        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("__CGEvent", &[]));
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreateScrollWheelEvent2(
+        source: *const std::ffi::c_void,
+        units: u32,
+        count: u32,
+        dy: i32,
+        dx: i32,
+        unused: i32,
+    ) -> *mut CGEvent;
+    fn CGEventSetFlags(e: *mut CGEvent, flags: u64);
+    fn CGEventSetLocation(e: *mut CGEvent, p: NSPoint);
+    fn CFRelease(p: *const CGEvent);
+}
+
+/// A pixel scroll event at view point `p`, for the render check. Its location is set so that, window-less,
+/// locationInWindow comes out as `p` in window coordinates, as a real event over the view would.
+fn scroll_event(view: &NSView, p: NSPoint, dy: i32, cmd: bool) -> Option<Retained<NSEvent>> {
+    let w = view.convertPoint_toView(p, None);
+    let h = objc2_app_kit::NSScreen::screens(view.mtm())
+        .firstObject()?
+        .frame()
+        .size
+        .height;
+    // SAFETY: a CGEvent we create, hand to NSEvent (which retains it), and release.
+    unsafe {
+        let cg = CGEventCreateScrollWheelEvent2(std::ptr::null(), 0, 1, dy, 0, 0);
+        if cg.is_null() {
+            return None;
+        }
+        CGEventSetLocation(cg, NSPoint::new(w.x, h - w.y));
+        CGEventSetFlags(cg, if cmd { 0x100000 } else { 0 }); // kCGEventFlagMaskCommand
+        let e: Option<Retained<NSEvent>> = msg_send![objc2::class!(NSEvent), eventWithCGEvent: cg];
+        CFRelease(cg);
+        e
     }
 }
 
