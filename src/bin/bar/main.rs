@@ -9,6 +9,7 @@
 //! DIR is the ozen checkout (default ~/ozen). --open shows the panel at launch. --dump FILE shows the panel, writes
 //! what it drew (every text run with its attributes, the footer, Review queue and timeline bars) to FILE and quits:
 //! the render check against the Swift app.
+mod auto;
 mod cli;
 mod timeline;
 mod transcript;
@@ -57,6 +58,20 @@ struct Ivars {
     meetings_table: OnceCell<Retained<objc2_app_kit::NSTableView>>,
     meetings_scroll: OnceCell<Retained<NSScrollView>>,
     meetings: RefCell<Vec<Vec<String>>>, // `ozen meetings` rows: id, start, minutes, lines, first words
+    auto: RefCell<auto::Memory>,
+    place_now: RefCell<Option<auto::Place>>, // the place you're in, from `ozen place`
+    located: Cell<bool>,                     // `ozen place` has a fix
+    heard: Cell<(bool, bool)>, // the first `ozen status` and `ozen place` answers are in
+    launched: OnceCell<std::time::Instant>,
+    mode_control: OnceCell<Retained<objc2_app_kit::NSSegmentedControl>>,
+    extra: OnceCell<Extra>,
+    advanced_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
+}
+
+struct Extra {
+    ask: Retained<NSButton>,
+    advanced: Retained<NSButton>,
+    quit: Retained<NSButton>,
 }
 
 struct ViewButtons {
@@ -105,8 +120,7 @@ define_class!(
 
         #[unsafe(method(startCapture:))]
         fn start_capture(&self, _s: Option<&AnyObject>) {
-            let paused = *self.ivars().state.borrow() == "paused";
-            self.control(if paused { "resume" } else if split() { "record" } else { "start" }, "recording");
+            self.start();
         }
 
         #[unsafe(method(pauseCapture:))]
@@ -116,7 +130,7 @@ define_class!(
 
         #[unsafe(method(stopCapture:))]
         fn stop_capture(&self, _s: Option<&AnyObject>) {
-            self.control("stop", "stopping");
+            self.stop();
         }
 
         #[unsafe(method(processQueue:))]
@@ -181,6 +195,85 @@ define_class!(
             let Some(v) = represented(sender) else { return };
             let ids: Vec<String> = v.as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
             self.tag(ids, "Ignored", Some("cd \"$OZEN_DIR\" && target/release/ozen ignore ${=OZEN_ID}"));
+        }
+
+        #[unsafe(method(modeChanged:))]
+        fn mode_changed(&self, sender: Option<&AnyObject>) {
+            let from_menu = sender.and_then(|s| s.downcast_ref::<NSMenuItem>()).and_then(represented);
+            let m = match from_menu.as_ref().and_then(|v| v.as_str()) {
+                Some(m) => m.to_string(),
+                None => if self.ivars().mode_control.get().unwrap().selectedSegment() == 1 { "meetings".into() } else { "always".into() },
+            };
+            // SAFETY: storing a string in the app's defaults.
+            unsafe { objc2_foundation::NSUserDefaults::standardUserDefaults().setObject_forKey(Some(&NSString::from_str(&m)), ns_string!("mode")) };
+            self.ivars().mode_control.get().unwrap().setSelectedSegment(if m == "meetings" { 1 } else { 0 });
+            self.ivars().auto.borrow_mut().last_wanted = None; // apply the new mode right away
+            self.auto_control();
+        }
+
+        #[unsafe(method(askMenu:))]
+        fn ask_menu(&self, sender: &NSButton) {
+            let mtm = self.mtm();
+            let menu = NSMenu::new(mtm);
+            for (title, tool) in [("Claude Code", "claude"), ("Hermes", "hermes")] {
+                // SAFETY: the target is the app delegate, alive for the process.
+                let mi = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(askNow:)), ns_string!("")) };
+                unsafe {
+                    mi.setTarget(Some(self));
+                    mi.setRepresentedObject(Some(&NSString::from_str(&serde_json::json!(tool).to_string())));
+                }
+                menu.addItem(&mi);
+            }
+            menu.popUpMenuPositioningItem_atLocation_inView(None, NSPoint::new(0.0, sender.bounds().size.height + 4.0), Some(sender));
+        }
+
+        #[unsafe(method(askNow:))]
+        fn ask_now(&self, sender: &NSMenuItem) {
+            let Some(tool) = represented(sender).and_then(|v| v.as_str().map(String::from)) else { return };
+            let title = sender.title().to_string();
+            self.ivars().extra.get().unwrap().ask.setEnabled(false);
+            cli::run(&["live", "--open", &tool], move |_, err, code| {
+                APP.with(|a| a.get().unwrap().ivars().extra.get().unwrap().ask.setEnabled(true));
+                if code != 0 {
+                    fail(&format!("Couldn't start {title} on this meeting"), &err);
+                }
+            });
+        }
+
+        // Stop returns at once (the drain runs detached), so the last words still reach the transcript after we exit.
+        // Processing without a recording finishes by itself, so quitting leaves it running.
+        #[unsafe(method(quitOzen:))]
+        fn quit_ozen(&self, _s: Option<&AnyObject>) {
+            let state = self.ivars().state.borrow().clone();
+            if state == "stopped" || state == "processing" {
+                NSApplication::sharedApplication(self.mtm()).terminate(None);
+            } else {
+                cli::run(&["stop"], |_, _, _| NSApplication::sharedApplication(mtm()).terminate(None));
+            }
+        }
+
+        #[unsafe(method(didWake:))]
+        fn did_wake(&self, _n: &NSNotification) {
+            // The Mac may have moved while asleep: restarting the watcher sends a fresh fix within seconds; the old
+            // place holds until it lands, rather than dropping to the global mode.
+            cli::run(&["place", "--restart"], |out, _, _| APP.with(|a| a.get().unwrap().apply_place(&out)));
+        }
+
+        #[unsafe(method(showAdvanced:))]
+        fn show_advanced(&self, _s: Option<&AnyObject>) {
+            self.advanced();
+        }
+
+        #[unsafe(method(splitChanged:))]
+        fn split_changed(&self, sender: &NSButton) {
+            objc2_foundation::NSUserDefaults::standardUserDefaults().setBool_forKey(sender.state() == objc2_app_kit::NSControlStateValueOn, ns_string!("split"));
+            // A recording in progress switches now. Turning split on keeps the live transcriber going as processing
+            // (Stop processing ends it), so nothing already heard waits.
+            let state = self.ivars().state.borrow().clone();
+            if state == "recording" {
+                cli::run(&[if split() { "record" } else { "start" }], |_, _, _| APP.with(|a| a.get().unwrap().refresh_state()));
+            }
+            self.show_state(&state);
         }
 
         #[unsafe(method(switchView:))]
@@ -336,6 +429,19 @@ fn fail(title: &str, detail: &str) {
     ask(title, detail, &[]);
 }
 
+fn mode() -> String {
+    objc2_foundation::NSUserDefaults::standardUserDefaults()
+        .stringForKey(ns_string!("mode"))
+        .map_or("always".into(), |m| m.to_string()) // "always" | "meetings"
+}
+
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
+}
+
 fn split() -> bool {
     objc2_foundation::NSUserDefaults::standardUserDefaults().boolForKey(ns_string!("split"))
 }
@@ -426,14 +532,66 @@ impl App {
             "Transcribe the recorded audio that's waiting, then stop"
         )));
         let spacer = NSView::new(mtm);
-        let row: [&NSView; 7] = [
+        let mode_labels = objc2_foundation::NSArray::from_retained_slice(&[
+            NSString::from_str("Always"),
+            NSString::from_str("Meetings"),
+        ]);
+        // SAFETY: the target is the app delegate, alive for the process.
+        let mode_control = unsafe {
+            objc2_app_kit::NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &mode_labels,
+                objc2_app_kit::NSSegmentSwitchTracking::SelectOne,
+                Some(self),
+                Some(sel!(modeChanged:)),
+                mtm,
+            )
+        };
+        mode_control.setControlSize(NSControlSize::Small);
+        mode_control.setSelectedSegment(if mode() == "meetings" { 1 } else { 0 });
+        mode_control.setToolTip(Some(ns_string!("Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls.")));
+        let extra = Extra {
+            ask: small_button(ns_string!("Ask AI"), self, sel!(askMenu:), mtm),
+            advanced: small_button(ns_string!(""), self, sel!(showAdvanced:), mtm),
+            quit: small_button(ns_string!("Quit"), self, sel!(quitOzen:), mtm),
+        };
+        extra.ask.setImage(
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                ns_string!("sparkles"),
+                Some(ns_string!("AI")),
+            )
+            .as_deref(),
+        ); // the usual mark for AI features
+        extra
+            .ask
+            .setImagePosition(objc2_app_kit::NSCellImagePosition::ImageLeading);
+        extra.ask.setToolTip(Some(ns_string!(
+            "Start Claude Code or Hermes on the meeting happening now (ozen live)"
+        )));
+        extra.advanced.setImage(
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                ns_string!("gearshape"),
+                Some(ns_string!("Advanced settings")),
+            )
+            .as_deref(),
+        );
+        extra
+            .advanced
+            .setImagePosition(objc2_app_kit::NSCellImagePosition::ImageOnly);
+        extra
+            .advanced
+            .setToolTip(Some(ns_string!("Advanced settings")));
+        let row: [&NSView; 11] = [
             &status,
             &spacer,
+            &extra.ask,
+            &mode_control,
             &buttons.review,
             &buttons.start,
             &buttons.pause,
             &buttons.stop,
             &buttons.process,
+            &extra.advanced,
+            &extra.quit,
         ];
         let controls =
             NSStackView::stackViewWithViews(&objc2_foundation::NSArray::from_slice(&row), mtm);
@@ -579,6 +737,20 @@ impl App {
         popover.setBehavior(NSPopoverBehavior::Transient);
 
         let iv = self.ivars();
+        let _ = iv.mode_control.set(mode_control);
+        let _ = iv.extra.set(extra);
+        let _ = iv.launched.set(std::time::Instant::now());
+        // SAFETY: the observer is the app delegate, alive for the process.
+        unsafe {
+            objc2_app_kit::NSWorkspace::sharedWorkspace()
+                .notificationCenter()
+                .addObserver_selector_name_object(
+                    self,
+                    sel!(didWake:),
+                    Some(objc2_app_kit::NSWorkspaceDidWakeNotification),
+                    None,
+                );
+        }
         let _ = iv.timeline.set(tl);
         let _ = iv.timeline_scroll.set(timeline_scroll);
         let _ = iv.view_control.set(view_control);
@@ -684,6 +856,7 @@ impl App {
                 unsafe { mi.setTarget(Some(self)) };
             }
             menu.addItem(&mi);
+            mi
         };
         add(&format!("ozen: {}", self.ivars().state.borrow()), None, "");
         for p in self.ivars().problems.borrow().iter() {
@@ -702,7 +875,30 @@ impl App {
             }
         }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        add("Quit bar, keep recording", Some(sel!(terminate:)), "");
+        let mode = mode();
+        for (title, m) in [
+            ("Record always", "always"),
+            ("Record only meetings", "meetings"),
+        ] {
+            let mi = add(title, Some(sel!(modeChanged:)), "");
+            // SAFETY: payload for modeChanged:.
+            unsafe {
+                mi.setRepresentedObject(Some(&NSString::from_str(
+                    &serde_json::json!(m).to_string(),
+                )))
+            };
+            mi.setState(if mode == m {
+                objc2_app_kit::NSControlStateValueOn
+            } else {
+                objc2_app_kit::NSControlStateValueOff
+            });
+        }
+        add("Advanced…", Some(sel!(showAdvanced:)), "");
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        add("Quit ozen", Some(sel!(quitOzen:)), "q");
+        let quit_bar = add("Quit bar, keep recording", Some(sel!(terminate:)), "");
+        // SAFETY: terminate: goes to the application, not the delegate.
+        unsafe { quit_bar.setTarget(Some(&NSApplication::sharedApplication(mtm))) };
         menu
     }
 
@@ -791,8 +987,17 @@ impl App {
     }
 
     fn refresh_state(&self) {
+        cli::run(&["place"], |out, _, _| {
+            APP.with(|a| a.get().unwrap().apply_place(&out))
+        });
         cli::run(&["status"], |out, _, _| {
-            APP.with(|a| a.get().unwrap().show_state(&out))
+            APP.with(|a| {
+                let app = a.get().unwrap();
+                let (_, place) = app.ivars().heard.get();
+                app.ivars().heard.set((true, place));
+                app.show_state(&out);
+                app.auto_control();
+            })
         });
         cli::run(&["health"], |out, _, _| {
             APP.with(|a| {
@@ -856,9 +1061,29 @@ impl App {
         let processing = cli::dir().join(".processing").exists();
         let record_only = cli::dir().join(".record-only").exists();
         let queued = iv.queued.get();
+        let place = iv.place_now.borrow().clone();
+        let meetings_only = place
+            .as_ref()
+            .map_or(mode() == "meetings", |p| p.action == "meetings");
+        let meeting_now = auto::in_meeting(&iv.auto.borrow(), now());
+        let place_suffix = place
+            .as_ref()
+            .map_or(String::new(), |p| format!(" · {}", p.label));
+        let meeting = if meetings_only && meeting_now {
+            format!(
+                " · {}",
+                iv.auto
+                    .borrow()
+                    .meeting_name
+                    .clone()
+                    .unwrap_or_else(|| "meeting".into())
+            )
+        } else {
+            String::new()
+        } + &place_suffix;
         let line = if s == "recording" {
             format!(
-                "● Recording{}",
+                "● Recording{meeting}{}",
                 if record_only && !processing {
                     " · not transcribing"
                 } else {
@@ -870,7 +1095,14 @@ impl App {
                 "paused" => "paused".to_string(),
                 "stopping" => "finishing transcription…".to_string(),
                 "processing" => format!("processing {queued} chunks…"),
-                _ => "stopped".to_string(), // meetings and places come with the auto-record port
+                _ => format!(
+                    "{}{place_suffix}",
+                    if meetings_only {
+                        "waiting for a meeting"
+                    } else {
+                        "stopped"
+                    }
+                ),
             };
             format!("Not recording · {what}")
         };
@@ -1073,6 +1305,131 @@ impl App {
         });
     }
 
+    /// `ozen place`: {"here": {lat, lon, age} | null, "place": {label, action} | null}. Where you are and which place
+    /// that is are decided in Rust (src/places.rs, src/bin/locate.rs); this keeps the answer.
+    fn apply_place(&self, out: &str) {
+        let Ok(r) = serde_json::from_str::<Value>(out) else {
+            return;
+        };
+        let iv = self.ivars();
+        let (status, first) = iv.heard.get();
+        iv.heard.set((status, true));
+        iv.located
+            .set(r["here"]["lat"].is_f64() && r["here"]["lon"].is_f64());
+        let place = r["place"]["label"].as_str().map(|l| auto::Place {
+            label: l.into(),
+            action: r["place"]["action"].as_str().unwrap_or("off").into(),
+        });
+        if place != *iv.place_now.borrow() || !first {
+            *iv.place_now.borrow_mut() = place;
+            self.auto_control();
+        }
+    }
+
+    fn auto_control(&self) {
+        let iv = self.ivars();
+        // Decide only once the recorder's state and the place are both known: deciding on the mode alone and then
+        // on the place a moment later would count as a flip and stop a recording that a relaunch must keep.
+        if iv.heard.get() != (true, true) {
+            return;
+        }
+        let mic = cli::json(&["mic"]);
+        let place = iv.place_now.borrow().clone();
+        let places: Value = std::fs::read(cli::dir().join("places.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Value::Null);
+        let state = iv.state.borrow().clone();
+        let mode = mode();
+        let facts = auto::Facts {
+            now: now(),
+            since_launch: iv.launched.get().map_or(0.0, |t| t.elapsed().as_secs_f64()),
+            mic_app: mic["app"].as_str(),
+            place: place.as_ref(),
+            located: iv.located.get(),
+            places_set: places
+                .as_array()
+                .is_some_and(|p| p.iter().any(|p| p["lat"].is_number())),
+            mode: &mode,
+            state: &state,
+        };
+        let act = auto::decide(&facts, &mut iv.auto.borrow_mut());
+        self.show_state(&state);
+        match act {
+            auto::Act::Start => self.start(),
+            auto::Act::Stop => self.stop(),
+            auto::Act::None => {}
+        }
+    }
+
+    /// Advanced settings: record and process separately.
+    fn advanced(&self) {
+        let mtm = self.mtm();
+        if self.ivars().advanced_window.borrow().is_none() {
+            use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
+            // SAFETY: a plain titled window we keep (not released on close).
+            let w = unsafe {
+                NSWindow::initWithContentRect_styleMask_backing_defer(
+                    NSWindow::alloc(mtm),
+                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 170.0)),
+                    NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+                    NSBackingStoreType::Buffered,
+                    false,
+                )
+            };
+            w.setTitle(ns_string!("Ozen Advanced Settings"));
+            unsafe { w.setReleasedWhenClosed(false) };
+            let header = NSTextField::labelWithString(ns_string!("Recording and processing"), mtm);
+            header.setFont(Some(&NSFont::boldSystemFontOfSize(12.0)));
+            // SAFETY: the target is the app delegate, alive for the process.
+            let bx = unsafe {
+                NSButton::checkboxWithTitle_target_action(
+                    ns_string!("Split recording and processing"),
+                    Some(self),
+                    Some(sel!(splitChanged:)),
+                    mtm,
+                )
+            };
+            bx.setState(if split() {
+                objc2_app_kit::NSControlStateValueOn
+            } else {
+                objc2_app_kit::NSControlStateValueOff
+            });
+            let note = NSTextField::wrappingLabelWithString(
+                &NSString::from_str(concat!(
+                    "Record then only records: nothing is transcribed while it runs, and the audio ",
+                    "waits in the chunks folder (it takes disk space until processed). Process transcribes the waiting audio, ",
+                    "with or without a recording going on, and stops once it's done. Off: Start records and transcribes together."
+                )),
+                mtm,
+            );
+            note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+            note.setTextColor(Some(&NSColor::secondaryLabelColor()));
+            note.setPreferredMaxLayoutWidth(420.0);
+            let views: [&NSView; 3] = [&header, &bx, &note];
+            let stack = NSStackView::stackViewWithViews(
+                &objc2_foundation::NSArray::from_slice(&views),
+                mtm,
+            );
+            stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+            stack.setAlignment(objc2_app_kit::NSLayoutAttribute::Leading);
+            stack.setSpacing(8.0);
+            stack.setEdgeInsets(NSEdgeInsets {
+                top: 16.0,
+                left: 16.0,
+                bottom: 16.0,
+                right: 16.0,
+            });
+            w.setContentView(Some(&stack));
+            w.center();
+            *self.ivars().advanced_window.borrow_mut() = Some(w);
+        }
+        NSApplication::sharedApplication(mtm).activate();
+        if let Some(w) = self.ivars().advanced_window.borrow().as_ref() {
+            w.makeKeyAndOrderFront(None);
+        }
+    }
+
     fn view_switched(&self) {
         let seg = self.ivars().view_control.get().unwrap().selectedSegment();
         objc2_foundation::NSUserDefaults::standardUserDefaults()
@@ -1222,6 +1579,24 @@ impl App {
             out += &format!("\nMEETING {}", cells.join("\t"));
         }
         out
+    }
+
+    fn start(&self) {
+        let paused = *self.ivars().state.borrow() == "paused";
+        self.control(
+            if paused {
+                "resume"
+            } else if split() {
+                "record"
+            } else {
+                "start"
+            },
+            "recording",
+        );
+    }
+
+    fn stop(&self) {
+        self.control("stop", "stopping");
     }
 
     fn control(&self, cmd: &str, optimistic: &str) {
