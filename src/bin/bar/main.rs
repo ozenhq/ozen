@@ -11,6 +11,7 @@
 //! the render check against the Swift app.
 mod auto;
 mod cli;
+mod install;
 mod places;
 mod timebar;
 mod timeline;
@@ -2011,11 +2012,17 @@ fn main() {
             .map(|(_, a)| PathBuf::from(a)),
         None => rest.next().map(PathBuf::from),
     };
+    // Launched as Ozen.app (Finder/Spotlight) there are no args: use the standard checkout, installing the copy the
+    // app carries when it's newer.
+    let launched_as_app = dir.is_none();
     cli::set_dir(
         dir.unwrap_or_else(|| {
             PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("ozen")
         }),
     );
+    if launched_as_app && let Some(res) = objc2_foundation::NSBundle::mainBundle().resourcePath() {
+        install::bundled(&PathBuf::from(res.to_string()).join("ozen"), cli::dir());
+    }
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory); // menu bar only, no Dock icon
     let delegate = App::new(mtm);
