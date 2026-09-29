@@ -1,21 +1,18 @@
 //! Voice separation: MossFormer2 (ClearVoice's MossFormer2_SS_16K, 2 voices) in Rust, on ClearVoice's weights.
 //!
 //! Reproduces `CLS_MossFormer2_SS_16K.decode_data`: the clip is decoded in 2s windows (1.5s stride, 0.25s given up
-//! at each inner edge), and each track is scaled to the clip's RMS. overlap.py explains why windows, not whole clips.
+//! at each inner edge), and each track is scaled to the clip's RMS. A window's track order can flip (overlap::turns
+//! splits those); decoding whole clips kept the order but merged more real room pairs into one voice (word recall
+//! 0.67 vs 0.73 on the room set).
 //! Sequence tensors are [time, channels] (batch 1), so 1x1 convolutions are matmuls.
-//!
-//! `ozen separate` serves it to the Python transcriber: after a READY line, each request on stdin is a little-endian u32
-//! sample count and that many f32 samples (16 kHz mono); each reply is two tracks of that many f32 samples.
 use candle_core::{Device, Result, Tensor};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
 
 const DIR: &str = "models/checkpoints/MossFormer2_SS_16K"; // where ClearVoice kept it, so no second download
 const WEIGHTS: &str = "last_best_checkpoint.pt";
 const URL: &str = "https://huggingface.co/alibabasglab/MossFormer2_SS_16K/resolve/407cb030cd66340918ebb6c8cc63b18f8592cdbe/last_best_checkpoint.pt";
-const READY: &[u8] = b"ozen separate 1\n";
 const SR: usize = 16000;
 const WINDOW: usize = 2 * SR; // decode_window: 2
 const STRIDE: usize = WINDOW * 3 / 4;
@@ -511,36 +508,6 @@ impl Separator {
         }
         Ok(out)
     }
-}
-
-/// `ozen separate`: answer separation requests on stdin until it closes.
-pub fn serve() -> std::result::Result<(), String> {
-    let sep = Separator::load()?;
-    let (mut inp, mut out) = (std::io::stdin().lock(), std::io::stdout().lock());
-    out.write_all(READY)
-        .and_then(|_| out.flush())
-        .map_err(|e| e.to_string())?;
-    let mut n = [0u8; 4];
-    while inp.read_exact(&mut n).is_ok() {
-        let mut buf = vec![0u8; u32::from_le_bytes(n) as usize * 4];
-        inp.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        let clip: Vec<f32> = buf
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect();
-        let tracks = sep.separate(&clip).map_err(|e| e.to_string())?;
-        let bytes: Vec<u8> = tracks
-            .iter()
-            .flatten()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
-        out.write_all(&bytes)
-            .and_then(|_| out.flush())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

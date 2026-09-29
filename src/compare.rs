@@ -1,6 +1,6 @@
 //! `ozen compare [N]`: transcribe the last N chunks with speech kept in recent/ (OZEN_KEEP_AUDIO) with stock
 //! Whisper, the Hebrew model, and the Hebrew model with the vocab.txt hint, so a model or prompt change is
-//! judged on your own speech, not on synthetic audio. Whisper runs through asr.py with the live transcriber's
+//! judged on your own speech, not on synthetic audio. Whisper runs with the live transcriber's
 //! filters, so each setup shows what would land in the transcript, or "(dropped: …)" with Whisper's raw text
 //! when the filters threw all of it away (usually a hallucination).
 use serde_json::{Value, json};
@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const SPEECH_RMS: f64 = 0.006; // quieter chunks are silence (the transcriber's SILENCE_RMS)
-// (label, asr.py model, with the vocab.txt hint)
+// (label, Whisper model, with the vocab.txt hint)
 const SETUPS: [(&str, &str, bool); 3] = [
     ("stock", "stock", false),
     ("hebrew", "hebrew", false),

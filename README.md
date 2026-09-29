@@ -32,7 +32,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), run in Rust on the GPU by `src/separate.rs`), splits each track where its
   voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
   the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
-  `uv run --group eval eval_overlap.py` scores it on real speech (through `overlap.py`, the same steps in Python).
+  `ozen eval-overlap` scores it on real speech.
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
   Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
@@ -139,7 +139,7 @@ Output is `transcript.txt`:
 
 ## Setup
 
-Requires macOS 15+ on Apple Silicon, Xcode command line tools, [Rust](https://rustup.rs) (`cargo`), [`uv`](https://docs.astral.sh/uv/) and `ffmpeg`.
+Requires macOS 15+ on Apple Silicon, Xcode command line tools, [Rust](https://rustup.rs) (`cargo`) and `ffmpeg`.
 
 ```sh
 git clone https://github.com/ozenhq/ozen ~/ozen
@@ -149,8 +149,8 @@ cd ~/ozen && cargo run --release -- app   # builds the ozen CLI and ~/Applicatio
 
 Or, without Rust: download the DMG (built by [release.yml](.github/workflows/release.yml) for each `v*` tag on
 main), open it and drag **Ozen** onto **Applications**. It isn't notarized, so the first open is blocked: go to System
-Settings > Privacy & Security and press **Open Anyway**. On launch it unpacks its prebuilt CLI and scripts into `~/ozen`
-(a git checkout there is left alone). It still needs `uv` and `ffmpeg`. The same release as a tarball, for scripts:
+Settings > Privacy & Security and press **Open Anyway**. On launch it unpacks its prebuilt CLI into `~/ozen`
+(a git checkout there is left alone). It still needs `ffmpeg`. The same release as a tarball, for scripts:
 `curl -L <tarball link> | tar xz -C ~` unpacks `~/ozen`.
 
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
@@ -191,7 +191,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
-| `uv run --group eval eval_overlap.py [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`overlap.py`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
+| `target/release/ozen eval-overlap [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`src/overlap.rs`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
 | `cargo nextest run` | Every test: Rust unit tests, `tests/cli.rs` running the CLI on sample folders (`OZEN_DIR`) the way the panel calls it, and `insta` snapshots (`cargo insta review` after an intended change) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 
@@ -200,8 +200,8 @@ background on the first start; until it's ready, people talking at once stay mer
 `ozen eval` learns from half of a fixed set of lines (as if you had fixed them) and scores each setting on the
 other half: word error rate, English terms spelled right, word error rate on plain Hebrew, and words invented on
 quiet noise. The lines are in `eval/cases.jsonl`, spoken by macOS's Hebrew voice (Carmit); `--real` uses your own
-fixes instead (`fixes/dataset.jsonl`). It's deterministic: Whisper runs through `asr.py` (the live transcriber's
-code) seeded per clip, and results are cached by audio, prompt and `asr.py`, so a rerun prints the same table and
+fixes instead (`fixes/dataset.jsonl`). It's deterministic: Whisper runs with the live transcriber's decode and
+filters, seeded per clip, and results are cached by audio, prompt and that code, so a rerun prints the same table and
 a sweep only transcribes new prompts. Once a setting wins, set it as `LEARN` in `src/fixes.rs`.
 
 The synthetic lines are few and in one voice. Treat a small gap between settings as noise, and confirm a winner

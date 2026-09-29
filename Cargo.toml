@@ -31,6 +31,7 @@ objc2-core-location = { version = "0.3.2", features = ["CLLocation", "CLLocation
 objc2-foundation = "0.3"
 objc2-map-kit = "0.3.2"  # the Places map (src/bin/bar/map.rs)
 objc2-metal = "0.3.2"
+parquet = { version = "60.0.0", default-features = false, features = ["snap"] }
 plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
