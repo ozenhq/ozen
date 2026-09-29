@@ -13,6 +13,7 @@ mod auto;
 mod cli;
 mod timeline;
 mod transcript;
+mod voices;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -22,7 +23,8 @@ use objc2_app_kit::{
     NSControlSize, NSEventMask, NSEventType, NSFont, NSImage, NSMenu, NSMenuItem, NSPopover,
     NSPopoverBehavior, NSScrollView, NSStackView, NSStandardKeyBindingResponding, NSStatusBar,
     NSStatusItem, NSTableViewDataSource, NSTextDelegate, NSTextField, NSTextView,
-    NSTextViewDelegate, NSUserInterfaceLayoutOrientation, NSView, NSViewController,
+    NSTextViewDelegate, NSUserInterfaceItemIdentification, NSUserInterfaceLayoutOrientation,
+    NSView, NSViewController,
 };
 use objc2_foundation::{
     MainThreadMarker, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -66,10 +68,14 @@ struct Ivars {
     mode_control: OnceCell<Retained<objc2_app_kit::NSSegmentedControl>>,
     extra: OnceCell<Extra>,
     advanced_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
+    voices_window: RefCell<Option<Retained<objc2_app_kit::NSWindow>>>,
+    voices_stack: OnceCell<Retained<NSStackView>>,
+    voices: RefCell<Vec<Value>>, // `ozen voices`: people, this run's unnamed speakers, ignored
 }
 
 struct Extra {
     ask: Retained<NSButton>,
+    voices: Retained<NSButton>,
     advanced: Retained<NSButton>,
     quit: Retained<NSButton>,
 }
@@ -259,6 +265,39 @@ define_class!(
             cli::run(&["place", "--restart"], |out, _, _| APP.with(|a| a.get().unwrap().apply_place(&out)));
         }
 
+        #[unsafe(method(showVoices:))]
+        fn show_voices_action(&self, _s: Option<&AnyObject>) {
+            self.show_voices();
+        }
+
+        #[unsafe(method(renameVoice:))]
+        fn rename_voice_action(&self, sender: &NSButton) {
+            if let Some(n) = sender.identifier() {
+                self.rename_voice(&n.to_string());
+            }
+        }
+
+        #[unsafe(method(ignoreVoice:))]
+        fn ignore_voice_action(&self, sender: &NSButton) {
+            if let Some(n) = sender.identifier() {
+                self.ignore_voice(&n.to_string());
+            }
+        }
+
+        #[unsafe(method(forgetVoice:))]
+        fn forget_voice_action(&self, sender: &NSButton) {
+            if let Some(n) = sender.identifier() {
+                self.forget_voice(&n.to_string());
+            }
+        }
+
+        #[unsafe(method(showVoiceLine:))]
+        fn show_voice_line_action(&self, sender: &NSButton) {
+            if let Some(id) = sender.identifier() {
+                self.show_voice_line(&id.to_string());
+            }
+        }
+
         #[unsafe(method(showAdvanced:))]
         fn show_advanced(&self, _s: Option<&AnyObject>) {
             self.advanced();
@@ -412,6 +451,16 @@ fn meeting_cell(meetings: &[Vec<String>], col: &str, row: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Ask before a change: `action` or Cancel.
+fn confirm(message: &str, info: &str, action: &str) -> bool {
+    let alert = objc2_app_kit::NSAlert::new(mtm());
+    alert.setMessageText(&NSString::from_str(message));
+    alert.setInformativeText(&NSString::from_str(info));
+    alert.addButtonWithTitle(&NSString::from_str(action));
+    alert.addButtonWithTitle(ns_string!("Cancel"));
+    alert.runModal() == 1000 // NSAlertFirstButtonReturn
+}
+
 /// A modal alert with `buttons`; returns the index of the one pressed.
 fn ask(title: &str, info: &str, buttons: &[&str]) -> usize {
     let mtm = mtm();
@@ -551,6 +600,7 @@ impl App {
         mode_control.setToolTip(Some(ns_string!("Always: record until you stop. Meetings: start and stop automatically with Zoom/Meet/Teams/Slack/FaceTime calls.")));
         let extra = Extra {
             ask: small_button(ns_string!("Ask AI"), self, sel!(askMenu:), mtm),
+            voices: small_button(ns_string!("Voices…"), self, sel!(showVoices:), mtm),
             advanced: small_button(ns_string!(""), self, sel!(showAdvanced:), mtm),
             quit: small_button(ns_string!("Quit"), self, sel!(quitOzen:), mtm),
         };
@@ -580,11 +630,12 @@ impl App {
         extra
             .advanced
             .setToolTip(Some(ns_string!("Advanced settings")));
-        let row: [&NSView; 11] = [
+        let row: [&NSView; 12] = [
             &status,
             &spacer,
             &extra.ask,
             &mode_control,
+            &extra.voices,
             &buttons.review,
             &buttons.start,
             &buttons.pause,
@@ -800,8 +851,15 @@ impl App {
                 later(3.0, move |app| {
                     out += &app.dump_meetings();
                     out += &app.dump_pending();
-                    std::fs::write(&file, out).expect("write dump");
-                    std::process::exit(0);
+                    app.show_voices();
+                    later(3.0, move |app| {
+                        out += &app.dump_window(
+                            app.ivars().voices_window.borrow().as_ref(),
+                            &format!("{file}.voices.png"),
+                        );
+                        std::fs::write(&file, out).expect("write dump");
+                        std::process::exit(0);
+                    });
                 });
             });
         }
@@ -893,6 +951,7 @@ impl App {
                 objc2_app_kit::NSControlStateValueOff
             });
         }
+        add("Voices…", Some(sel!(showVoices:)), "");
         add("Advanced…", Some(sel!(showAdvanced:)), "");
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         add("Quit ozen", Some(sel!(quitOzen:)), "q");
@@ -1562,6 +1621,39 @@ impl App {
             out.push(format!("TAGMENU {id}: {}", items.join(" | ")));
         }
         out.join("\n")
+    }
+
+    /// A window's content as the render check prints it: every text shown, top to bottom, and a PNG.
+    fn dump_window(&self, w: Option<&Retained<objc2_app_kit::NSWindow>>, png: &str) -> String {
+        let Some(view) = w.and_then(|w| w.contentView()) else {
+            return String::new();
+        };
+        view.layoutSubtreeIfNeeded();
+        let mut out = String::from("\n\n== window");
+        fn walk(v: &NSView, out: &mut String) {
+            if let Some(t) = v.downcast_ref::<NSTextField>() {
+                *out += &format!("\nLABEL {}", t.stringValue());
+            } else if let Some(b) = v.downcast_ref::<NSButton>() {
+                *out += &format!("\nBUTTON {}", b.title());
+            }
+            for sub in v.subviews().iter() {
+                walk(&sub, out);
+            }
+        }
+        walk(&view, &mut out);
+        if let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(view.bounds()) {
+            view.cacheDisplayInRect_toBitmapImageRep(view.bounds(), &rep);
+            // SAFETY: PNG encoding of our own bitmap.
+            if let Some(d) = unsafe {
+                rep.representationUsingType_properties(
+                    objc2_app_kit::NSBitmapImageFileType::PNG,
+                    &objc2_foundation::NSDictionary::new(),
+                )
+            } {
+                let _ = std::fs::write(png, d.to_vec());
+            }
+        }
+        out
     }
 
     /// The Meetings table's cells, row by row, as the render check prints them.
