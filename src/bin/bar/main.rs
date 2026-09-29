@@ -20,8 +20,8 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSButton, NSColor,
     NSControlSize, NSEventMask, NSEventType, NSFont, NSImage, NSMenu, NSMenuItem, NSPopover,
     NSPopoverBehavior, NSScrollView, NSStackView, NSStandardKeyBindingResponding, NSStatusBar,
-    NSStatusItem, NSTableViewDataSource, NSTextField, NSTextView, NSUserInterfaceLayoutOrientation,
-    NSView, NSViewController,
+    NSStatusItem, NSTableViewDataSource, NSTextDelegate, NSTextField, NSTextView,
+    NSTextViewDelegate, NSUserInterfaceLayoutOrientation, NSView, NSViewController,
 };
 use objc2_foundation::{
     MainThreadMarker, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -42,6 +42,8 @@ struct Ivars {
     status: OnceCell<Retained<NSTextField>>,
     buttons: OnceCell<Buttons>,
     signature: RefCell<String>,
+    pending: RefCell<BTreeMap<String, String>>, // tags shown right away while `ozen tag` retrains
+    pending_fixes: RefCell<BTreeMap<String, String>>, // same for text fixes
     state: RefCell<String>, // `ozen status`: recording | paused | stopping | processing | stopped
     problems: RefCell<Vec<String>>, // `ozen health`
     view: RefCell<transcript::Shown>, // the last transcript drawn
@@ -127,14 +129,58 @@ define_class!(
         fn review_next(&self, _s: Option<&AnyObject>) {
             self.refresh_review();
             let first = self.ivars().review.borrow().first().cloned();
-            let range = first.and_then(|id| self.ivars().view.borrow().headers.get(&id).copied());
+            let range = first.clone().and_then(|id| self.ivars().view.borrow().headers.get(&id).copied());
             if let Some((loc, len)) = range {
                 let text = self.text();
                 let r = objc2_foundation::NSRange::new(loc, len);
                 text.scrollRangeToVisible(r);
                 text.showFindIndicatorForRange(r);
-                // the tag menu for that line comes with the link-click port
+                // SAFETY: layout objects of our own text view.
+                let (lm, tc) = unsafe { (text.layoutManager(), text.textContainer()) };
+                if let (Some(lm), Some(tc), Some(id)) = (lm, tc, first) {
+                    let glyphs = unsafe { lm.glyphRangeForCharacterRange_actualCharacterRange(r, std::ptr::null_mut()) };
+                    let mut rect = lm.boundingRectForGlyphRange_inTextContainer(glyphs, &tc);
+                    let origin = text.textContainerOrigin();
+                    rect.origin.x += origin.x;
+                    rect.origin.y += origin.y + rect.size.height;
+                    self.tag_menu(&id).popUpMenuPositioningItem_atLocation_inView(None, rect.origin, Some(&text));
+                }
             }
+        }
+
+        #[unsafe(method(newPerson:))]
+        fn new_person(&self, sender: &NSMenuItem) {
+            let Some(id) = represented(sender).and_then(|v| v.as_str().map(String::from)) else { return };
+            let mtm = self.mtm();
+            let alert = objc2_app_kit::NSAlert::new(mtm);
+            alert.setMessageText(ns_string!("Who said this line?"));
+            alert.addButtonWithTitle(ns_string!("Tag"));
+            alert.addButtonWithTitle(ns_string!("Cancel"));
+            let field = NSTextField::initWithFrame(NSTextField::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(240.0, 24.0)));
+            field.setPlaceholderString(Some(ns_string!("Full name")));
+            alert.setAccessoryView(Some(&field));
+            alert.window().setInitialFirstResponder(Some(&field));
+            NSApplication::sharedApplication(mtm).activate();
+            let name = field.stringValue().to_string();
+            if alert.runModal() == 1000 && !field.stringValue().to_string().trim().is_empty() {
+                let _ = name;
+                self.tag(vec![id], field.stringValue().to_string().trim(), None);
+            }
+        }
+
+        #[unsafe(method(pick:))]
+        fn pick(&self, sender: &NSMenuItem) {
+            let Some(v) = represented(sender) else { return };
+            if let (Some(id), Some(name)) = (v[0].as_str(), v[1].as_str()) {
+                self.tag(vec![id.to_string()], name, None);
+            }
+        }
+
+        #[unsafe(method(ignoreAll:))]
+        fn ignore_all(&self, sender: &NSMenuItem) {
+            let Some(v) = represented(sender) else { return };
+            let ids: Vec<String> = v.as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+            self.tag(ids, "Ignored", Some("cd \"$OZEN_DIR\" && target/release/ozen ignore ${=OZEN_ID}"));
         }
 
         #[unsafe(method(switchView:))]
@@ -214,6 +260,29 @@ define_class!(
         }
     }
 
+    unsafe impl NSTextDelegate for App {}
+
+    unsafe impl NSTextViewDelegate for App {
+        #[unsafe(method(textView:clickedOnLink:atIndex:))]
+        fn clicked_on_link(&self, view: &NSTextView, link: &AnyObject, _index: usize) -> objc2::runtime::Bool {
+            let Ok(url) = link.downcast_ref::<objc2_foundation::NSURL>().ok_or(()) else { return objc2::runtime::Bool::NO };
+            let (host, last) = (url.host().map(|h| h.to_string()), url.lastPathComponent().map(|c| c.to_string()).unwrap_or_default());
+            match host.as_deref() {
+                Some("fix") => {
+                    self.fix_text(&last);
+                    objc2::runtime::Bool::YES
+                }
+                Some("tag") => {
+                    if let Some(event) = NSApplication::sharedApplication(self.mtm()).currentEvent() {
+                        NSMenu::popUpContextMenu_withEvent_forView(&self.tag_menu(&last), &event, view);
+                    }
+                    objc2::runtime::Bool::YES
+                }
+                _ => objc2::runtime::Bool::NO,
+            }
+        }
+    }
+
     unsafe impl NSTableViewDataSource for App {
         #[unsafe(method(numberOfRowsInTableView:))]
         fn number_of_rows(&self, _t: &objc2_app_kit::NSTableView) -> isize {
@@ -228,6 +297,12 @@ define_class!(
         }
     }
 );
+
+/// A menu item's payload (JSON in its represented object).
+fn represented(item: &NSMenuItem) -> Option<Value> {
+    let o = item.representedObject()?;
+    serde_json::from_str(&o.downcast::<NSString>().ok()?.to_string()).ok()
+}
 
 /// The Meetings table's cell in column `col` of `row`: When, Min, Lines, else the first words.
 fn meeting_cell(meetings: &[Vec<String>], col: &str, row: usize) -> String {
@@ -331,6 +406,7 @@ impl App {
             .unwrap();
         text.setEditable(false);
         text.setTextContainerInset(NSSize::new(10.0, 10.0));
+        text.setDelegate(Some(ProtocolObject::from_ref(self)));
         let footer = NSTextField::labelWithString(ns_string!(""), mtm);
         footer.setFont(Some(&NSFont::systemFontOfSize(11.0)));
         footer.setTextColor(Some(&NSColor::secondaryLabelColor()));
@@ -551,6 +627,7 @@ impl App {
                 app.apply_view();
                 later(3.0, move |app| {
                     out += &app.dump_meetings();
+                    out += &app.dump_pending();
                     std::fs::write(&file, out).expect("write dump");
                     std::process::exit(0);
                 });
@@ -653,7 +730,8 @@ impl App {
                 )
             })
             .collect::<Vec<_>>()
-            .join("|");
+            .join("|")
+            + &self.pending_json();
         if *iv.signature.borrow() == sig {
             return;
         }
@@ -662,7 +740,7 @@ impl App {
         let at_bottom = scroll
             .verticalScroller()
             .is_none_or(|s| s.floatValue() > 0.98);
-        let view = cli::json(&["transcript", "{}"]);
+        let view = cli::json(&["transcript", &self.pending_json()]);
         let (text, shown) = transcript::render(&view, self.mtm());
         let t = self.text();
         // SAFETY: the text view's storage exists once it's set up.
@@ -840,6 +918,161 @@ impl App {
         });
     }
 
+    /// {"tags": ..., "fixes": ...} the panel shows before `ozen tag` / `ozen fix` write them.
+    fn pending_json(&self) -> String {
+        serde_json::json!({"tags": *self.ivars().pending.borrow(), "fixes": *self.ivars().pending_fixes.borrow()}).to_string()
+    }
+
+    /// Who said line `id`: `ozen tag-menu` (src/panel.rs) decides the entries.
+    fn tag_menu(&self, id: &str) -> Retained<NSMenu> {
+        let mtm = self.mtm();
+        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Who said this?"));
+        for e in cli::json(&["tag-menu", id])
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let title = e["title"].as_str().unwrap_or("");
+            let (action, object) = match e["action"].as_str() {
+                Some("separator") => {
+                    menu.addItem(&NSMenuItem::separatorItem(mtm));
+                    continue;
+                }
+                Some("new") => (sel!(newPerson:), serde_json::json!(id)),
+                Some("ignore") => (
+                    sel!(ignoreAll:),
+                    if e["arg"].is_array() {
+                        e["arg"].clone()
+                    } else {
+                        serde_json::json!([id])
+                    },
+                ),
+                _ => (
+                    sel!(pick:),
+                    serde_json::json!([id, e["arg"].as_str().unwrap_or("")]),
+                ),
+            };
+            // SAFETY: the target is the app delegate, alive for the process.
+            let mi = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mtm),
+                    &NSString::from_str(title),
+                    Some(action),
+                    ns_string!(""),
+                )
+            };
+            unsafe {
+                mi.setTarget(Some(self));
+                mi.setRepresentedObject(Some(&NSString::from_str(&object.to_string())));
+            }
+            menu.addItem(&mi);
+        }
+        menu
+    }
+
+    /// Tag lines (what the panel shows at once, retrained in the background). Values go through the environment,
+    /// never into the command string; line ids have no spaces.
+    fn tag(&self, ids: Vec<String>, name: &str, command: Option<&str>) {
+        for id in &ids {
+            self.ivars()
+                .pending
+                .borrow_mut()
+                .insert(id.clone(), name.to_string());
+        }
+        self.reload();
+        let command = command
+            .unwrap_or("cd \"$OZEN_DIR\" && target/release/ozen tag \"$OZEN_ID\" \"$OZEN_NAME\"")
+            .to_string();
+        let (dir, joined, name) = (
+            cli::dir().display().to_string(),
+            ids.join(" "),
+            name.to_string(),
+        );
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("/bin/zsh")
+                .args(["-lc", &command])
+                .env("OZEN_DIR", dir)
+                .env("OZEN_ID", joined)
+                .env("OZEN_NAME", name)
+                .status();
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                APP.with(|a| {
+                    let app = a.get().unwrap();
+                    for id in &ids {
+                        app.ivars().pending.borrow_mut().remove(id);
+                    }
+                    app.ivars().signature.borrow_mut().clear();
+                    app.reload();
+                })
+            });
+        });
+    }
+
+    /// Clicking a line's text: correct what was said. Empty restores what ozen heard.
+    fn fix_text(&self, id: &str) {
+        let Some(original) = self.ivars().view.borrow().heard.get(id).cloned() else {
+            return;
+        };
+        let fixes = std::fs::read(cli::dir().join("fixes.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        let current = self
+            .ivars()
+            .pending_fixes
+            .borrow()
+            .get(id)
+            .cloned()
+            .or_else(|| {
+                fixes
+                    .as_ref()
+                    .and_then(|f| f[id].as_str().map(String::from))
+            })
+            .unwrap_or_else(|| original.clone());
+        let mtm = self.mtm();
+        let alert = objc2_app_kit::NSAlert::new(mtm);
+        alert.setMessageText(ns_string!("What was really said?"));
+        alert.setInformativeText(&NSString::from_str(&format!("Heard: {original}\nozen learns the words you add, and applies a correction you make twice.")));
+        alert.addButtonWithTitle(ns_string!("Fix"));
+        alert.addButtonWithTitle(ns_string!("Cancel"));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(420.0, 90.0));
+        let field = NSTextView::initWithFrame(NSTextView::alloc(mtm), frame);
+        field.setString(&NSString::from_str(&current));
+        field.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+        field.setRichText(false);
+        if current
+            .chars()
+            .any(|c| ('\u{0590}'..='\u{05FF}').contains(&c))
+        {
+            field.setBaseWritingDirection(objc2_app_kit::NSWritingDirection::RightToLeft);
+            field.setAlignment(objc2_app_kit::NSTextAlignment::Right);
+        }
+        let bx = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), frame);
+        bx.setDocumentView(Some(&field));
+        bx.setHasVerticalScroller(true);
+        bx.setBorderType(objc2_app_kit::NSBorderType::BezelBorder);
+        alert.setAccessoryView(Some(&bx));
+        alert.window().setInitialFirstResponder(Some(&field));
+        NSApplication::sharedApplication(mtm).activate();
+        if alert.runModal() != 1000 {
+            return;
+        }
+        let fixed = field.string().to_string().trim().to_string();
+        self.ivars()
+            .pending_fixes
+            .borrow_mut()
+            .insert(id.to_string(), fixed.clone());
+        self.reload();
+        let id = id.to_string();
+        cli::run(&["fix", &id.clone(), &fixed], move |_, _, _| {
+            APP.with(|a| {
+                let app = a.get().unwrap();
+                app.ivars().pending_fixes.borrow_mut().remove(&id);
+                app.ivars().signature.borrow_mut().clear();
+                app.reload();
+            })
+        });
+    }
+
     fn view_switched(&self) {
         let seg = self.ivars().view_control.get().unwrap().selectedSegment();
         objc2_foundation::NSUserDefaults::standardUserDefaults()
@@ -928,6 +1161,50 @@ impl App {
                 table.selectRowIndexes_byExtendingSelection(&keep, false);
             })
         });
+    }
+
+    /// The transcript again with tags and fixes pending (as between a click and `ozen tag`/`fix` finishing), and
+    /// the tag menu of the first line: the render check's last part.
+    fn dump_pending(&self) -> String {
+        let iv = self.ivars();
+        iv.view_control.get().unwrap().setSelectedSegment(0);
+        self.apply_view();
+        let mut ids = iv.view.borrow().ids.clone();
+        ids.sort();
+        ids.dedup();
+        if ids.len() > 3 {
+            iv.pending
+                .borrow_mut()
+                .insert(ids[0].clone(), "Dana Levi".into());
+            iv.pending
+                .borrow_mut()
+                .insert(ids[1].clone(), String::new());
+            iv.pending_fixes
+                .borrow_mut()
+                .insert(ids[2].clone(), "fixed text".into());
+            iv.pending_fixes
+                .borrow_mut()
+                .insert(ids[3].clone(), String::new());
+        }
+        iv.signature.borrow_mut().clear();
+        self.reload();
+        let mut out = vec![String::new(), String::new(), "== pending".to_string()];
+        out.extend(transcript::dump_runs(&self.text()));
+        if let Some(id) = ids.first() {
+            let menu = self.tag_menu(id);
+            let items: Vec<String> = menu
+                .itemArray()
+                .iter()
+                .map(|mi| {
+                    let action = mi
+                        .action()
+                        .map_or(String::new(), |a| a.name().to_string_lossy().into_owned());
+                    format!("{}>{action}", mi.title())
+                })
+                .collect();
+            out.push(format!("TAGMENU {id}: {}", items.join(" | ")));
+        }
+        out.join("\n")
     }
 
     /// The Meetings table's cells, row by row, as the render check prints them.
