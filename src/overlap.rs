@@ -19,11 +19,13 @@ const NOISE_MARGIN: f32 = 2.0;
 const WINDOW: usize = SR * 3 / 2; // 1.5s; voiceprints this short are noisy, but only decide whether to try separating
 const HOP: usize = SR * 3 / 4;
 // Both checks measured on real voices (LibriSpeech mixes, and pairs played into a room and recorded by ozen):
-const MIN_SOURCE: f32 = 0.25; // the quieter track's share of the clip vs the louder one's, below which it's residue
+// MIN_SOURCE and LEAK tuned with eval_overlap.py (all sets, 20 windows each): 0.35/0.1 beat 0.25/0.3 in every set,
+// with more words recovered and fewer invented (overlaps: +355 words, +36 extra words vs +324, +90)
+const MIN_SOURCE: f32 = 0.35; // the quieter track's share of the clip vs the louder one's, below which it's residue
 // of one voice (single voices reaching separation: <=0.21; two voices: 0.2-1.0)
 const SAME_TRACKS: f32 = 0.6; // tracks this alike are one voice split in two. Not the same-voice cutoff: separated
 // tracks leak into each other, so two people's tracks score up to ~0.65; one voice's two tracks stayed under 0.35
-const LEAK: f32 = 0.3; // a track's frame this much quieter than the other track's frame is leak of the other voice
+const LEAK: f32 = 0.1; // a track's frame this much quieter than the other track's frame is leak of the other voice
 const TRACK_MIN: f64 = 0.6; // seconds; on real meetings (AMI) shorter separated pieces were mostly invented words
 const FRAME: usize = 480; // 30 ms
 
@@ -302,7 +304,7 @@ mod tests {
     #[test]
     fn unleak_silences_the_quieter_track() {
         let a = vec![1.0f32; FRAME * 2];
-        let mut b = vec![0.1f32; FRAME * 2];
+        let mut b = vec![0.05f32; FRAME * 2]; // under LEAK x the other track: leak
         b[FRAME..].fill(1.0);
         let out = unleak(&[a, b]);
         assert!(out[0].iter().all(|v| *v == 1.0));
