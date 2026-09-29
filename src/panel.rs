@@ -1,7 +1,7 @@
 //! What the menu bar panel shows, decided here so it's tested with the rest of ozen: the tag menu for a line
 //! (`ozen tag-menu`), the lines Review asks about (`ozen unsure`), the control buttons (`ozen controls`) and the
 //! transcript itself with its timeline and footer (`ozen transcript`).
-//! menubar.swift only draws these.
+//! The menu bar app (src/bin/bar) only draws these.
 use crate::fixes::read;
 use crate::ignore::is_ignored;
 use crate::voices::{anon, speaker};

@@ -468,9 +468,18 @@ fn prepare_rec() -> bool {
     prepare(REC_BUILT, REC_BIN)
 }
 
+/// The menu bar app (src/bin/bar), built by cargo, in an app bundle macOS lists, signs and remembers permissions for.
 fn build_app(app: &str) -> bool {
+    const BAR_BUILT: &str = "target/release/bar";
+    // Already built alongside this CLI by `cargo build --release`; `cargo run -- app` builds only the CLI.
+    if !ok(cmd("cargo").args(["build", "--release", "--bin", "bar"]))
+        && !Path::new(BAR_BUILT).exists()
+    {
+        eprintln!("couldn't build the menu bar app (cargo build --release --bin bar)");
+        return false;
+    }
     let bin = format!("{app}/Contents/MacOS/Ozen");
-    if newer(&bin, "menubar.swift")
+    if newer(&bin, BAR_BUILT)
         && newer(&bin, "src/icon.rs")
         && newer(&bin, "map.html")
         && newer(&bin, "chunks.html")
@@ -481,7 +490,10 @@ fn build_app(app: &str) -> bool {
     for d in [format!("{app}/Contents/MacOS"), resources.clone()] {
         fs::create_dir_all(d).expect("create app bundle");
     }
-    if !ok(cmd("swiftc").args(["-O", "menubar.swift", "-o", &bin])) {
+    // Copied, not linked: the bundle is signed as a whole. Replaced by rename, so a running app keeps its file.
+    let staged = format!("{bin}.new");
+    if fs::copy(BAR_BUILT, &staged).is_err() || fs::rename(&staged, &bin).is_err() {
+        eprintln!("couldn't copy {BAR_BUILT} into {app}");
         return false;
     }
     for page in ["map.html", "chunks.html"] {
