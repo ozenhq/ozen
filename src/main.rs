@@ -29,7 +29,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | unsure | controls | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -49,6 +49,9 @@ ozen control: start | pause | resume | stop | record | process | status | health
                 then retrain; `tag ID 'Ignored 2'` adds a line to one you already ignore
   tag-menu ID   JSON: the panel's menu for tagging that line (people, new person, ignore, clear)
   mic           JSON: the meeting app using the microphone now, {\"app\": \"Zoom\"} or {\"app\": null}
+  transcript [PENDING]
+                JSON: the panel's transcript (last 400 lines), timeline bars, Review queue and footer;
+                PENDING is {\"tags\": {id: name}, \"fixes\": {id: text}} the panel set but hasn't written yet
   unsure        JSON: untagged lines ozen isn't sure who said, most uncertain first, and when each leaves Review
   controls STATE [split]
                 JSON: the panel's Start/Pause/Stop/Process buttons for that recorder state
@@ -903,6 +906,10 @@ fn main() {
             }
         },
         "unsure" => println!("{}", panel::unsure_json()),
+        "transcript" => println!(
+            "{}",
+            panel::transcript_json(&std::env::args().nth(2).unwrap_or_default())
+        ),
         "controls" => {
             let state = std::env::args().nth(2).unwrap_or_default();
             let split = std::env::args().nth(3).as_deref() == Some("split");

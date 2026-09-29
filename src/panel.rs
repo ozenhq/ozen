@@ -1,5 +1,6 @@
 //! What the menu bar panel shows, decided here so it's tested with the rest of ozen: the tag menu for a line
-//! (`ozen tag-menu`), the lines Review asks about (`ozen unsure`) and the control buttons (`ozen controls`).
+//! (`ozen tag-menu`), the lines Review asks about (`ozen unsure`), the control buttons (`ozen controls`) and the
+//! transcript itself with its timeline and footer (`ozen transcript`).
 //! menubar.swift only draws these.
 use crate::fixes::read;
 use crate::ignore::is_ignored;
@@ -18,6 +19,8 @@ const JUNK: &str = "junk.json";
 const REGISTRY: &str = "voices/voices";
 const UNSURE: f64 = 0.08; // src/train.rs UNSURE: this close to the threshold, or to a second person
 const REVIEW_AGE: f64 = 600.0; // after 10 minutes nobody remembers who said what
+const SHOWN: usize = 400; // transcript lines in the panel
+const HISTORY: usize = 5000; // lines.jsonl rows the timeline spans
 const SAME_HOUR: f64 = 3600.0; // older lines carry no run: an S-label's lines within an hour are one voice
 
 /// Every transcript line the panel shows: all of lines.jsonl (notes too) but the old echoes in junk.json.
@@ -196,6 +199,165 @@ pub fn controls_json(state: &str, split: bool) -> Value {
     )
 }
 
+/// The transcript as the panel shows it, from the last HISTORY rows of lines.jsonl (`raw`, file order):
+/// speakers corrected by tags (and a guess from the last retrain), text by fixes, the unsure ones marked.
+/// `pending` holds what the panel just set and `ozen tag` / `ozen fix` haven't written yet:
+/// {"tags": {id: name}, "fixes": {id: text}}. Returns {"lines" (the last SHOWN), "segments" (timeline bars, ignored
+/// voices left out), "review" (unsure lines that are shown: id, until), "footer"}.
+fn transcript<'a>(
+    raw: &'a [Row],
+    junk: &BTreeSet<String>,
+    tags: &'a Row,
+    labels: &'a Row,
+    fixes: &'a Row,
+    unsure: &[Value],
+    stats: &Row,
+) -> Value {
+    let mut lines: Vec<&Row> = raw
+        .iter()
+        .filter(|r| {
+            r.get("t").and_then(Value::as_f64).is_some()
+                && r.get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !junk.contains(id))
+        })
+        .collect();
+    lines.sort_by(|a, b| {
+        a["t"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&b["t"].as_f64().unwrap_or(0.0))
+    }); // stable, like Swift's
+    let unsure_ids: BTreeSet<&str> = unsure.iter().filter_map(|u| u["id"].as_str()).collect();
+    let view = |r: &'a Row| speaker_of(r, tags, labels, &unsure_ids);
+    let segments: Vec<Value> = lines
+        .iter()
+        .filter_map(|r| {
+            let (id, _, speaker, unsure) = view(r);
+            let text = str_of(r, "text");
+            // older lines carry no duration: estimate it from the text's length
+            let d = r.get("d").and_then(Value::as_f64).unwrap_or_else(|| (text.chars().count() as f64 / 14.0).clamp(1.0, 15.0));
+            (!is_ignored(speaker)).then(|| json!({"id": id, "t": r["t"], "d": d, "speaker": speaker, "text": text, "unsure": unsure}))
+        })
+        .collect();
+    let shown: Vec<Value> = lines[lines.len().saturating_sub(SHOWN)..]
+        .iter()
+        .map(|r| {
+            let (id, tagged, speaker, unsure) = view(r);
+            let heard = str_of(r, "text");
+            let said = fixes.get(id).and_then(Value::as_str).filter(|t| !t.is_empty()).unwrap_or(heard);
+            let time = local(r["t"].as_f64().unwrap_or(0.0)).format("%H:%M:%S").to_string();
+            json!({"id": id, "time": time, "speaker": speaker, "mark": if tagged { "✓" } else if unsure { "?" } else { "" },
+                   "src": str_of(r, "src"), "text": said, "heard": heard, "ignored": is_ignored(speaker), "unsure": unsure,
+                   "rtl": said.chars().any(|c| ('\u{0590}'..='\u{05FF}').contains(&c))})
+        })
+        .collect();
+    let shown_ids: BTreeSet<&str> = shown.iter().filter_map(|l| l["id"].as_str()).collect();
+    let review: Vec<Value> = unsure
+        .iter()
+        .filter(|u| u["id"].as_str().is_some_and(|id| shown_ids.contains(id)))
+        .map(|u| json!({"id": u["id"], "until": u["until"]}))
+        .collect();
+    let pct = |x: f64| format!("{}%", (x * 100.0).round() as i64);
+    let mut acc = match stats.get("accuracy").and_then(Value::as_f64) {
+        Some(a) => format!(
+            "accuracy {} on {} checks",
+            pct(a),
+            stats.get("evaluated").cloned().unwrap_or(json!(0))
+        ),
+        None => "accuracy after 2 tags of one person".into(),
+    };
+    if let (Some(first), Some(now)) = (
+        stats.get("accuracy_first").and_then(Value::as_f64),
+        stats.get("accuracy").and_then(Value::as_f64),
+    ) && first != now
+    {
+        acc += &format!(" (was {})", pct(first));
+    }
+    let tagged = stats.get("tagged").and_then(Value::as_i64).unwrap_or(0);
+    let ignored = match stats.get("ignored").and_then(Value::as_i64) {
+        Some(n) if n > 0 => format!(" · {n} ignored"),
+        _ => String::new(),
+    };
+    json!({"lines": shown, "segments": segments, "review": review,
+           "footer": format!("  {acc} · {tagged} tagged{ignored} · orange ? = unsure, tag it to teach ozen · click text to fix it")})
+}
+
+/// (id, tagged, speaker, unsure): the speaker by tag, else the last retrain's guess, else the transcriber's.
+fn speaker_of<'a>(
+    r: &'a Row,
+    tags: &'a Row,
+    labels: &'a Row,
+    unsure: &BTreeSet<&str>,
+) -> (&'a str, bool, &'a str, bool) {
+    let id = str_of(r, "id");
+    let tag = tags
+        .get(id)
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty());
+    let speaker = tag
+        .or_else(|| labels.get(id).and_then(|g| g["spk"].as_str()))
+        .unwrap_or_else(|| r.get("spk").and_then(Value::as_str).unwrap_or("?"));
+    (
+        id,
+        tag.is_some(),
+        speaker,
+        tag.is_none() && unsure.contains(id),
+    )
+}
+
+fn local(t: f64) -> chrono::DateTime<chrono::Local> {
+    chrono::DateTime::from_timestamp(t as i64, 0)
+        .unwrap_or_default()
+        .with_timezone(&chrono::Local)
+}
+
+/// `ozen transcript [PENDING]`: see `transcript`.
+pub fn transcript_json(pending: &str) -> Value {
+    let pending: Row = serde_json::from_str(pending).unwrap_or_default();
+    let merged = |file: &str, key: &str| {
+        let mut m = read(file);
+        if let Some(p) = pending.get(key).and_then(Value::as_object) {
+            m.extend(p.clone());
+        }
+        m
+    };
+    let (tags, fixes) = (merged(TAGS, "tags"), merged("fixes.json", "fixes"));
+    let raw_text = fs::read_to_string(LINES).unwrap_or_default();
+    let all: Vec<&str> = raw_text.split('\n').filter(|l| !l.is_empty()).collect();
+    let raw: Vec<Row> = all[all.len().saturating_sub(HISTORY)..]
+        .iter()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let junk: BTreeSet<String> = fs::read(JUNK)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let threshold = read(STATS).get("threshold").and_then(Value::as_f64);
+    // Review leaves out lines the panel just tagged (unsure() only knows the written tags)
+    let unsure: Vec<Value> = unsure(&rows(), &read(TAGS), &read(LABELS), threshold)
+        .into_iter()
+        .filter(|u| {
+            u["id"].as_str().is_some_and(|id| {
+                !pending
+                    .get("tags")
+                    .and_then(|t| t.get(id))
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| !n.is_empty())
+            })
+        })
+        .collect();
+    transcript(
+        &raw,
+        &junk,
+        &tags,
+        &read(LABELS),
+        &fixes,
+        &unsure,
+        &read(STATS),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +469,73 @@ mod tests {
         assert_eq!(
             controls("stopped", true, 0, false)["process"]["enabled"],
             false
+        );
+    }
+
+    #[test]
+    fn transcript_corrects_speakers_and_text_and_marks_unsure() {
+        let raw = [
+            row("b", 2.0, "S1", json!({"src": "room", "d": 3.0})),
+            row("a", 1.0, "S1", json!({"src": "call", "text": "שלום"})), // file order isn't time order
+            row("j", 3.0, "S1", json!({})),                              // junk: hidden everywhere
+            row("i", 4.0, "S2", json!({"d": 1.0})),
+            row("u", 5.0, "S3", json!({"d": 2.0})),
+        ];
+        let junk: BTreeSet<String> = ["j".to_string()].into();
+        let tags = obj(json!({"b": "Dana", "i": "Ignored 2", "a": ""}));
+        let labels = obj(json!({"u": {"spk": "Omer"}}));
+        let fixes = obj(json!({"b": "fixed", "a": ""}));
+        let unsure = [
+            json!({"id": "u", "until": 605.0}),
+            json!({"id": "b", "until": 602.0}),
+        ];
+        let stats = obj(
+            json!({"accuracy": 0.875, "accuracy_first": 1.0, "evaluated": 8, "tagged": 3, "ignored": 2}),
+        );
+        let v = transcript(&raw, &junk, &tags, &labels, &fixes, &unsure, &stats);
+        let lines = v["lines"].as_array().unwrap();
+        let ids: Vec<&str> = lines.iter().map(|l| l["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["a", "b", "i", "u"]);
+        assert_eq!(
+            (
+                lines[0]["speaker"].clone(),
+                lines[0]["rtl"].clone(),
+                lines[0]["text"].clone()
+            ),
+            (json!("S1"), json!(true), json!("שלום"))
+        );
+        assert_eq!(
+            (
+                lines[1]["speaker"].clone(),
+                lines[1]["mark"].clone(),
+                lines[1]["text"].clone(),
+                lines[1]["heard"].clone()
+            ),
+            (json!("Dana"), json!("✓"), json!("fixed"), json!("hi"))
+        );
+        assert_eq!(
+            (
+                lines[2]["ignored"].clone(),
+                lines[3]["speaker"].clone(),
+                lines[3]["mark"].clone()
+            ),
+            (json!(true), json!("Omer"), json!("?"))
+        );
+        let segs: Vec<&str> = v["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(segs, ["a", "b", "u"]); // the ignored voice leaves the timeline
+        assert_eq!(v["segments"][0]["d"], json!(1.0)); // no duration: at least a second
+        assert_eq!(
+            v["review"],
+            json!([{"id": "u", "until": 605.0}, {"id": "b", "until": 602.0}])
+        );
+        assert_eq!(
+            v["footer"],
+            "  accuracy 88% on 8 checks (was 100%) · 3 tagged · 2 ignored · orange ? = unsure, tag it to teach ozen · click text to fix it"
         );
     }
 }

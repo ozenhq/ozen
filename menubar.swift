@@ -102,8 +102,6 @@ func savePlaces(_ p: [Place]) {
 /// Name of a meeting app currently capturing the microphone (`ozen mic`, src/mic.rs), or nil.
 func meetingUsingMic() -> String? { (cli("mic") as? [String: Any])?["app"] as? String }
 
-struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int?, doubt: Double? }
-
 /// Scroll content that starts at the top.
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
@@ -262,6 +260,7 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
     var reviewQueue: [(id: String, until: Double)] = []  // `ozen unsure`: most uncertain first, and when each ages out
     var review: [String] = []  // the queue minus lines too old to remember who said them
     var shown: Set<String> = []  // line ids in the transcript
+    var heard: [String: String] = [:]  // what ozen heard for each shown line, before your fixes
     let modeControl = NSSegmentedControl(labels: ["Always", "Meetings"], trackingMode: .selectOne, target: nil, action: nil)
     var mode: String { UserDefaults.standard.string(forKey: "mode") ?? "always" }  // "always" | "meetings"
     var lastMeeting: Date?, meetingName: String?
@@ -1189,23 +1188,6 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         text.showFindIndicator(for: range)
     }
 
-    func lines(limit: Int) -> [Line] {
-        guard let raw = try? String(contentsOf: dir.appendingPathComponent("lines.jsonl"), encoding: .utf8) else { return [] }
-        let junk = Set(json("junk.json") as? [String] ?? [])  // old lines the transcriber's filters now drop
-        let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm:ss"
-        // Call and mic chunks finish transcribing at different times, so file order isn't time order.
-        return raw.split(separator: "\n").suffix(limit).compactMap { row -> (Double, Line)? in
-            guard let r = try? JSONSerialization.jsonObject(with: Data(row.utf8)) as? [String: Any],
-                  let id = r["id"] as? String, let t = r["t"] as? Double, !junk.contains(id) else { return nil }
-            let text = r["text"] as? String ?? ""
-            let d = r["d"] as? Double ?? min(15, max(1, Double(text.count) / 14))  // older lines: estimate from length
-            return (t, Line(id: id, time: fmt.string(from: Date(timeIntervalSince1970: t)), t: t, d: d, spk: r["spk"] as? String ?? "?",
-                            src: r["src"] as? String ?? "", text: r["text"] as? String ?? "", run: r["run"] as? Int,
-                            doubt: r["doubt"] as? Double))
-        }.sorted { $0.0 < $1.0 }.map(\.1)
-    }
-
     func reload() {
         guard popover.isShown else { return }
         let files = ["lines.jsonl", "tags.json", "labels.json", "stats.json", "fixes.json", "junk.json"]
@@ -1217,79 +1199,61 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
         signature = sig
         let atBottom = scroll.verticalScroller.map { $0.floatValue > 0.98 } ?? true
 
-        let tags = (json("tags.json") as? [String: String] ?? [:]).merging(pending) { $1 }
-        let labels = json("labels.json") as? [String: [String: Any]] ?? [:]
-        let fixes = (json("fixes.json") as? [String: String] ?? [:]).merging(pendingFixes) { $1 }
-        // Untagged lines ozen isn't sure who said, most uncertain first (src/panel.rs).
-        let unsure = (cli("unsure") as? [[String: Any]] ?? []).compactMap { u -> (id: String, until: Double)? in
-            guard let id = u["id"] as? String, pending[id]?.isEmpty ?? true else { return nil }
-            return (id, u["until"] as? Double ?? 0)
-        }
-        let isUnsure = Set(unsure.map(\.id))
+        // What to show is decided in Rust (src/panel.rs): speakers by tag or guess, fixed text, unsure marks, the
+        // timeline's bars, the Review queue and the footer. `pending` is what's shown before `ozen tag`/`fix` write it.
+        let pendingJSON = (try? JSONSerialization.data(withJSONObject: ["tags": pending, "fixes": pendingFixes]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let view = cli("transcript", pendingJSON) as? [String: Any] ?? [:]
+        let all = view["lines"] as? [[String: Any]] ?? []
         let out = NSMutableAttributedString()
         headerRanges = [:]
-        let history = lines(limit: 5000)  // timeline spans more than the transcript shows
-        let all = Array(history.suffix(maxLines))
         let atEnd = timelineScroll.contentView.bounds.maxX >= timeline.bounds.width - 20
-        timeline.segments = history.compactMap { l in
-            let tagged = !(tags[l.id] ?? "").isEmpty
-            let guess = labels[l.id]
-            let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
-            return isIgnored(speaker) ? nil : Segment(id: l.id, t: l.t, d: l.d, speaker: speaker,
-                                                        text: l.text, unsure: !tagged && isUnsure.contains(l.id))
+        timeline.segments = (view["segments"] as? [[String: Any]] ?? []).map {
+            Segment(id: $0["id"] as? String ?? "", t: $0["t"] as? Double ?? 0, d: $0["d"] as? Double ?? 1,
+                    speaker: $0["speaker"] as? String ?? "?", text: $0["text"] as? String ?? "", unsure: $0["unsure"] as? Bool ?? false)
         }
         shown = []
+        heard = [:]
         if atEnd { scrollTimelineToEnd() }
         if all.isEmpty { out.append(NSAttributedString(string: "No transcript yet. Press Start.", attributes: [.foregroundColor: NSColor.secondaryLabelColor])) }
         for l in all {
-            let tagged = !(tags[l.id] ?? "").isEmpty
-            let guess = labels[l.id]
-            let unsure = !tagged && isUnsure.contains(l.id)
-            let speaker = tagged ? tags[l.id]! : ((guess?["spk"] as? String) ?? l.spk)
-            let said = fixes[l.id].flatMap { $0.isEmpty ? nil : $0 } ?? l.text
-            shown.insert(l.id)
-            let ignored = isIgnored(speaker)
+            let id = l["id"] as? String ?? "", said = l["text"] as? String ?? "", ignored = l["ignored"] as? Bool ?? false
+            let mark = l["mark"] as? String ?? ""
+            shown.insert(id)
+            heard[id] = l["heard"] as? String ?? said
             let para = NSMutableParagraphStyle()
             para.paragraphSpacing = 6
-            if said.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
+            if l["rtl"] as? Bool ?? false {
                 para.baseWritingDirection = .rightToLeft
                 para.alignment = .right
             }
             let base: [NSAttributedString.Key: Any] = [.paragraphStyle: para, .foregroundColor: NSColor.labelColor]
-            out.append(NSAttributedString(string: "[\(l.time)] ", attributes: base.merging([
+            out.append(NSAttributedString(string: "[\(l["time"] as? String ?? "")] ", attributes: base.merging([
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
             ]) { $1 }))
-            let header = speaker + (tagged ? " ✓" : unsure ? " ?" : "")
-            headerRanges[l.id] = NSRange(location: out.length, length: (header as NSString).length)
+            let header = (l["speaker"] as? String ?? "?") + (mark.isEmpty ? "" : " " + mark)
+            headerRanges[id] = NSRange(location: out.length, length: (header as NSString).length)
             out.append(NSAttributedString(string: header, attributes: base.merging([
-                .font: NSFont.boldSystemFont(ofSize: 12), .link: URL(string: "ozen://tag/\(l.id)")!,
+                .font: NSFont.boldSystemFont(ofSize: 12), .link: URL(string: "ozen://tag/\(id)")!,
                 // unsure lines are what the loop wants tagged next
-                .foregroundColor: unsure ? NSColor.systemOrange : NSColor.secondaryLabelColor,
+                .foregroundColor: l["unsure"] as? Bool ?? false ? NSColor.systemOrange : NSColor.secondaryLabelColor,
             ]) { $1 }))
-            out.append(NSAttributedString(string: " (\(l.src)): ", attributes: base.merging([
+            out.append(NSAttributedString(string: " (\(l["src"] as? String ?? "")): ", attributes: base.merging([
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor,
             ]) { $1 }))
             out.append(NSAttributedString(string: said, attributes: base.merging([
-                .font: NSFont.systemFont(ofSize: ignored ? 11 : 13), .link: URL(string: "ozen://fix/\(l.id)")!,
+                .font: NSFont.systemFont(ofSize: ignored ? 11 : 13), .link: URL(string: "ozen://fix/\(id)")!,
                 .foregroundColor: ignored ? NSColor.tertiaryLabelColor : NSColor.labelColor,
-                .toolTip: said == l.text ? "Click to fix the text" : "Fixed. Heard: \(l.text)",
+                .toolTip: said == heard[id] ? "Click to fix the text" : "Fixed. Heard: \(heard[id] ?? "")",
             ]) { $1 }))
             out.append(NSAttributedString(string: "\n", attributes: base))
         }
         text.textStorage?.setAttributedString(out)
         if atBottom { text.scrollToEndOfDocument(nil) }
 
-        let s = json("stats.json") as? [String: Any] ?? [:]
-        let tagged = s["tagged"] as? Int ?? 0
-        let pct = { (x: Double) in "\(Int((x * 100).rounded()))%" }
-        var acc = (s["accuracy"] as? Double).map { "accuracy \(pct($0)) on \(s["evaluated"] ?? 0) checks" } ?? "accuracy after 2 tags of one person"
-        if let first = s["accuracy_first"] as? Double, let now = s["accuracy"] as? Double, first != now {
-            acc += " (was \(pct(first)))"
-        }
-        reviewQueue = unsure.filter { shown.contains($0.id) }
+        reviewQueue = (view["review"] as? [[String: Any]] ?? []).map { ($0["id"] as? String ?? "", $0["until"] as? Double ?? 0) }
         refreshReview()
-        let ignoredLines = (s["ignored"] as? Int ?? 0) > 0 ? " · \(s["ignored"]!) ignored" : ""
-        footer.stringValue = "  \(acc) · \(tagged) tagged\(ignoredLines) · orange ? = unsure, tag it to teach ozen · click text to fix it"
+        footer.stringValue = view["footer"] as? String ?? ""
     }
 
     // Only ask about recent lines: after 10 minutes nobody remembers who said what.
@@ -1396,11 +1360,11 @@ final class App: NSObject, NSApplicationDelegate, NSTextViewDelegate, CLLocation
 
     // Clicking a line's text: correct what was said. Empty restores what ozen heard.
     func fixText(_ id: String) {
-        guard let line = lines(limit: 5000).first(where: { $0.id == id }) else { return }
-        let current = pendingFixes[id] ?? (json("fixes.json") as? [String: String])?[id] ?? line.text
+        guard let original = heard[id] else { return }
+        let current = pendingFixes[id] ?? (json("fixes.json") as? [String: String])?[id] ?? original
         let alert = NSAlert()
         alert.messageText = "What was really said?"
-        alert.informativeText = "Heard: \(line.text)\nozen learns the words you add, and applies a correction you make twice."
+        alert.informativeText = "Heard: \(original)\nozen learns the words you add, and applies a correction you make twice."
         alert.addButton(withTitle: "Fix")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 90))
