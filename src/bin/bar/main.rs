@@ -10,6 +10,7 @@
 //! what it drew (every text run with its attributes, the footer, Review queue and timeline bars) to FILE and quits:
 //! the render check against the Swift app.
 mod cli;
+mod timeline;
 mod transcript;
 
 use objc2::rc::Retained;
@@ -19,8 +20,8 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSButton, NSColor,
     NSControlSize, NSEventMask, NSEventType, NSFont, NSImage, NSMenu, NSMenuItem, NSPopover,
     NSPopoverBehavior, NSScrollView, NSStackView, NSStandardKeyBindingResponding, NSStatusBar,
-    NSStatusItem, NSTextField, NSTextView, NSUserInterfaceLayoutOrientation, NSView,
-    NSViewController,
+    NSStatusItem, NSTableViewDataSource, NSTextField, NSTextView, NSUserInterfaceLayoutOrientation,
+    NSView, NSViewController,
 };
 use objc2_foundation::{
     MainThreadMarker, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -47,6 +48,20 @@ struct Ivars {
     review: RefCell<Vec<String>>, // the Review queue minus lines too old to remember
     queued: Cell<i64>,      // chunks waiting to be transcribed, from `ozen controls`
     controls_asked: Cell<u64>, // only the newest `ozen controls` answer is drawn
+    timeline: OnceCell<Retained<timeline::TimelineView>>,
+    timeline_scroll: OnceCell<Retained<NSScrollView>>,
+    view_control: OnceCell<Retained<objc2_app_kit::NSSegmentedControl>>,
+    view_buttons: OnceCell<ViewButtons>,
+    meetings_table: OnceCell<Retained<objc2_app_kit::NSTableView>>,
+    meetings_scroll: OnceCell<Retained<NSScrollView>>,
+    meetings: RefCell<Vec<Vec<String>>>, // `ozen meetings` rows: id, start, minutes, lines, first words
+}
+
+struct ViewButtons {
+    zoom_out: Retained<NSButton>,
+    zoom_in: Retained<NSButton>,
+    gather: Retained<NSButton>,
+    kev: Retained<NSButton>,
 }
 
 struct Buttons {
@@ -121,8 +136,130 @@ define_class!(
                 // the tag menu for that line comes with the link-click port
             }
         }
+
+        #[unsafe(method(switchView:))]
+        fn switch_view(&self, _s: Option<&AnyObject>) {
+            self.view_switched();
+        }
+
+        #[unsafe(method(zoom:))]
+        fn zoom(&self, sender: &NSButton) {
+            let iv = self.ivars();
+            let (tl, scroll) = (iv.timeline.get().unwrap(), iv.timeline_scroll.get().unwrap());
+            let clip = scroll.contentView();
+            let anchor = (clip.bounds().origin.x + clip.bounds().size.width / 2.0) / tl.bounds().size.width.max(1.0); // keep the view centered
+            let zoom_in = std::ptr::eq(sender, &*iv.view_buttons.get().unwrap().zoom_in);
+            tl.set_px((tl.px() * if zoom_in { 2.0 } else { 0.5 }).clamp(0.25, 32.0));
+            objc2_foundation::NSUserDefaults::standardUserDefaults().setDouble_forKey(tl.px(), ns_string!("pxPerSec"));
+            let w = clip.bounds().size.width;
+            clip.scrollToPoint(NSPoint::new((anchor * tl.bounds().size.width - w / 2.0).max(0.0), 0.0));
+            scroll.reflectScrolledClipView(&clip);
+        }
+
+        #[unsafe(method(boundsChanged:))]
+        fn bounds_changed(&self, _n: &NSNotification) {
+            self.ivars().timeline.get().unwrap().setNeedsDisplay(true); // repin names
+        }
+
+        #[unsafe(method(gather:))]
+        fn gather(&self, sender: Option<&AnyObject>) {
+            let iv = self.ivars();
+            let table = iv.meetings_table.get().unwrap();
+            let meetings = iv.meetings.borrow();
+            let rows = table.selectedRowIndexes();
+            let ids: Vec<String> = (0..meetings.len()).filter(|&i| rows.containsIndex(i)).map(|i| meetings[i][0].clone()).collect();
+            if ids.is_empty() {
+                return;
+            }
+            let b = iv.view_buttons.get().unwrap();
+            let kev = sender.is_some_and(|s| std::ptr::eq(s, &**b.kev as &AnyObject));
+            b.kev.setEnabled(false);
+            b.gather.setEnabled(false);
+            if kev {
+                b.kev.setTitle(ns_string!("Asking Kev…"));
+            }
+            let mut args = vec!["gather".to_string()];
+            if kev {
+                args.push("--kev".into());
+            }
+            args.extend(ids);
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            cli::run(&refs, move |out, err, code| {
+                APP.with(|a| {
+                    let app = a.get().unwrap();
+                    let b = app.ivars().view_buttons.get().unwrap();
+                    b.kev.setEnabled(true);
+                    b.gather.setEnabled(true);
+                    b.kev.setTitle(ns_string!("Auto add with Kev"));
+                    let lines: Vec<&str> = out.lines().collect(); // files written, then the folder
+                    let Some((folder, files)) = lines.split_last().filter(|_| code == 0) else {
+                        return fail("Couldn't gather the transcripts", &err);
+                    };
+                    let mut info = files.join("\n");
+                    if kev {
+                        info += &format!("\n\nKev's scores:\n{err}");
+                    }
+                    info += &format!("\n\n{folder}");
+                    let n = files.len();
+                    let what = ask(&format!("{n} transcript{} ready", if n == 1 { "" } else { "s" }), &info, &["Claude Code", "Hermes", "Show in Finder"]);
+                    let what = ["claude", "hermes", "finder"][what.min(2)];
+                    let folder = folder.to_string();
+                    cli::run(&["open", &folder, what], move |_, err, code| {
+                        if code != 0 {
+                            fail(&format!("Couldn't open {what}"), &err);
+                        }
+                    });
+                })
+            });
+        }
+    }
+
+    unsafe impl NSTableViewDataSource for App {
+        #[unsafe(method(numberOfRowsInTableView:))]
+        fn number_of_rows(&self, _t: &objc2_app_kit::NSTableView) -> isize {
+            self.ivars().meetings.borrow().len() as isize
+        }
+
+        #[unsafe(method_id(tableView:objectValueForTableColumn:row:))]
+        fn value(&self, _t: &objc2_app_kit::NSTableView, col: Option<&objc2_app_kit::NSTableColumn>, row: isize) -> Option<Retained<AnyObject>> {
+            let id = col.map(|c| c.identifier().to_string()).unwrap_or_default();
+            let cell = meeting_cell(&self.ivars().meetings.borrow(), &id, row as usize);
+            Some(Retained::into_super(Retained::into_super(NSString::from_str(&cell))))
+        }
     }
 );
+
+/// The Meetings table's cell in column `col` of `row`: When, Min, Lines, else the first words.
+fn meeting_cell(meetings: &[Vec<String>], col: &str, row: usize) -> String {
+    let i = match col {
+        "When" => 1,
+        "Min" => 2,
+        "Lines" => 3,
+        _ => 4,
+    };
+    meetings
+        .get(row)
+        .and_then(|m| m.get(i))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// A modal alert with `buttons`; returns the index of the one pressed.
+fn ask(title: &str, info: &str, buttons: &[&str]) -> usize {
+    let mtm = mtm();
+    let alert = objc2_app_kit::NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(info));
+    for b in buttons {
+        alert.addButtonWithTitle(&NSString::from_str(b));
+    }
+    NSApplication::sharedApplication(mtm).activate();
+    (alert.runModal() - 1000).max(0) as usize // NSAlertFirstButtonReturn = 1000
+}
+
+fn fail(title: &str, detail: &str) {
+    ask(title, detail, &[]);
+}
 
 fn split() -> bool {
     objc2_foundation::NSUserDefaults::standardUserDefaults().boolForKey(ns_string!("split"))
@@ -240,7 +377,112 @@ impl App {
             bottom: 0.0,
             right: 12.0,
         });
-        let parts: [&NSView; 4] = [&controls, &warning_row, &scroll, &footer];
+        let defaults = objc2_foundation::NSUserDefaults::standardUserDefaults();
+        let labels = objc2_foundation::NSArray::from_retained_slice(&[
+            NSString::from_str("Transcript"),
+            NSString::from_str("Timeline"),
+            NSString::from_str("Meetings"),
+        ]);
+        // SAFETY: the target is the app delegate, alive for the process.
+        let view_control = unsafe {
+            objc2_app_kit::NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &labels,
+                objc2_app_kit::NSSegmentSwitchTracking::SelectOne,
+                Some(self),
+                Some(sel!(switchView:)),
+                mtm,
+            )
+        };
+        view_control.setControlSize(NSControlSize::Small);
+        view_control.setSelectedSegment(defaults.integerForKey(ns_string!("view")));
+        let vb = ViewButtons {
+            zoom_out: small_button(ns_string!("−"), self, sel!(zoom:), mtm),
+            zoom_in: small_button(ns_string!("+"), self, sel!(zoom:), mtm),
+            gather: small_button(ns_string!("Open"), self, sel!(gather:), mtm),
+            kev: small_button(ns_string!("Auto add with Kev"), self, sel!(gather:), mtm),
+        };
+        vb.gather.setToolTip(Some(ns_string!("Put the selected meetings' transcripts in a folder and start Claude Code or Hermes there")));
+        vb.kev.setToolTip(Some(ns_string!(
+            "Same, plus every other meeting Kev (localhost:8009) judges related"
+        )));
+        let tl = timeline::TimelineView::new(mtm);
+        let px = defaults.doubleForKey(ns_string!("pxPerSec"));
+        tl.set_px(if px > 0.0 { px } else { 4.0 });
+        tl.set_on_select(|id| {
+            let id = id.to_string();
+            later(0.0, move |app| app.jump(&id));
+        });
+        let timeline_scroll = NSScrollView::new(mtm);
+        timeline_scroll.setDocumentView(Some(&tl));
+        timeline_scroll.setHasHorizontalScroller(true);
+        timeline_scroll.setHasVerticalScroller(true);
+        timeline_scroll.setAutohidesScrollers(true);
+        let clip = timeline_scroll.contentView();
+        clip.setPostsBoundsChangedNotifications(true);
+        // SAFETY: the observer is the app delegate, alive for the process.
+        unsafe {
+            objc2_foundation::NSNotificationCenter::defaultCenter()
+                .addObserver_selector_name_object(
+                    self,
+                    sel!(boundsChanged:),
+                    Some(objc2_app_kit::NSViewBoundsDidChangeNotification),
+                    Some(&clip),
+                );
+        }
+        let table = objc2_app_kit::NSTableView::new(mtm);
+        for (title, width) in [
+            ("When", 120.0),
+            ("Min", 40.0),
+            ("Lines", 44.0),
+            ("Starts with", 380.0),
+        ] {
+            let col = objc2_app_kit::NSTableColumn::initWithIdentifier(
+                objc2_app_kit::NSTableColumn::alloc(mtm),
+                &NSString::from_str(title),
+            );
+            col.setTitle(&NSString::from_str(title));
+            col.setWidth(width);
+            table.addTableColumn(&col);
+        }
+        table.setAllowsMultipleSelection(true);
+        table.setUsesAlternatingRowBackgroundColors(true);
+        // SAFETY: the data source and target are the app delegate, alive for the process.
+        unsafe {
+            table.setDataSource(Some(ProtocolObject::from_ref(self)));
+            table.setTarget(Some(self));
+            table.setDoubleAction(Some(sel!(gather:)));
+        }
+        let meetings_scroll = NSScrollView::new(mtm);
+        meetings_scroll.setDocumentView(Some(&table));
+        meetings_scroll.setHasVerticalScroller(true);
+        let spacer2 = NSView::new(mtm);
+        let view_row_parts: [&NSView; 6] = [
+            &view_control,
+            &spacer2,
+            &vb.zoom_out,
+            &vb.zoom_in,
+            &vb.kev,
+            &vb.gather,
+        ];
+        let view_row = NSStackView::stackViewWithViews(
+            &objc2_foundation::NSArray::from_slice(&view_row_parts),
+            mtm,
+        );
+        view_row.setEdgeInsets(NSEdgeInsets {
+            top: 0.0,
+            left: 12.0,
+            bottom: 0.0,
+            right: 12.0,
+        });
+        let parts: [&NSView; 7] = [
+            &controls,
+            &warning_row,
+            &view_row,
+            &scroll,
+            &timeline_scroll,
+            &meetings_scroll,
+            &footer,
+        ];
         let stack =
             NSStackView::stackViewWithViews(&objc2_foundation::NSArray::from_slice(&parts), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
@@ -261,6 +503,12 @@ impl App {
         popover.setBehavior(NSPopoverBehavior::Transient);
 
         let iv = self.ivars();
+        let _ = iv.timeline.set(tl);
+        let _ = iv.timeline_scroll.set(timeline_scroll);
+        let _ = iv.view_control.set(view_control);
+        let _ = iv.view_buttons.set(vb);
+        let _ = iv.meetings_table.set(table);
+        let _ = iv.meetings_scroll.set(meetings_scroll);
         let _ = iv.item.set(item);
         let _ = iv.popover.set(popover);
         let _ = iv.scroll.set(scroll);
@@ -269,6 +517,7 @@ impl App {
         let _ = iv.warning.set(warning);
         let _ = iv.buttons.set(buttons);
         *iv.state.borrow_mut() = "stopped".into();
+        self.apply_view();
         // SAFETY: the target is the app delegate, alive for the process.
         unsafe {
             NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
@@ -292,9 +541,19 @@ impl App {
         {
             later(2.0, move |app| {
                 app.toggle();
-                let out = app.dump();
-                std::fs::write(&file, out).expect("write dump");
-                std::process::exit(0);
+                let mut out = app.dump(&file);
+                // then the Meetings tab, once `ozen meetings` has answered
+                app.ivars()
+                    .view_control
+                    .get()
+                    .unwrap()
+                    .setSelectedSegment(2);
+                app.apply_view();
+                later(3.0, move |app| {
+                    out += &app.dump_meetings();
+                    std::fs::write(&file, out).expect("write dump");
+                    std::process::exit(0);
+                });
             });
         }
     }
@@ -416,6 +675,14 @@ impl App {
             .get()
             .unwrap()
             .setStringValue(&NSString::from_str(&shown.footer));
+        let tl_scroll = iv.timeline_scroll.get().unwrap();
+        let tl = iv.timeline.get().unwrap();
+        let clip = tl_scroll.contentView().bounds();
+        let at_end = clip.origin.x + clip.size.width >= tl.bounds().size.width - 20.0;
+        tl.set_segments(shown.segments.clone());
+        if at_end {
+            self.scroll_timeline_to_end();
+        }
         *iv.view.borrow_mut() = shown;
         self.refresh_review();
     }
@@ -573,13 +840,120 @@ impl App {
         });
     }
 
+    fn view_switched(&self) {
+        let seg = self.ivars().view_control.get().unwrap().selectedSegment();
+        objc2_foundation::NSUserDefaults::standardUserDefaults()
+            .setInteger_forKey(seg, ns_string!("view"));
+        self.apply_view();
+    }
+
+    fn apply_view(&self) {
+        let iv = self.ivars();
+        let seg = iv.view_control.get().unwrap().selectedSegment();
+        let (show_timeline, show_meetings) = (seg == 1, seg == 2);
+        iv.scroll
+            .get()
+            .unwrap()
+            .setHidden(show_timeline || show_meetings);
+        iv.timeline_scroll.get().unwrap().setHidden(!show_timeline);
+        iv.meetings_scroll.get().unwrap().setHidden(!show_meetings);
+        let b = iv.view_buttons.get().unwrap();
+        b.zoom_in.setHidden(!show_timeline);
+        b.zoom_out.setHidden(!show_timeline);
+        b.gather.setHidden(!show_meetings);
+        b.kev.setHidden(!show_meetings);
+        if show_timeline {
+            self.scroll_timeline_to_end();
+        }
+        if show_meetings {
+            self.load_meetings();
+        }
+    }
+
+    fn scroll_timeline_to_end(&self) {
+        let iv = self.ivars();
+        let (tl, scroll) = (
+            iv.timeline.get().unwrap(),
+            iv.timeline_scroll.get().unwrap(),
+        );
+        let clip = scroll.contentView();
+        let x = (tl.bounds().size.width - clip.bounds().size.width).max(0.0);
+        clip.scrollToPoint(NSPoint::new(x, 0.0));
+        scroll.reflectScrolledClipView(&clip);
+    }
+
+    /// Timeline bar clicked: show that line in the transcript.
+    fn jump(&self, id: &str) {
+        self.ivars()
+            .view_control
+            .get()
+            .unwrap()
+            .setSelectedSegment(0);
+        self.view_switched();
+        if let Some(&(loc, len)) = self.ivars().view.borrow().headers.get(id) {
+            let r = objc2_foundation::NSRange::new(loc, len);
+            let text = self.text();
+            text.scrollRangeToVisible(r);
+            text.showFindIndicatorForRange(r);
+        }
+    }
+
+    fn load_meetings(&self) {
+        cli::run(&["meetings"], |out, _, _| {
+            APP.with(|a| {
+                let app = a.get().unwrap();
+                let iv = app.ivars();
+                let table = iv.meetings_table.get().unwrap();
+                let picked: std::collections::HashSet<String> = {
+                    let m = iv.meetings.borrow();
+                    let rows = table.selectedRowIndexes();
+                    (0..m.len())
+                        .filter(|&i| rows.containsIndex(i))
+                        .map(|i| m[i][0].clone())
+                        .collect()
+                };
+                let rows: Vec<Vec<String>> = out
+                    .lines()
+                    .map(|l| l.split('\t').map(String::from).collect::<Vec<_>>())
+                    .filter(|r| r.len() == 5)
+                    .collect();
+                let keep = objc2_foundation::NSMutableIndexSet::new();
+                for (i, r) in rows.iter().enumerate() {
+                    if picked.contains(&r[0]) {
+                        keep.addIndex(i);
+                    }
+                }
+                *iv.meetings.borrow_mut() = rows;
+                table.reloadData();
+                table.selectRowIndexes_byExtendingSelection(&keep, false);
+            })
+        });
+    }
+
+    /// The Meetings table's cells, row by row, as the render check prints them.
+    fn dump_meetings(&self) -> String {
+        let table = self.ivars().meetings_table.get().unwrap();
+        let cols = table.tableColumns();
+        let mut out = String::new();
+        let meetings = self.ivars().meetings.borrow();
+        out += &format!("\nROWS {}", table.numberOfRows());
+        for row in 0..meetings.len() {
+            let cells: Vec<String> = cols
+                .iter()
+                .map(|c| meeting_cell(&meetings, &c.identifier().to_string(), row))
+                .collect();
+            out += &format!("\nMEETING {}", cells.join("\t"));
+        }
+        out
+    }
+
     fn control(&self, cmd: &str, optimistic: &str) {
         self.show_state(optimistic);
         cli::run(&[cmd], |_, _, _| later(1.0, App::refresh_state));
     }
 
     /// What the panel drew, in the Swift render check's format.
-    fn dump(&self) -> String {
+    fn dump(&self, file: &str) -> String {
         self.ivars().signature.borrow_mut().clear();
         self.reload();
         let mut out = vec!["== plain".to_string()];
@@ -609,7 +983,27 @@ impl App {
             "SHOWN {}",
             view.ids.iter().collect::<BTreeSet<_>>().len()
         ));
-        out.extend(view.segments.iter().cloned());
+        // the Timeline view as its tab shows it
+        iv.view_control.get().unwrap().setSelectedSegment(1);
+        self.apply_view();
+        out.extend(
+            iv.timeline
+                .get()
+                .unwrap()
+                .dump(&std::path::PathBuf::from(format!("{file}.png"))),
+        );
+        for g in iv.timeline.get().unwrap().segments() {
+            let f = transcript::swift_double;
+            out.push(format!(
+                "SEG {} {} {} {} {} {}",
+                g.id,
+                f(g.t),
+                f(g.d),
+                g.speaker,
+                g.unsure,
+                g.text
+            ));
+        }
         out.join("\n")
     }
 }
