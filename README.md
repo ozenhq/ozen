@@ -135,7 +135,7 @@ Output is `transcript.txt`:
 
 ## Setup
 
-Requires macOS 15+ on Apple Silicon, Xcode command line tools (`swiftc`), [Rust](https://rustup.rs) (`cargo`), [`uv`](https://docs.astral.sh/uv/) and `ffmpeg`.
+Requires macOS 15+ on Apple Silicon, Xcode command line tools, [Rust](https://rustup.rs) (`cargo`), [`uv`](https://docs.astral.sh/uv/) and `ffmpeg`.
 
 ```sh
 git clone https://github.com/ozenhq/ozen ~/ozen

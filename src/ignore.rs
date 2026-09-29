@@ -10,9 +10,9 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 
-pub const IGNORE: &str = "Ignored"; // reserved tag, same in src/transcribe.rs, src/train.rs and menubar.swift
+pub const IGNORE: &str = "Ignored"; // reserved tag, same in src/transcribe.rs, src/train.rs and src/bin/bar
 
-/// IGNORE or one of its numbered voices ("Ignored 2"), same as menubar.swift's isIgnored.
+/// IGNORE or one of its numbered voices ("Ignored 2"), same as src/bin/bar/voices.rs is_ignored.
 pub fn is_ignored(name: &str) -> bool {
     name == IGNORE
         || name

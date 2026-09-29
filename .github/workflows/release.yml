@@ -20,7 +20,7 @@ jobs:
       - run: cargo build --release
       - name: Package
         # ozen/ holds the tagged sources plus target/release/{ozen,rec}: unpacked in ~ it is the ~/ozen checkout.
-        # The DMG holds Ozen.app with that checkout inside (menubar.swift copies it to ~/ozen on launch), next to an
+        # The DMG holds Ozen.app with that checkout inside (the app copies it to ~/ozen on launch, src/bin/bar/install.rs), next to an
         # Applications link to drag it onto, on a drawn background, with a drive as the volume icon (`ozen dmg`).
         # Signed ad hoc: not notarized, so the first open needs Open Anyway.
         run: |

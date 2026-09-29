@@ -1,5 +1,4 @@
-//! Ozen's menu bar app in Rust, replacing menubar.swift piece by piece. Not installed yet: `ozen app` still builds
-//! the Swift app until this one does everything it does.
+//! Ozen's menu bar app, built into ~/Applications/Ozen.app by `ozen app`.
 //!
 //! The ear icon: left-click shows the live transcript with Start/Pause/Stop controls, right-click the same controls.
 //! Everything it shows is decided by the ozen CLI (src/panel.rs and friends); this draws it and forwards clicks.
@@ -7,8 +6,8 @@
 //!     bar [DIR] [--open] [--dump FILE]
 //!
 //! DIR is the ozen checkout (default ~/ozen). --open shows the panel at launch. --dump FILE shows the panel, writes
-//! what it drew (every text run with its attributes, the footer, Review queue and timeline bars) to FILE and quits:
-//! the render check against the Swift app.
+//! what it drew (every text run with its attributes, the footer, Review queue, timeline, windows) to FILE and quits:
+//! a render check (it matched the Swift app it replaced).
 mod auto;
 mod cli;
 mod install;
