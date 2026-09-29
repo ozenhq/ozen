@@ -12,7 +12,6 @@
 // Timebar…: every recorded chunk on a local-time bar, done or still waiting, and the transcriber's pace (chunks.html).
 // Built into ~/Applications/Ozen.app by `ozen app`. Direct use: Ozen [dir] [--open]
 import AppKit
-import CoreAudio
 import CoreLocation
 import WebKit  // hosts map.html (Leaflet + OpenStreetMap), the same map any OS can show
 
@@ -67,10 +66,6 @@ func cli(_ args: String...) -> Any? {
     return try? JSONSerialization.jsonObject(with: out)
 }
 
-// Meeting apps by bundle id prefix. Chrome covers Google Meet; FaceTime calls capture via avconferenced.
-let meetingApps = [("us.zoom", "Zoom"), ("com.google.Chrome", "Chrome"), ("com.microsoft.teams", "Teams"),
-                   ("com.tinyspeck.slackmacgap", "Slack"), ("com.apple.FaceTime", "FaceTime"),
-                   ("com.apple.avconferenced", "FaceTime"), ("com.hnc.Discord", "Discord")]
 let meetingGrace: TimeInterval = 20  // mic can drop briefly (mute toggles, reconnects) without ending the meeting
 
 // A place with no coordinates yet does nothing until you set it to where you are.
@@ -104,38 +99,8 @@ func savePlaces(_ p: [Place]) {
     }
 }
 
-/// Name of a meeting app currently capturing the microphone, via Core Audio's per-process objects (macOS 14.2+).
-/// ozen's own capture shows up as com.apple.replayd, so it never counts as a meeting.
-func meetingUsingMic() -> String? {
-    func address(_ sel: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-    }
-    func capturing(_ obj: AudioObjectID) -> Bool {
-        var addr = address(kAudioProcessPropertyIsRunningInput)
-        var running: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        return AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &running) == noErr && running != 0
-    }
-    func bundleID(_ obj: AudioObjectID) -> String {
-        var addr = address(kAudioProcessPropertyBundleID)
-        var ref: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &ref) == noErr else { return "" }
-        return ref?.takeRetainedValue() as String? ?? ""  // Core Audio returns a +1 CFString: release it
-    }
-    var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
-                                          mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-    var size: UInt32 = 0
-    let system = AudioObjectID(kAudioObjectSystemObject)
-    guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return nil }
-    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-    guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return nil }
-    for id in ids where capturing(id) {
-        let bundle = bundleID(id)
-        if let app = meetingApps.first(where: { bundle.hasPrefix($0.0) }) { return app.1 }
-    }
-    return nil
-}
+/// Name of a meeting app currently capturing the microphone (`ozen mic`, src/mic.rs), or nil.
+func meetingUsingMic() -> String? { (cli("mic") as? [String: Any])?["app"] as? String }
 
 struct Line { let id: String, time: String, t: Double, d: Double, spk: String, src: String, text: String, run: Int?, doubt: Double? }
 
