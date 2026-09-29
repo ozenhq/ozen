@@ -30,8 +30,8 @@ use objc2_app_kit::{
 };
 use objc2_core_location::CLLocationManagerDelegate;
 use objc2_foundation::{
-    MainThreadMarker, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSRectEdge, NSSize, NSString, NSTimer, ns_string,
+    MainThreadMarker, NSDictionary, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol,
+    NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSTimer, ns_string,
 };
 use objc2_web_kit::{WKNavigationDelegate, WKScriptMessageHandler};
 use serde_json::Value;
@@ -670,6 +670,14 @@ impl App {
         text.setEditable(false);
         text.setTextContainerInset(NSSize::new(10.0, 10.0));
         text.setDelegate(Some(ProtocolObject::from_ref(self)));
+        // links keep their own colors (names, unsure, text): only the cursor says they're clickable
+        // SAFETY: AppKit's cursor attribute key.
+        let cursor = objc2_app_kit::NSCursor::pointingHandCursor();
+        let link_attrs = NSDictionary::from_slices(
+            &[unsafe { objc2_app_kit::NSCursorAttributeName }],
+            &[&*cursor as &AnyObject],
+        );
+        unsafe { text.setLinkTextAttributes(Some(&link_attrs)) };
         let footer = NSTextField::labelWithString(ns_string!(""), mtm);
         footer.setFont(Some(&NSFont::systemFontOfSize(11.0)));
         footer.setTextColor(Some(&NSColor::secondaryLabelColor()));
@@ -1909,6 +1917,36 @@ impl App {
     fn dump(&self, file: &str) -> String {
         self.ivars().signature.borrow_mut().clear();
         self.reload();
+        // the whole panel as shown, the transcript laid out in full (TextKit 2 lays out lazily)
+        if let Some(tlm) = self.text().textLayoutManager() {
+            tlm.ensureLayoutForRange(&objc2_app_kit::NSTextSelectionDataSource::documentRange(
+                &*tlm,
+            ));
+            // SAFETY: scrolls the app's own text view.
+            unsafe { self.text().scrollToEndOfDocument(None) };
+        }
+        if let Some(view) = self
+            .ivars()
+            .popover
+            .get()
+            .unwrap()
+            .contentViewController()
+            .map(|c| c.view())
+        {
+            view.layoutSubtreeIfNeeded();
+            if let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(view.bounds()) {
+                view.cacheDisplayInRect_toBitmapImageRep(view.bounds(), &rep);
+                // SAFETY: PNG encoding of our own bitmap.
+                if let Some(d) = unsafe {
+                    rep.representationUsingType_properties(
+                        objc2_app_kit::NSBitmapImageFileType::PNG,
+                        &objc2_foundation::NSDictionary::new(),
+                    )
+                } {
+                    let _ = std::fs::write(format!("{file}.panel.png"), d.to_vec());
+                }
+            }
+        }
         let mut out = vec!["== plain".to_string()];
         out.extend(transcript::dump_runs(&self.text()));
         let iv = self.ivars();
