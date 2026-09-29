@@ -479,11 +479,7 @@ fn build_app(app: &str) -> bool {
         return false;
     }
     let bin = format!("{app}/Contents/MacOS/Ozen");
-    if newer(&bin, BAR_BUILT)
-        && newer(&bin, "src/icon.rs")
-        && newer(&bin, "map.html")
-        && newer(&bin, "chunks.html")
-    {
+    if newer(&bin, BAR_BUILT) && newer(&bin, "src/icon.rs") && newer(&bin, "map.html") {
         return true;
     }
     let resources = format!("{app}/Contents/Resources");
@@ -496,7 +492,7 @@ fn build_app(app: &str) -> bool {
         eprintln!("couldn't copy {BAR_BUILT} into {app}");
         return false;
     }
-    for page in ["map.html", "chunks.html"] {
+    for page in ["map.html"] {
         if fs::copy(page, format!("{resources}/{page}")).is_err() {
             eprintln!("{page} missing; its window stays blank");
         }
