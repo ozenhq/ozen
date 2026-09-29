@@ -369,17 +369,8 @@ define_class!(
         fn split_changed(&self, sender: &objc2_app_kit::NSSwitch) {
             // The switch is "Transcribe", so off means split: record now, transcribe later.
             objc2_foundation::NSUserDefaults::standardUserDefaults().setBool_forKey(sender.state() == objc2_app_kit::NSControlStateValueOff, ns_string!("split"));
-            // Applies right away. Off stops the transcriber and the audio waits in chunks/ (the recording goes on);
-            // on transcribes what's waiting, then keeps going live if recording.
             let state = self.ivars().state.borrow().clone();
-            let refresh = |_: String, _: String, _: i32| APP.with(|a| a.get().unwrap().refresh_state());
-            match (split(), state.as_str()) {
-                (true, "recording") => cli::run(&["record"], move |_, _, _| cli::run(&["process", "stop"], refresh)),
-                (true, "paused" | "processing") => cli::run(&["process", "stop"], refresh),
-                (false, "recording") => cli::run(&["start"], refresh),
-                (false, _) if self.ivars().queued.get() > 0 => cli::run(&["process"], refresh),
-                _ => {}
-            }
+            run_in_turn(transcribe_switched(!split(), &state, self.ivars().queued.get()));
             self.show_state(&state);
         }
 
@@ -573,6 +564,25 @@ fn now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
+}
+
+/// The CLI commands, run in turn, that apply the Transcribe switch right away. Off stops the transcriber and the
+/// audio waits in chunks/ (the recording goes on); on transcribes what's waiting, then keeps going live if recording.
+fn transcribe_switched(on: bool, state: &str, queued: i64) -> &'static [&'static [&'static str]] {
+    match (on, state) {
+        (false, "recording") => &[&["record"], &["process", "stop"]],
+        (false, "paused" | "processing") => &[&["process", "stop"]],
+        (true, "recording") => &[&["start"]],
+        (true, _) if queued > 0 => &[&["process"]],
+        _ => &[],
+    }
+}
+
+fn run_in_turn(commands: &'static [&'static [&'static str]]) {
+    match commands.split_first() {
+        Some((first, rest)) => cli::run(first, move |_, _, _| run_in_turn(rest)),
+        None => APP.with(|a| a.get().unwrap().refresh_state()),
+    }
 }
 
 fn split() -> bool {
@@ -1995,4 +2005,25 @@ fn main() {
     });
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     app.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transcribe_switched;
+
+    #[test]
+    fn transcribe_switch_stops_or_catches_up() {
+        assert_eq!(
+            transcribe_switched(false, "recording", 0),
+            [&["record"][..], &["process", "stop"]]
+        );
+        assert_eq!(
+            transcribe_switched(false, "processing", 3),
+            [&["process", "stop"][..]]
+        );
+        assert!(transcribe_switched(false, "stopped", 3).is_empty());
+        assert_eq!(transcribe_switched(true, "recording", 3), [&["start"][..]]);
+        assert_eq!(transcribe_switched(true, "stopped", 3), [&["process"][..]]);
+        assert!(transcribe_switched(true, "stopped", 0).is_empty());
+    }
 }
