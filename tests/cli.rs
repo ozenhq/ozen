@@ -85,6 +85,25 @@ fn review_asks_about_unsure_lines_but_not_junk() {
 }
 
 #[test]
+fn second_transcriber_exits() {
+    let dir = folder(&[]);
+    // stands in for a running transcriber: it holds the lock the same way
+    let held = std::fs::File::create(dir.path().join(".transcriber.lock")).unwrap();
+    held.try_lock().unwrap();
+    let out = Command::cargo_bin("ozen")
+        .unwrap()
+        .env("OZEN_DIR", dir.path())
+        .args(["transcribe", "chunks", "transcript.txt"])
+        .timeout(std::time::Duration::from_secs(10)) // loading the models instead would take far longer
+        .assert()
+        .success();
+    assert!(
+        String::from_utf8_lossy(&out.get_output().stdout)
+            .contains("another transcriber is running")
+    );
+}
+
+#[test]
 fn priority_is_remembered() {
     let dir = folder(&[]);
     let priority = |args: &[&str]| {
