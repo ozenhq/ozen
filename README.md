@@ -84,10 +84,11 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon is a red filled ear only while recording; otherwise it's monochrome (ear stopped, pause paused,
   hourglass finishing transcription) and the panel says **Not recording** and why.
-- **Records now, transcribes later (advanced).** The gear button in the panel (or **Advanced…** in the right-click
-  menu) has **Split recording and processing**, off by default. On, **Record** only records (the audio waits in
-  `chunks/`, taking disk space) and **Process** transcribes what's waiting, with or without a recording going on,
-  then stops. Pause is hidden: without a transcriber loaded it would be the same as Stop.
+- **Transcription on or off (advanced).** The gear button in the panel (or **Advanced…** in the right-click
+  menu) has a **Transcribe** switch, on by default, that applies right away. Off, recording goes on but nothing is
+  transcribed (the audio waits in `chunks/`, taking disk space); back on, it transcribes what's waiting, then keeps up
+  live, or stops once done if nothing is recording. Pause is hidden while off: without a transcriber loaded it would
+  be the same as Stop.
 - **Timeline view.** Switch the panel to **Timeline** for one lane per speaker (with their total talk time) and a
   bar for every line they spoke, on a scrollable time axis; **− / +** zoom. Silences over 2 minutes shrink to a
   short break marker. Hover a bar for what was said; click it to jump to that line in the transcript.

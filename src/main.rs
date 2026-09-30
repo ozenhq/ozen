@@ -341,6 +341,8 @@ fn sign(path: &str, deep: bool) {
 const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, to pace automatic restarts
 
 fn start_transcriber() {
+    // First: the pull below can take seconds, and a `status` poll in between would start a second transcriber.
+    let _ = File::create(TR_STARTED);
     if !ok(cmd("git")
         .args(["-C", "voices", "pull", "-q", "--ff-only"])
         .stderr(Stdio::null()))
@@ -350,7 +352,6 @@ fn start_transcriber() {
             b"voices registry pull failed; using local copy\n",
         );
     }
-    let _ = File::create(TR_STARTED);
     text::mark_junk();
     spawn_detached(
         Command::new(std::env::current_exe().expect("own path")).args([
