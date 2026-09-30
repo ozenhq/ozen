@@ -357,19 +357,28 @@ fn start_transcriber() {
         );
     }
     text::mark_junk();
-    let me = std::env::current_exe().expect("own path");
-    let mut c = if Path::new(LOW_PRIORITY).exists() {
-        let mut c = cmd("taskpolicy");
-        c.arg("-b").arg(me);
-        c
-    } else {
-        Command::new(me)
-    };
     spawn_detached(
-        c.args(["transcribe", "chunks", "transcript.txt"]),
+        Command::new(std::env::current_exe().expect("own path")).args([
+            "transcribe",
+            "chunks",
+            "transcript.txt",
+        ]),
         log().into(),
         log().into(),
     );
+    if Path::new(LOW_PRIORITY).exists() {
+        set_priority(true);
+    }
+}
+
+/// Moves this checkout's transcriber in or out of macOS background priority. Process-wide on purpose:
+/// `taskpolicy -b` at launch would mark the threads instead, and `-B` can't undo that.
+fn set_priority(low: bool) {
+    for pid in ours(TR) {
+        let _ = cmd("taskpolicy")
+            .args([if low { "-b" } else { "-B" }, "-p", &pid])
+            .status();
+    }
 }
 
 /// While recording, a transcriber that died gets restarted. The app polls `status` every 2s, so this is the
@@ -588,14 +597,14 @@ fn main() {
             }
         }
         "priority" => {
-            let flag = match std::env::args().nth(2).as_deref() {
+            let low = match std::env::args().nth(2).as_deref() {
                 Some("low") => {
                     File::create(LOW_PRIORITY).expect("create .low-priority");
-                    "-b"
+                    true
                 }
                 Some("normal") => {
                     let _ = fs::remove_file(LOW_PRIORITY);
-                    "-B"
+                    false
                 }
                 _ => {
                     println!(
@@ -609,10 +618,7 @@ fn main() {
                     return;
                 }
             };
-            // A running transcriber switches now; one started later reads the file.
-            for pid in ours(TR) {
-                let _ = cmd("taskpolicy").args([flag, "-p", &pid]).status();
-            }
+            set_priority(low); // a running transcriber switches now; one started later reads the file
         }
         "process" if std::env::args().nth(2).as_deref() == Some("stop") => {
             let _ = fs::remove_file(PROCESSING);
