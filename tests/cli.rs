@@ -85,6 +85,26 @@ fn review_asks_about_unsure_lines_but_not_junk() {
 }
 
 #[test]
+fn priority_is_remembered() {
+    let dir = folder(&[]);
+    let priority = |args: &[&str]| {
+        let out = Command::cargo_bin("ozen")
+            .unwrap()
+            .env("OZEN_DIR", dir.path())
+            .arg("priority")
+            .args(args)
+            .assert()
+            .success();
+        String::from_utf8(out.get_output().stdout.clone()).unwrap()
+    };
+    assert_eq!(priority(&[]), "normal\n");
+    priority(&["low"]);
+    assert_eq!(priority(&[]), "low\n");
+    priority(&["normal"]);
+    assert_eq!(priority(&[]), "normal\n");
+}
+
+#[test]
 fn split_counts_queued_chunks() {
     let dir = folder(&[
         ("chunks/1-call.wav", String::new()),
