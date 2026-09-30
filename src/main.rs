@@ -342,6 +342,8 @@ fn sign(path: &str, deep: bool) {
     }
 }
 
+const TR_LOCK: &str = ".transcriber.lock"; // held by the running transcriber for as long as it runs
+const START_LOCK: &str = ".start.lock"; // held while a command checks what's running and starts what's missing
 const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, to pace automatic restarts
 
 fn start_transcriber() {
@@ -383,7 +385,17 @@ fn set_priority(low: bool) {
 
 /// While recording, a transcriber that died gets restarted. The app polls `status` every 2s, so this is the
 /// supervisor. At most once a minute, so one that crashes on start doesn't respawn in a tight loop.
+/// Waits for any other command that is starting the recorder or transcriber, then holds the turn until the returned
+/// file drops. Without it, two `start`s at once both see nothing running and both spawn: two recorders record every
+/// chunk twice.
+fn starting() -> File {
+    let f = File::create(START_LOCK).expect("create .start.lock");
+    f.lock().expect("lock .start.lock");
+    f
+}
+
 fn restart_dead_transcriber() {
+    let _turn = starting();
     let recent = fs::metadata(TR_STARTED)
         .and_then(|m| m.modified())
         .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < Duration::from_secs(60)));
@@ -565,6 +577,7 @@ fn main() {
     let app = format!("{}/Applications/Ozen.app", home());
     match std::env::args().nth(1).as_deref().unwrap_or("") {
         "start" | "resume" => {
+            let _turn = starting();
             rotate_log();
             if !prepare_rec() {
                 exit(1);
@@ -582,6 +595,7 @@ fn main() {
         }
         "pause" => signal("-INT", REC), // SIGINT: recorder flushes its current chunk first
         "record" => {
+            let _turn = starting();
             rotate_log();
             if !prepare_rec() {
                 exit(1);
@@ -625,6 +639,7 @@ fn main() {
             signal("-TERM", TR); // chunks are deleted only once transcribed, so the rest waits for the next run
         }
         "process" => {
+            let _turn = starting();
             fs::create_dir_all("chunks").expect("create chunks/");
             if !running(TR) {
                 start_transcriber();
@@ -1013,6 +1028,13 @@ fn main() {
         }
         // The transcriber's voiceprint encoder (src/ecapa.rs), fed audio on stdin.
         "transcribe" => {
+            // One transcriber per checkout, whoever starts it (start, process, the app's status poll): a second one
+            // would load the models twice and could transcribe a chunk twice. macOS drops the lock when this exits.
+            let lock = File::create(TR_LOCK).expect("create .transcriber.lock");
+            if lock.try_lock().is_err() {
+                println!("another transcriber is running in this checkout; exiting");
+                return;
+            }
             let arg = |i| std::env::args().nth(i).unwrap_or_default();
             if let Err(e) = transcribe::run(Path::new(&arg(2)), Path::new(&arg(3))) {
                 eprintln!("{e}");
