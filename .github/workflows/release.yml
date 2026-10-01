@@ -1,6 +1,6 @@
 name: release
-# A version tag (v1.2.3) on a commit in main: build the CLI and recorder, pack them with the sources ozen runs from
-# (the Python transcriber, the Swift menu bar), and upload a DMG and a tarball to R2 under their version and as latest.
+# A version tag (v1.2.3) on a commit in main: build the CLI, recorder and menu bar app (all Rust), pack them with the
+# tagged sources (the Python eval scripts among them), and upload a DMG and a tarball to R2 under their version and as latest.
 on:
   push:
     tags: ["v*"]
