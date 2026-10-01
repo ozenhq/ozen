@@ -8,7 +8,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 ## What it does
 
 - **Hears the call and the room.** The recorder (`src/bin/rec.rs`, run as `target/recorder/ozen` so macOS
-  lists it as ozen) uses ScreenCaptureKit to record three streams in 15s chunks:
+  lists it as ozen) uses Core Audio process taps and the input device to record three streams in 15s chunks. Taps
+  need only the System Audio Recording permission, so recording keeps going while the screen is locked or asleep:
   - `call`: audio from meeting apps only (Zoom, Chrome, Teams, Slack, FaceTime, Discord)
   - `mic`: your microphone
   - `local`: every other app, e.g. a video or the `say` command. Never transcribed; it only
@@ -157,7 +158,7 @@ Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
 On another Mac, run the same three commands; voices tagged on either one reach the other within a few minutes.
 
-On the first Start, macOS asks **Ozen** for **Screen & System Audio Recording** and **Microphone** access;
+On the first Start, macOS asks **Ozen** for **System Audio Recording** and **Microphone** access;
 grant both (System Settings > Privacy & Security), then press Start again. **Location Services** is asked for
 only when you first locate a place; without it, places never match and recording follows Always / Meetings. The build signs the app and recorder
 with a local self-signed certificate (created once in `~/Library/Keychains/ozen-signing.keychain-db`), so the
@@ -212,8 +213,8 @@ with `--real` once you have a few dozen fixes.
 - Lines arrive ~15–30s after speech (chunked, not streaming).
 - English terms spoken inside Hebrew are the weakest spot; add them to `vocab.txt`. Distant voices in the room are hard to hear.
 - You talking over the computer voice or a remote speaker can be dropped as echo when your voices sound alike.
-- macOS Speak Selection isn't heard on `local` (ScreenCaptureKit doesn't capture that system voice), so text it reads
-  aloud is transcribed as a room speaker. Marking that voice with **Ignore this voice** can drop it.
+- If macOS Speak Selection's system voice isn't heard on `local`, text it reads aloud is transcribed as a room
+  speaker. Marking that voice with **Ignore this voice** can drop it.
 - Up to two voices at once are separated; a third merges into one of them. Overlaps in utterances under ~2s
   aren't detected, and utterances under 1s inherit the previous speaker.
 - Live speaker matching is online (no re-clustering); tagging a few lines fixes past and future labels.

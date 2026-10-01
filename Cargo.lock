@@ -77,25 +77,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "apple-cf"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acc8e8f378f5bbd99f5850a95e55cbfd20e14db63d1eee16a060528cf960876e"
-dependencies = [
- "doom-fish-utils",
-]
-
-[[package]]
-name = "apple-metal"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00a23f6df783ca6a2def6201afc6bd54c1d41454e35552309166432155b544fc"
-dependencies = [
- "doom-fish-utils",
- "libc",
-]
-
-[[package]]
 name = "array-init"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -450,15 +431,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-queue"
-version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -632,16 +604,6 @@ dependencies = [
  "block2",
  "libc",
  "objc2",
-]
-
-[[package]]
-name = "doom-fish-utils"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32707dcbfc8b3fd80d134a6d9e63f4f73ab6eece78192f0f213a192f08900c79"
-dependencies = [
- "crossbeam-queue",
- "futures-util",
 ]
 
 [[package]]
@@ -1636,6 +1598,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1eebcea8b0dbff5f7c8504f3107c68fc061a3eb44932051c8cf8a68d969c3b2"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "libc",
+ "objc2",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-core-audio-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a89f2ec274a0cf4a32642b2991e8b351a404d290da87bb6a9a9d8632490bd1c"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+]
+
+[[package]]
 name = "objc2-core-data"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1653,7 +1640,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "dispatch2",
+ "libc",
  "objc2",
 ]
 
@@ -1846,6 +1835,9 @@ dependencies = [
  "jiff",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
  "objc2-core-location",
  "objc2-foundation",
  "objc2-map-kit",
@@ -1854,7 +1846,6 @@ dependencies = [
  "proptest",
  "regex",
  "rmcp",
- "screencapturekit",
  "serde",
  "serde_json",
  "signal-hook",
@@ -2338,16 +2329,6 @@ dependencies = [
  "quote",
  "serde_derive_internals",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "screencapturekit"
-version = "11.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe1b2061926d42d24cf1736407c9d7bc3e7d45dbba841e5ac8807c662998967e"
-dependencies = [
- "apple-cf",
- "apple-metal",
 ]
 
 [[package]]

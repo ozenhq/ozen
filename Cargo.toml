@@ -27,6 +27,9 @@ indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
 objc2 = "0.6"
 objc2-app-kit = "0.3"  # AppKit, all of it: the menu bar app (src/bin/bar.rs) uses most classes
+objc2-core-audio = "0.3.2"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
 objc2-core-location = { version = "0.3.2", features = ["CLLocation", "CLLocationManager", "CLLocationManagerDelegate", "block2"] }
 objc2-foundation = "0.3"
 objc2-map-kit = "0.3.2"  # the Places map (src/bin/bar/map.rs)
@@ -34,7 +37,6 @@ objc2-metal = "0.3.2"
 plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
-screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 signal-hook = "0.4.4"

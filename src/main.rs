@@ -106,7 +106,7 @@ const LIVE_SYNC: &str = r"/ozen live-sync$"; // keeps context/live/ current whil
 /// Tests that chdir into a temp dir hold this: the working directory is shared by every test thread.
 #[cfg(test)]
 static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-const BLOCKED: &str = "declined TCCs"; // ScreenCaptureKit's error when the recording permission is missing
+const BLOCKED: &str = "declined TCCs"; // the ScreenCaptureKit recorder's error, in logs from before the taps
 
 /// The checkout holding the sources, chunks and logs: the one this binary sits in (`<root>/target/release/ozen`),
 /// so a prebuilt release unpacked anywhere works; else the one it was built from (`cargo test`, odd layouts).
@@ -729,13 +729,13 @@ fn main() {
             if let Some(alert) = low_disk_alert::check() {
                 println!("{alert}");
             }
-            if Path::new("no-display").exists() {
+            if Path::new("recording-blocked").exists() {
                 println!(
-                    "Recording on hold: the screen is asleep or locked. It resumes when you wake it"
+                    "No system audio is arriving: allow Ozen in System Settings > Privacy & Security > Screen & System Audio Recording (System Audio Recording Only), then press Start"
                 );
             }
             if let Ok(error) = fs::read_to_string("capture-error") {
-                println!("Recording paused: capture failed to start ({error}). Retrying every 10s");
+                println!("Recording paused: capture failed to start ({error}). Retrying");
             }
             if let Ok(names) = fs::read_to_string("mic-fallback")
                 && let Some((using, silent)) = names.split_once('\n')
