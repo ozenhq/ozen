@@ -539,8 +539,13 @@ impl Transcriber {
         let mut lj = open_lines()?;
         let replace = learned().replace;
         let mut wrote = 0;
+        let min_line = min_line_sec();
         for (i, (start, spk, heard, esum, end)) in lines.into_iter().enumerate() {
             if text::looped(&heard) {
+                continue;
+            }
+            if end - start < min_line {
+                println!("short line dropped {:.2}s: {heard}", end - start);
                 continue;
             }
             let text = text::corrected(&heard, &replace);
@@ -583,6 +588,16 @@ fn separate_backlog() -> usize {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6)
+}
+
+/// A whole line this short, after a speaker's consecutive turns merge, is mostly a noise burst Whisper turned into
+/// filler ("Amen.", "Okay.", "לא בתוקף."). Of 319 lines tagged with a speaker, 2.2% were shorter than 0.6s; of 288
+/// whose text repeats 4+ times, 34% were. 0.8s drops 49% of those but 4.4% of real lines ("What changed?").
+fn min_line_sec() -> f64 {
+    std::env::var("OZEN_MIN_LINE_SEC")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.6)
 }
 
 fn start_ms(f: &Path) -> i64 {
