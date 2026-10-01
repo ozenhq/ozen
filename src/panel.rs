@@ -192,8 +192,8 @@ pub fn controls_json(state: &str, split: bool) -> Value {
 /// The transcript as the panel shows it, from the last HISTORY rows of lines.jsonl (`raw`, file order):
 /// speakers corrected by tags (and a guess from the last retrain), text by fixes, the unsure ones marked.
 /// `pending` holds what the panel just set and `ozen tag` / `ozen fix` haven't written yet:
-/// {"tags": {id: name}, "fixes": {id: text}}. Returns {"lines" (the last SHOWN), "segments" (timeline bars, ignored
-/// voices left out), "review" (unsure lines that are shown: id, until), "footer"}.
+/// {"tags": {id: name}, "fixes": {id: text}}. Returns {"lines" (the last SHOWN), "segments" (timeline bars of the latest
+/// meeting, ignored voices left out), "review" (unsure lines that are shown: id, until), "footer"}.
 fn transcript<'a>(
     raw: &'a [Row],
     junk: &BTreeSet<String>,
@@ -220,13 +220,22 @@ fn transcript<'a>(
     }); // stable, like Swift's
     let unsure_ids: BTreeSet<&str> = unsure.iter().filter_map(|u| u["id"].as_str()).collect();
     let view = |r: &'a Row| speaker_of(r, tags, labels, &unsure_ids);
-    let segments: Vec<Value> = lines
+    // The timeline shows one meeting, the latest: the lines after the last silence that ends a meeting.
+    let start = lines
+        .windows(2)
+        .rposition(|w| {
+            w[1]["t"].as_f64().unwrap_or(0.0) - w[0]["t"].as_f64().unwrap_or(0.0)
+                > crate::meetings::GAP
+        })
+        .map_or(0, |i| i + 1);
+    let segments: Vec<Value> = lines[start..]
         .iter()
         .filter_map(|r| {
             let (id, _, speaker, unsure) = view(r);
-            let text = str_of(r, "text");
+            let heard = str_of(r, "text");
+            let text = fixes.get(id).and_then(Value::as_str).filter(|t| !t.is_empty()).unwrap_or(heard);
             // older lines carry no duration: estimate it from the text's length
-            let d = r.get("d").and_then(Value::as_f64).unwrap_or_else(|| (text.chars().count() as f64 / 14.0).clamp(1.0, 15.0));
+            let d = r.get("d").and_then(Value::as_f64).unwrap_or_else(|| (heard.chars().count() as f64 / 14.0).clamp(1.0, 15.0));
             (!is_ignored(speaker)).then(|| json!({"id": id, "t": r["t"], "d": d, "speaker": speaker, "text": text, "unsure": unsure}))
         })
         .collect();
@@ -445,6 +454,35 @@ mod tests {
         insta::assert_json_snapshot!(controls("stopped", true, 2));
         assert_eq!(controls("processing", true, 2)["start"]["enabled"], true);
         assert_eq!(controls("paused", true, 0)["start"]["title"], "Resume");
+    }
+
+    #[test]
+    fn timeline_shows_the_latest_meeting_with_fixed_text() {
+        let raw = [
+            row("old", 1.0, "S1", json!({"d": 2.0})),
+            row("a", 1000.0, "S1", json!({"d": 2.0})), // over GAP later: a new meeting
+            row("b", 1300.0, "S2", json!({"d": 2.0, "text": "heard"})), // within GAP: same meeting
+        ];
+        let fixes = obj(json!({"b": "fixed"}));
+        let v = transcript(
+            &raw,
+            &BTreeSet::new(),
+            &Row::new(),
+            &Row::new(),
+            &fixes,
+            &[],
+            &Row::new(),
+        );
+        let segs: Vec<(&str, &str)> = v["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (s["id"].as_str().unwrap(), s["text"].as_str().unwrap()))
+            .collect();
+        assert_eq!(segs[0].0, "a");
+        assert_eq!(segs[1], ("b", "fixed"));
+        assert_eq!(segs.len(), 2);
+        assert_eq!(v["lines"].as_array().unwrap().len(), 3); // the transcript still shows every line
     }
 
     #[test]

@@ -90,9 +90,12 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   live, or stops once done if nothing is recording. Pause is hidden while off: without a transcriber loaded it would
   be the same as Stop. **Low priority** in the same window runs the transcriber at macOS background priority
   (`ozen priority low`), so it gives way to your other apps' CPU, disk and GPU work; the transcript can lag behind.
-- **Timeline view.** Switch the panel to **Timeline** for one lane per speaker (with their total talk time) and a
-  bar for every line they spoke, on a scrollable time axis; **− / +** zoom. Silences over 2 minutes shrink to a
-  short break marker. Hover a bar for what was said; click it to jump to that line in the transcript.
+- **Timeline view.** Switch the panel to **Timeline** for the latest meeting (10 minutes of silence ends one, as in
+  **Meetings**): when it ran and how long, then one lane per speaker with their talk time, share of the talk and a
+  bar comparing it to whoever talked most. Unnamed voices that spoke under a minute, and lines nobody is sure of,
+  share one **Other voices** lane. Every line is a bar showing its words when there's room. The meeting starts fitted
+  to the panel; **− / +** zoom. Silences over 2 minutes shrink to a short break marker. Hover a bar for what was
+  said; click it to jump to that line in the transcript.
 - **Records always, or only meetings.** The **Always / Meetings** toggle in the panel (and right-click menu):
   - *Always*: records until you pause or stop, including the room mic and any audio from meeting apps.
   - *Meetings*: starts by itself when a meeting app (Zoom, Chrome/Meet, Teams, Slack, FaceTime, Discord) is using

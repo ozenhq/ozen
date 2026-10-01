@@ -393,7 +393,6 @@ define_class!(
             let anchor = (clip.bounds().origin.x + clip.bounds().size.width / 2.0) / tl.bounds().size.width.max(1.0); // keep the view centered
             let zoom_in = std::ptr::eq(sender, &*iv.view_buttons.get().unwrap().zoom_in);
             tl.set_px((tl.px() * if zoom_in { 2.0 } else { 0.5 }).clamp(0.25, 32.0));
-            objc2_foundation::NSUserDefaults::standardUserDefaults().setDouble_forKey(tl.px(), ns_string!("pxPerSec"));
             let w = clip.bounds().size.width;
             clip.scrollToPoint(NSPoint::new((anchor * tl.bounds().size.width - w / 2.0).max(0.0), 0.0));
             scroll.reflectScrolledClipView(&clip);
@@ -798,8 +797,6 @@ impl App {
             "Same, plus every other meeting Kev (localhost:8009) judges related"
         )));
         let tl = timeline::TimelineView::new(mtm);
-        let px = defaults.doubleForKey(ns_string!("pxPerSec"));
-        tl.set_px(if px > 0.0 { px } else { 4.0 });
         tl.set_on_select(|id| {
             let id = id.to_string();
             later(0.0, move |app| app.jump(&id));
@@ -1663,6 +1660,8 @@ impl App {
         b.gather.setHidden(!show_meetings);
         b.kev.setHidden(!show_meetings);
         if show_timeline {
+            let tl = iv.timeline.get().unwrap();
+            tl.set_segments(tl.segments()); // fits a meeting that arrived while the timeline had no width
             self.scroll_timeline_to_end();
         }
         if show_meetings {
