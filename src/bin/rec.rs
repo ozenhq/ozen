@@ -759,11 +759,10 @@ fn main() {
                 flag(BLOCKED_FLAG, Some(""));
             }
             retry(cap.start_taps("no system audio for 5s"));
-        } else if cap.rec.age("local") < Duration::from_secs(5) {
+        } else if cap.rec.heard("local") {
+            // only real buffers count as alive: a rebuild touches the tag too, which would reset this every time
             dead_rebuilds = 0;
-            if cap.rec.heard("local") {
-                flag(BLOCKED_FLAG, None);
-            }
+            flag(BLOCKED_FLAG, None);
         }
         if cap.rec.age("mic") > Duration::from_secs(30) {
             retry(cap.start_mic("no mic audio for 30s"));
