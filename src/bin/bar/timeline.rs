@@ -1,24 +1,42 @@
-//! The Timeline view: one lane per speaker, a bar for each line they spoke, on a horizontally scrollable time
-//! axis. Silences longer than GAP_CAP are squeezed to a short break marker so a day of meetings stays scrollable.
+//! The Timeline view of the latest meeting: one lane per speaker with their talk time and share, a bar for each
+//! line they spoke (with its words when it's wide enough), on a horizontally scrollable time axis that starts
+//! fitted to the panel. Silences longer than GAP_CAP are squeezed to a short break marker.
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAttributedStringNSExtendedStringDrawing, NSBezierPath, NSColor, NSCompositingOperation,
-    NSEvent, NSFont, NSFontAttributeName, NSFontWeightRegular, NSForegroundColorAttributeName,
-    NSRectFillUsingOperation, NSStringDrawing, NSStringDrawingOptions, NSView, NSViewToolTipOwner,
+    NSBezierPath, NSColor, NSCompositingOperation, NSEvent, NSFont, NSFontAttributeName,
+    NSFontWeightRegular, NSForegroundColorAttributeName, NSRectFillUsingOperation, NSStringDrawing,
+    NSStringDrawingOptions, NSStringNSExtendedStringDrawing, NSView, NSViewToolTipOwner,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSAttributedString, NSAttributedStringKey, NSDictionary,
-    NSMutableAttributedString, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    MainThreadMarker, NSAttributedStringKey, NSDictionary, NSObjectProtocol, NSPoint, NSRect,
+    NSSize, NSString,
 };
 use std::cell::{Cell, RefCell};
 
-pub const GUTTER: f64 = 112.0;
-const LANE_H: f64 = 28.0;
-const AXIS_H: f64 = 22.0;
+pub const GUTTER: f64 = 168.0;
+const LANE_H: f64 = 36.0;
+const AXIS_H: f64 = 24.0;
 const GAP_CAP: f64 = 120.0;
 const BREAK_W: f64 = 36.0;
+pub const OTHERS: &str = "Other voices"; // one lane for the unnamed voices that barely spoke
+const OWN_LANE: f64 = 60.0; // an unnamed voice gets its own lane after this much talk, in seconds
+
+/// Not a person yet: "?" or a voice the transcriber numbered (S1, S12…).
+fn unnamed(name: &str) -> bool {
+    name == "?"
+        || name.len() > 1 && name.starts_with('S') && name[1..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The lane a speaker's bars go in: their own, else Other voices.
+fn lane_of(lanes: &[String], speaker: &str) -> usize {
+    lanes
+        .iter()
+        .position(|n| n == speaker)
+        .or_else(|| lanes.iter().position(|n| n == OTHERS))
+        .unwrap_or(0)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Segment {
@@ -50,7 +68,17 @@ pub fn layout(segments: &[Segment], px: f64) -> Layout {
         }
     }
     talk.sort_by(|a, b| b.1.total_cmp(&a.1)); // ponytail: Swift sorted a dictionary; ties may order differently
-    let lanes: Vec<String> = talk.into_iter().map(|(n, _)| n).collect();
+    // "?" is nobody in particular: always Other voices
+    let own = |n: &str, t: f64| !unnamed(n) || n != "?" && t >= OWN_LANE;
+    let folded = talk.iter().any(|(n, t)| !own(n, *t));
+    let mut lanes: Vec<String> = talk
+        .into_iter()
+        .filter(|(n, t)| own(n, *t))
+        .map(|(n, _)| n)
+        .collect();
+    if folded {
+        lanes.push(OTHERS.into());
+    }
     let mut l = Layout {
         lanes,
         ..Default::default()
@@ -81,10 +109,10 @@ pub fn layout(segments: &[Segment], px: f64) -> Layout {
             c
         };
         let start = x - (c - s.t) * px; // overlapping speech starts before the cursor
-        let lane = l.lanes.iter().position(|n| *n == s.speaker).unwrap_or(0) as f64;
+        let lane = lane_of(&l.lanes, &s.speaker) as f64;
         let rect = NSRect::new(
             NSPoint::new(start, AXIS_H + lane * LANE_H + 5.0),
-            NSSize::new((s.d * px).max(3.0), LANE_H - 10.0),
+            NSSize::new((s.d * px).max(3.0), LANE_H - 12.0),
         );
         l.bars.push((rect, i));
         let c = if s.t + s.d > c {
@@ -101,9 +129,43 @@ pub fn layout(segments: &[Segment], px: f64) -> Layout {
     l
 }
 
+/// The zoom (pixels per second) that fits `segments` into `width`, breaks and margins included.
+pub fn fit_px(segments: &[Segment], width: f64) -> f64 {
+    let fixed = layout(segments, 0.0).width; // everything that doesn't scale with time
+    let secs = layout(segments, 1.0).width - fixed;
+    if secs <= 0.0 {
+        return 4.0;
+    }
+    ((width - fixed) / secs).clamp(0.25, 32.0)
+}
+
+/// Each lane's talk time in seconds and its share of all talk, in lane order.
+pub fn talk(segments: &[Segment], lanes: &[String]) -> Vec<(f64, f64)> {
+    let all: f64 = segments.iter().map(|s| s.d).sum();
+    let mut out = vec![(0.0, 0.0); lanes.len()];
+    for s in segments {
+        out[lane_of(lanes, &s.speaker)].0 += s.d;
+    }
+    for o in &mut out {
+        o.1 = if all > 0.0 { o.0 / all } else { 0.0 };
+    }
+    out
+}
+
+fn minutes(secs: f64) -> String {
+    let m = (secs / 60.0).round() as i64;
+    if secs < 60.0 {
+        format!("{}s", secs.round() as i64)
+    } else if m < 60 {
+        format!("{m}m")
+    } else {
+        format!("{}h {}m", m / 60, m % 60)
+    }
+}
+
 /// A stable color per speaker name.
 pub fn color(name: &str) -> Retained<NSColor> {
-    if name == "?" {
+    if name == "?" || name == OTHERS {
         return NSColor::tertiaryLabelColor();
     }
     let h = name
@@ -132,6 +194,7 @@ pub struct Ivars {
     px: Cell<f64>,
     layout: RefCell<Layout>,
     on_select: RefCell<Option<OnSelect>>,
+    fitted: RefCell<Option<String>>, // the meeting (its first line's id) the zoom was last fitted to
 }
 
 define_class!(
@@ -197,6 +260,18 @@ fn str_attrs(
     NSDictionary::from_slices(&[kf, kc], &[font as &AnyObject, color as &AnyObject])
 }
 
+/// Draws `text` in `rect`, truncated with … when it doesn't fit.
+type Attrs = NSDictionary<NSAttributedStringKey, AnyObject>;
+
+fn text_in(text: &str, rect: NSRect, attrs: &Attrs) {
+    let o = NSStringDrawingOptions::TruncatesLastVisibleLine
+        | NSStringDrawingOptions::UsesLineFragmentOrigin;
+    // SAFETY: the attributes are AppKit's font and color keys with matching values.
+    unsafe {
+        NSString::from_str(text).drawWithRect_options_attributes_context(rect, o, Some(attrs), None)
+    };
+}
+
 /// Swift's NSRect.fill(): blends with source-over (NSRectFill would copy, ignoring alpha).
 fn fill(r: NSRect) {
     NSRectFillUsingOperation(r, NSCompositingOperation::SourceOver);
@@ -209,6 +284,7 @@ impl TimelineView {
             px: Cell::new(4.0),
             layout: RefCell::new(Layout::default()),
             on_select: RefCell::new(None),
+            fitted: RefCell::new(None),
         });
         // SAFETY: NSView's designated initializer with a zero frame.
         unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
@@ -222,7 +298,15 @@ impl TimelineView {
         self.ivars().segments.borrow().clone()
     }
 
+    /// A new meeting starts fitted to the panel's width; zooming then holds until the next one.
     pub fn set_segments(&self, s: Vec<Segment>) {
+        let first = s.first().map(|g| g.id.clone());
+        // SAFETY: reading our own superview's size.
+        let width = unsafe { self.superview() }.map_or(0.0, |v| v.bounds().size.width);
+        if first.is_some() && *self.ivars().fitted.borrow() != first && width > 200.0 {
+            self.ivars().px.set(fit_px(&s, width));
+            *self.ivars().fitted.borrow_mut() = first;
+        }
         *self.ivars().segments.borrow_mut() = s;
         self.relayout();
     }
@@ -332,6 +416,7 @@ impl TimelineView {
         let small_font =
             NSFont::monospacedDigitSystemFontOfSize_weight(10.0, unsafe { NSFontWeightRegular });
         let small = str_attrs(&small_font, &NSColor::secondaryLabelColor());
+        let on_bar = str_attrs(&NSFont::systemFontOfSize(10.0), &NSColor::whiteColor());
         for (i, _) in l.lanes.iter().enumerate().filter(|(i, _)| i % 2 == 1) {
             // zebra lanes
             NSColor::quaternaryLabelColor()
@@ -361,6 +446,13 @@ impl TimelineView {
                     NSSize::new(1.0, bounds.size.height),
                 ));
                 let label = NSString::from_str(&local(m).format("%H:%M").to_string());
+                if l.breaks
+                    .iter()
+                    .any(|&(bx, _)| (tx - bx).abs() < BREAK_W + 8.0)
+                {
+                    m += step;
+                    continue; // the break's own label is there
+                }
                 unsafe {
                     label.drawAtPoint_withAttributes(NSPoint::new(tx + 3.0, 4.0), Some(&small))
                 };
@@ -391,7 +483,7 @@ impl TimelineView {
         for &(r, i) in l.bars.iter().filter(|(r, _)| intersects(*r, dirty)) {
             let s = &segs[i];
             let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 3.0, 3.0);
-            color(&s.speaker)
+            color(&l.lanes[lane_of(&l.lanes, &s.speaker)])
                 .colorWithAlphaComponent(if s.unsure { 0.45 } else { 0.85 })
                 .setFill();
             path.fill();
@@ -399,6 +491,12 @@ impl TimelineView {
                 NSColor::systemOrangeColor().setStroke();
                 path.setLineWidth(1.5);
                 path.stroke();
+            }
+            if r.size.width > 40.0 {
+                // the words, as many as fit
+                let at = NSPoint::new(r.origin.x + 5.0, r.origin.y + 5.0);
+                let size = NSSize::new(r.size.width - 10.0, 14.0);
+                text_in(s.text.trim(), NSRect::new(at, size), &on_bar);
             }
         }
         // Speaker names stay pinned to the left edge while scrolling horizontally.
@@ -415,40 +513,59 @@ impl TimelineView {
             NSSize::new(1.0, bounds.size.height),
         ));
         let bold = str_attrs(&NSFont::boldSystemFontOfSize(11.0), &NSColor::labelColor());
+        let talk = talk(&segs, &l.lanes);
+        let lead = talk.iter().map(|t| t.1).fold(0.0, f64::max);
         for (i, name) in l.lanes.iter().enumerate() {
             let y = AXIS_H + i as f64 * LANE_H;
+            let (secs, share) = talk[i];
             color(name).setFill();
             NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
-                NSPoint::new(g.origin.x + 8.0, y + LANE_H / 2.0 - 4.0),
+                NSPoint::new(g.origin.x + 8.0, y + 9.0),
                 NSSize::new(8.0, 8.0),
             ))
             .fill();
-            let total: f64 = segs
-                .iter()
-                .filter(|s| s.speaker == *name)
-                .map(|s| s.d)
-                .sum();
-            let label = NSMutableAttributedString::new();
-            let piece = |s: &str, a: &NSDictionary<NSAttributedStringKey, AnyObject>| unsafe {
-                NSAttributedString::initWithString_attributes(
-                    <NSAttributedString as objc2::AnyThread>::alloc(),
-                    &NSString::from_str(s),
-                    Some(a),
+            let row = |text: &str, attrs: &Attrs, x: f64, w: f64, top: f64| {
+                text_in(
+                    text,
+                    NSRect::new(NSPoint::new(x, y + top), NSSize::new(w, 14.0)),
+                    attrs,
                 )
             };
-            label.appendAttributedString(&piece(name, &bold));
-            label.appendAttributedString(&piece(
-                &format!(" {}m{}s", (total / 60.0) as i64, (total as i64) % 60),
-                &small,
-            ));
-            label.drawWithRect_options_context(
-                NSRect::new(
-                    NSPoint::new(g.origin.x + 20.0, y + 6.0),
-                    NSSize::new(GUTTER - 24.0, LANE_H - 8.0),
+            let stats = format!("{} · {}%", minutes(secs), (share * 100.0).round() as i64);
+            row(name, &bold, g.origin.x + 20.0, GUTTER - 82.0, 5.0);
+            row(&stats, &small, g.origin.x + GUTTER - 62.0, 56.0, 6.0);
+            // share of the talk, against whoever talked most
+            NSColor::quaternaryLabelColor().setFill();
+            let track = NSRect::new(
+                NSPoint::new(g.origin.x + 20.0, y + 23.0),
+                NSSize::new(GUTTER - 28.0, 3.0),
+            );
+            fill(track);
+            color(name).setFill();
+            fill(NSRect::new(
+                track.origin,
+                NSSize::new(
+                    track.size.width * if lead > 0.0 { share / lead } else { 0.0 },
+                    3.0,
                 ),
-                NSStringDrawingOptions::UsesLineFragmentOrigin
-                    | NSStringDrawingOptions::TruncatesLastVisibleLine,
-                None,
+            ));
+        }
+        // the meeting: when it ran, how long, how many people, above the names
+        if let (Some(a), Some(b)) = (
+            segs.iter().map(|s| s.t).reduce(f64::min),
+            segs.iter().map(|s| s.t + s.d).reduce(f64::max),
+        ) {
+            let head = format!(
+                "{}–{} · {}",
+                local(a).format("%H:%M"),
+                local(b).format("%H:%M"),
+                minutes(b - a)
+            );
+            let size = NSSize::new(GUTTER - 12.0, 14.0);
+            text_in(
+                &head,
+                NSRect::new(NSPoint::new(g.origin.x + 8.0, 5.0), size),
+                &small,
             );
         }
     }
@@ -495,6 +612,21 @@ mod tests {
             [(100.0, 105.0, x0), (400.0, 410.0, x0 + 20.0 + BREAK_W)]
         );
         assert_eq!(l.bars[1].0.size.width, 8.0);
+        assert_eq!(
+            talk(&segs, &l.lanes),
+            [(12.0, 12.0 / 17.0), (5.0, 5.0 / 17.0)]
+        );
+        let quiet = [
+            seg("a", 0.0, 90.0, "S1"),
+            seg("b", 90.0, 5.0, "S2"),
+            seg("c", 95.0, 70.0, "?"),
+        ];
+        let q = layout(&quiet, 4.0);
+        assert_eq!(q.lanes, ["S1", OTHERS]); // S1 talked a minute and a half: its own lane
+        assert_eq!(q.bars[1].0.origin.y, q.bars[2].0.origin.y); // S2 and ? share Other voices
+        assert_eq!(talk(&quiet, &q.lanes)[1].0, 75.0); // ? talked over a minute and still folds
+        let px = fit_px(&segs, 600.0);
+        assert!((layout(&segs, px).width - 600.0).abs() < 1e-6); // fitted: exactly the width
         assert_eq!(
             layout(&[seg("x", 1.0, 0.1, "S1")], 4.0).bars[0]
                 .0

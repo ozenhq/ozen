@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-const GAP: f64 = 600.0; // this much silence ends a meeting
+pub const GAP: f64 = 600.0; // this much silence ends a meeting
 const KEV: &str = "http://127.0.0.1:8009/v1/systemone"; // local Kev (System One API), see ~/dev/kev; OZEN_KEV overrides
 const EXCERPT: usize = 1500; // chars of each candidate meeting Kev reads: its start and end
 const PICKED_BUDGET: usize = 4000; // chars of the picked meetings shared by every question, split between them
