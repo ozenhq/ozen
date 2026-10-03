@@ -110,13 +110,21 @@ mod tests {
                 .spawn()
                 .unwrap()
         };
-        // cwd of the test process is shared across threads, so "ours" is the test's own working directory
+        // "ours" is the process's working directory, shared by every test thread: hold it still
+        let _cwd = crate::CWD.lock().unwrap();
         let (mut mine, mut theirs) = (sleep(&here()), sleep(&other));
         signal(Signal::Term, "^sleep 4343$");
-        let killed = mine.wait().unwrap();
+        let mut killed = None;
+        for _ in 0..50 {
+            killed = mine.try_wait().unwrap();
+            if killed.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let alive = theirs.try_wait().unwrap().is_none();
-        let _ = (theirs.kill(), theirs.wait());
-        assert!(!killed.success() && alive);
+        let _ = (mine.kill(), mine.wait(), theirs.kill(), theirs.wait());
+        assert!(killed.is_some_and(|s| !s.success()) && alive);
         let _ = fs::remove_dir(&other);
     }
 }
