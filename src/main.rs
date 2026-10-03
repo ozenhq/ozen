@@ -921,19 +921,7 @@ fn main() {
             retrain();
         }
         "retrain" => retrain(),
-        "merge" => match std::env::args().nth(2) {
-            Some(dir) => match merge::merge_from(&cwd.join(dir).to_string_lossy()) {
-                Ok(s) => println!("{s}"),
-                Err(e) => {
-                    eprintln!("{e}");
-                    exit(1);
-                }
-            },
-            None => {
-                println!("{USAGE}");
-                exit(2);
-            }
-        },
+        "merge" => merge::cli(&cwd, USAGE),
         // The meeting app using the microphone now: {"app": "Zoom"} or {"app": null}. Meetings mode polls it.
         "mic" => println!("{}", serde_json::json!({"app": mic::meeting_app()})),
         "voices" => println!("{}", serde_json::Value::from(voices::list())),

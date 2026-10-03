@@ -78,3 +78,15 @@ pub fn merge_from(dir: &str) -> Result<String, String> {
     crate::retrain();
     Ok(format!("merged: {} lines, {} places", lines.len(), p.len()))
 }
+
+/// `ozen merge DIR` (DIR relative to where it was called from): prints the result, or exits 1.
+pub fn cli(cwd: &std::path::Path, usage: &str) {
+    let out = std::env::args().nth(2).ok_or(usage.to_string());
+    match out.and_then(|d| merge_from(&cwd.join(d).to_string_lossy())) {
+        Ok(s) => println!("{s}"),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}

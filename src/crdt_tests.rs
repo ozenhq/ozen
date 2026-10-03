@@ -1,0 +1,107 @@
+use super::*;
+use proptest::prelude::*;
+
+fn row(v: Value) -> Row {
+    v.as_object().unwrap().clone()
+}
+
+#[test]
+fn old_files_load_as_they_are() {
+    let tags = row(json!({"a": "Dana", "b": {"v": 5, "val": "Noa"}, "c": {"v": 6}}));
+    assert_eq!(live_map(&tags), row(json!({"a": "Dana", "b": "Noa"})));
+    let places = [
+        row(json!({"label": "Home", "action": "off"})),
+        row(json!({"label": "Work", "action": "record"})),
+    ];
+    let live = live_rows(&places);
+    assert_eq!(live[0]["id"], "0000-Home");
+    assert_eq!(live[1]["id"], "0001-Work");
+    // saving unchanged rows changes nothing but adding the ids
+    assert_eq!(live_rows(&edit_rows(&places, &live)), live);
+    // older builds read places.json as [{action, label, ...}]: a deleted place must still parse
+    let gone = edit_rows(&places, &live[..1]);
+    assert!(
+        gone.iter()
+            .all(|p| p["label"].is_string() && p["action"].is_string())
+    );
+}
+
+#[test]
+fn editing_a_map_versions_only_what_changed() {
+    let raw = row(json!({"a": "Dana", "b": "Noa"}));
+    let out = edit_map(raw, &row(json!({"a": "Dana", "c": "Tal"})));
+    assert_eq!(out["a"], "Dana");
+    assert!(out["b"]["v"].as_u64().unwrap() > 0 && out["b"].get("val").is_none());
+    assert_eq!(out["c"]["val"], "Tal");
+    assert_eq!(live_map(&out), row(json!({"a": "Dana", "c": "Tal"})));
+}
+
+#[test]
+fn a_later_edit_wins_and_a_delete_stays_deleted() {
+    let base = row(json!({"a": "Dana"}));
+    let mine = edit_map(base.clone(), &row(json!({"a": "Noa"})));
+    let theirs = edit_map(base.clone(), &Row::new());
+    // both newer than the old value, either order gives the same result
+    assert_eq!(merge_maps(&mine, &base), mine);
+    assert_eq!(merge_maps(&base, &theirs), theirs);
+    assert_eq!(merge_maps(&mine, &theirs), merge_maps(&theirs, &mine));
+
+    let lines = [row(json!({"id": "1-mic-0", "t": 1.0, "text": "hi"}))];
+    let deleted = edit_rows(&lines, &[]);
+    assert_eq!(merge_rows(&lines, &deleted), merge_rows(&deleted, &lines));
+    assert!(live_rows(&merge_rows(&lines, &deleted)).is_empty());
+}
+
+#[test]
+fn ids_minted_here_name_this_mac() {
+    assert_eq!(device().len(), 8);
+    assert!(mint("1-mic-0").starts_with("1-mic-0@"));
+}
+
+#[test]
+fn a_version_is_past_the_last_one_even_if_the_clock_went_back() {
+    let future = json!({"v": u64::MAX / 2});
+    assert_eq!(stamp(Some(&future)), u64::MAX / 2 + 1);
+}
+
+fn entry() -> impl Strategy<Value = Value> {
+    prop_oneof![
+        "[ab]".prop_map(Value::from),
+        (0u64..4, "[ab]").prop_map(|(v, s)| json!({"v": v, "val": s})),
+        (0u64..4).prop_map(|v| json!({"v": v})),
+    ]
+}
+
+fn map() -> impl Strategy<Value = Row> {
+    prop::collection::btree_map("[xyz]", entry(), 0..4).prop_map(|m| m.into_iter().collect())
+}
+
+fn rows() -> impl Strategy<Value = Vec<Row>> {
+    prop::collection::vec(
+        ("[xyz]", 0u64..4, any::<bool>(), "[ab]").prop_map(|(id, v, del, text)| {
+            row(if del {
+                json!({"id": id, "v": v, "del": true})
+            } else {
+                json!({"id": id, "v": v, "text": text})
+            })
+        }),
+        0..4,
+    )
+    .prop_map(|rs| merge_rows(&rs, &[])) // one row per id, as a file has
+}
+
+proptest! {
+    #[test]
+    fn maps_merge_as_a_crdt(a in map(), b in map(), c in map()) {
+        prop_assert_eq!(merge_maps(&a, &b), merge_maps(&b, &a));
+        prop_assert_eq!(merge_maps(&merge_maps(&a, &b), &c), merge_maps(&a, &merge_maps(&b, &c)));
+        prop_assert_eq!(merge_maps(&a, &a), a);
+    }
+
+    #[test]
+    fn rows_merge_as_a_crdt(a in rows(), b in rows(), c in rows()) {
+        prop_assert_eq!(merge_rows(&a, &b), merge_rows(&b, &a));
+        prop_assert_eq!(merge_rows(&merge_rows(&a, &b), &c), merge_rows(&a, &merge_rows(&b, &c)));
+        prop_assert_eq!(merge_rows(&a, &a), a);
+    }
+}
