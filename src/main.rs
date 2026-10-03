@@ -91,7 +91,7 @@ ozen control: start | pause | resume | stop | record | process | priority | stat
   dmg APP OUT   pack APP (a built Ozen.app) into the release DMG at OUT
   mcp           MCP server on stdio: agents read and edit meetings, lines, speakers, places and vocab";
 
-const REC_BUILT: &str = "target/release/rec"; // src/bin/rec.rs, built by cargo alongside this CLI
+const REC_BUILT: &str = "target/release/rec"; // src/bin/rec/main.rs, built by cargo alongside this CLI
 const LOCATE_BUILT: &str = "target/release/locate"; // src/bin/locate.rs
 const LOCATE_BIN: &str = "target/locator/locate";
 const LOCATE: &str = r"^target/locator/locate watch"; // the watcher `place` keeps running
