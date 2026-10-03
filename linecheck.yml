@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/tupe12334/linecheck/main/schema/linecheck.schema.json
+
+# Per-file line limits, enforced in CI. Default: warn 200, error 400. First matching rule wins.
+rules:
+  # Baseline: files already over 400 lines when linecheck was adopted, capped at that size rounded up to the next
+  # 50 so they can't keep growing. Lower a cap (or delete the entry) as the file gets split.
+  - pattern: "src/bin/bar/main.rs"
+    warn: 200
+    error: 2100
+  - pattern: "src/bin/bar/timebar.rs"
+    warn: 200
+    error: 1350
+  - pattern: "src/main.rs"
+    warn: 200
+    error: 1200
+  - pattern: "src/whisper.rs"
+    warn: 200
+    error: 900
+  - pattern: "src/mcp.rs"
+    warn: 200
+    error: 850
+  - pattern: "src/transcribe.rs"
+    warn: 200
+    error: 800
+  - pattern: "src/bin/bar/timeline.rs"
+    warn: 200
+    error: 650
+  - pattern: "src/train.rs"
+    warn: 200
+    error: 600
+  - pattern: "src/bin/bar/places.rs"
+    warn: 200
+    error: 600
+  - pattern: "src/panel.rs"
+    warn: 200
+    error: 600
+  - pattern: "src/separate.rs"
+    warn: 200
+    error: 550
+  - pattern: "src/eval.rs"
+    warn: 200
+    error: 550
+  - pattern: "src/meetings.rs"
+    warn: 200
+    error: 550
+  - pattern: "src/bin/rec.rs"
+    warn: 200
+    error: 550
+  - pattern: "src/eval_overlap.rs"
+    warn: 200
+    error: 550
+  - pattern: "src/bin/bar/map.rs"
+    warn: 200
+    error: 500
+  - pattern: "src/bin/bar/voices.rs"
+    warn: 200
+    error: 450
+  - pattern: "src/dmg.rs"
+    warn: 200
+    error: 450
+
+  - pattern: "**/*.rs"
+    warn: 200
+    error: 400
+    error_message: "Split this file by responsibility before merging"
+  - pattern: "**/*.sh"
+    warn: 200
+    error: 400
+    error_message: "Split this file by responsibility before merging"
+
+exclude:
+  - "target/**"
+  - "eval/**"
+  - "Cargo.lock"
+  - "**/*.md"
+  - "**/*.json"
+  - "**/*.jsonl"
+  - "**/*.snap"
+  - "**/*.txt"
+  - "**/*.toml"
+  - "**/*.plist"

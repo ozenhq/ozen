@@ -44,3 +44,16 @@ jobs:
       - run: cargo clippy --release --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --release
+  linecheck:
+    # Per-file line limits from linecheck.yml; Linux, billed 1x, needs no macOS toolchain.
+    needs: changed
+    if: needs.changed.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/linecheck
+          key: ${{ runner.os }}-linecheck-1.2.1
+      - run: command -v linecheck || cargo install linecheck --version 1.2.1 --locked
+      - run: linecheck .
