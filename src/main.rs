@@ -3,6 +3,7 @@ mod compare;
 mod dmg;
 mod ecapa;
 mod eval;
+mod eval_overlap;
 mod fixes;
 mod icon;
 mod ignore;
@@ -44,6 +45,8 @@ ozen control: start | pause | resume | stop | record | process | priority | stat
   look [N]      screenshot to screen-small.png and print the last N transcript lines (default 40)
   eval [--vocab 0,10,30,60] [--repeat 0,1,2,3] [--real] [--fresh]
                 score learning settings on a fixed set of spoken lines (see src/eval.rs)
+  eval-overlap [ami] [he] [call] [--n 20]
+                score separating people talking at once on real speech (see src/eval_overlap.rs)
   compare [N]   transcribe the last N chunks with speech in recent/ (default 6) with stock Whisper, the
                 Hebrew model and Hebrew + vocab.txt, to judge a model or prompt change on your own speech
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
@@ -780,6 +783,13 @@ fn main() {
                 exit(1);
             }
         }
+        "eval-overlap" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if let Err(e) = eval_overlap::run(&args) {
+                eprintln!("{e}");
+                exit(1);
+            }
+        }
         "compare" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             if let Err(e) = compare::run(&args) {
@@ -1019,14 +1029,6 @@ fn main() {
             }
             retrain();
         }
-        // Whisper (src/whisper.rs) for asr.py, fed audio on stdin.
-        "whisper" => {
-            if let Err(e) = whisper::serve() {
-                eprintln!("{e}");
-                exit(1);
-            }
-        }
-        // The transcriber's voiceprint encoder (src/ecapa.rs), fed audio on stdin.
         "transcribe" => {
             // One transcriber per checkout, whoever starts it (start, process, the app's status poll): a second one
             // would load the models twice and could transcribe a chunk twice. macOS drops the lock when this exits.
@@ -1037,18 +1039,6 @@ fn main() {
             }
             let arg = |i| std::env::args().nth(i).unwrap_or_default();
             if let Err(e) = transcribe::run(Path::new(&arg(2)), Path::new(&arg(3))) {
-                eprintln!("{e}");
-                exit(1);
-            }
-        }
-        "separate" => {
-            if let Err(e) = separate::serve() {
-                eprintln!("{e}");
-                exit(1);
-            }
-        }
-        "embed" => {
-            if let Err(e) = ecapa::serve() {
                 eprintln!("{e}");
                 exit(1);
             }
@@ -1065,9 +1055,6 @@ fn main() {
                 exit(1);
             }
             println!("installed {app}");
-            if !ok(cmd("uv").args(["sync", "-q"])) {
-                eprintln!("uv sync failed: the transcriber will set up its env on first start");
-            }
             drop_script_envs();
         }
         "dmg" => {

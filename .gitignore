@@ -46,8 +46,6 @@ eval/cache.jsonl
 eval/report.json
 eval/data/
 
-# python env (uv run syncs it from uv.lock)
-.venv/
 
 # per-chunk processing log for the Timebar
 pace.jsonl

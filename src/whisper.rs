@@ -6,19 +6,14 @@
 //! the non-speech token suppression, an initial prompt, no conditioning on previous windows. mlx_whisper's own
 //! quirks are kept where they change output (its "timestamps must not decrease" rule compares positions, not
 //! timestamps, so it never fires).
-//!
-//! `ozen whisper` serves `decode` to asr.py: after a READY line, each request is one JSON line
-//! `{"n": samples, "prompt": "...", "lang": "he", "model": null | "stock" | "hebrew"}` followed by n little-endian
-//! f32 samples (16 kHz mono); each reply is one JSON line `{"text", "lang", "raw"}` (see `decode`).
 use base64::Engine;
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const READY: &[u8] = b"ozen whisper 1\n";
 const DIR: &str = "models/whisper";
 const STOCK: &str = "mlx-community/whisper-large-v3-turbo"; // English + language detection
 const HEBREW: &str = "mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx"; // conversational Hebrew
@@ -841,40 +836,6 @@ impl Whisper {
             .to_string();
         Ok((text, lang, raw))
     }
-}
-
-/// `ozen whisper`: answer decode requests on stdin until it closes.
-pub fn serve() -> std::result::Result<(), String> {
-    let w = Whisper::load()?;
-    let (mut inp, mut out) = (std::io::stdin().lock(), std::io::stdout().lock());
-    out.write_all(READY)
-        .and_then(|_| out.flush())
-        .map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    while inp.read_line(&mut line).map_err(|e| e.to_string())? > 0 {
-        let q: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-        line.clear();
-        let mut buf = vec![0u8; q["n"].as_u64().unwrap_or(0) as usize * 4];
-        inp.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        let clip: Vec<f32> = buf
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect();
-        let (text, lang, raw) = w
-            .decode(
-                &clip,
-                q["prompt"].as_str().unwrap_or(""),
-                q["lang"].as_str().unwrap_or("he"),
-                q["model"].as_str(),
-            )
-            .map_err(|e| e.to_string())?;
-        writeln!(out, "{}", json!({"text": text, "lang": lang, "raw": raw}))
-            .and_then(|_| out.flush())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

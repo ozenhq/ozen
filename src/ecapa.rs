@@ -4,20 +4,14 @@
 //! step for step, on the same weights: Fbank features (speechbrain.lobes.features.Fbank, 80 mels), sentence
 //! mean normalization, then the network (speechbrain.lobes.models.ECAPA_TDNN), including its quirks (reflect
 //! padding, a filterbank whose triangles are one band wide on each side).
-//!
-//! `ozen embed` serves it to the Python transcriber: after a READY line, each request on stdin is a little-endian u32 sample
-//! count and that many f32 samples (16 kHz mono); each reply on stdout is the 192 f32 print (not unit length).
 use candle_core::{D, DType, Device, Result, Tensor};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
 
 const DIR: &str = "models/ecapa"; // shared with speechbrain's savedir
 const WEIGHTS: &str = "embedding_model.ckpt";
 const URL: &str = "https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/embedding_model.ckpt";
-/// First line `ozen embed` writes, so a caller can tell it from a binary that predates it (which prints usage).
-const READY: &[u8] = b"ozen embed 1\n";
 const SR: f32 = 16000.0;
 const N_FFT: usize = 400; // 25 ms
 const HOP: usize = 160; // 10 ms
@@ -242,48 +236,8 @@ impl Ecapa {
     }
 }
 
-/// `ozen embed`: answer print requests on stdin until it closes.
-pub fn serve() -> std::result::Result<(), String> {
-    let enc = Ecapa::load()?;
-    let (mut inp, mut out) = (std::io::stdin().lock(), std::io::stdout().lock());
-    out.write_all(READY)
-        .and_then(|_| out.flush())
-        .map_err(|e| e.to_string())?;
-    let mut n = [0u8; 4];
-    while inp.read_exact(&mut n).is_ok() {
-        let mut buf = vec![0u8; u32::from_le_bytes(n) as usize * 4];
-        inp.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        let wav = floats(&buf);
-        let e = enc.embed(&wav).map_err(|e| e.to_string())?;
-        let bytes: Vec<u8> = e.iter().flat_map(|v| v.to_le_bytes()).collect();
-        out.write_all(&bytes)
-            .and_then(|_| out.flush())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Little-endian f32 samples from the worker's byte stream (a trailing partial sample is ignored).
-fn floats(buf: &[u8]) -> Vec<f32> {
-    buf.as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| f32::from_le_bytes(*b))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn floats_from_little_endian_bytes() {
-        let bytes: Vec<u8> = [1.5f32, -0.25, 0.0]
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .chain([7u8])
-            .collect();
-        assert_eq!(super::floats(&bytes), [1.5, -0.25, 0.0]);
-    }
-
     use super::*;
 
     #[test]

@@ -10,16 +10,16 @@
 //! learning break normal speech) and quiet noise (did hint words get invented).
 //!
 //! Cases: eval/cases.jsonl, spoken by macOS's Hebrew voice into eval/audio/, or with --real your own fixes
-//! (fixes/dataset.jsonl, split in half by a hash of each line). Whisper runs through asr.py, the code the live
-//! transcriber uses, seeded per clip; results are cached in eval/cache.jsonl by audio, prompt and asr.py,
+//! (fixes/dataset.jsonl, split in half by a hash of each line). Whisper runs with the live transcriber's decode and
+//! filters, seeded per clip; results are cached in eval/cache.jsonl by audio, prompt and that code,
 //! so reruns are identical and a sweep only transcribes what it hasn't seen. --fresh ignores the cache.
 use crate::fixes::{LEARN, Learn, WORD, rules};
+use crate::text;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 #[derive(PartialEq)]
 enum Kind {
@@ -39,13 +39,13 @@ struct Case {
 }
 
 /// FNV-1a: a stable hash (std's may change between Rust versions), for cache keys and the --real split.
-fn fnv(bytes: &[u8], mut h: u64) -> u64 {
+pub fn fnv(bytes: &[u8], mut h: u64) -> u64 {
     for b in bytes {
         h = (h ^ *b as u64).wrapping_mul(0x100000001b3);
     }
     h
 }
-const FNV0: u64 = 0xcbf29ce484222325;
+pub const FNV0: u64 = 0xcbf29ce484222325;
 
 fn tokens(s: &str) -> Vec<String> {
     WORD.find_iter(&s.to_lowercase())
@@ -143,34 +143,53 @@ fn real() -> Result<Vec<Case>, String> {
         .collect())
 }
 
-/// Runs asr.py once over all rows (one model load), in order.
+/// Whisper over all rows (one model load), in order: the live transcriber's decode and filters. A row is
+/// {"audio": path, "start": s, "duration": s, "words": [hint words], "replace": {wrong: right}, "lang": "he",
+/// "model": "stock" | "hebrew" (optional: that model in `lang`, no language detection; `ozen compare`)};
+/// its reply {"heard": Whisper's text, "text": after replace, "lang": language used, "raw": before any filter
+/// (only with "model")}. Whisper samples its temperature fallback with a fixed seed per clip, so the reply depends
+/// only on the row.
 pub(crate) fn worker(rows: &[Value]) -> Result<Vec<Value>, String> {
     if rows.is_empty() {
         return Ok(vec![]);
     }
-    let mut child = crate::cmd("uv")
-        .args(["run", "-q", "asr.py"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("uv: {e}"))?;
-    let input: String = rows.iter().map(|r| r.to_string() + "\n").collect();
-    let mut stdin = child.stdin.take().unwrap();
-    let feeder = std::thread::spawn(move || stdin.write_all(input.as_bytes())); // no pipe deadlock on big batches
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let _ = feeder.join();
-    let replies: Vec<Value> = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
-    if !out.status.success() || replies.len() != rows.len() {
-        return Err(format!(
-            "asr.py answered {} of {} clips",
-            replies.len(),
-            rows.len()
-        ));
+    let whisper = crate::whisper::Whisper::load()?;
+    let mut out = vec![];
+    for q in rows {
+        let audio =
+            crate::transcribe::load_audio(Path::new(q["audio"].as_str().unwrap_or_default()))?;
+        let at = |k: &str| (q[k].as_f64().unwrap_or(0.0) * crate::overlap::SR as f64) as usize;
+        let s = at("start").min(audio.len());
+        let e = if q["duration"].as_f64().is_some_and(|d| d > 0.0) {
+            (s + at("duration")).min(audio.len())
+        } else {
+            audio.len()
+        };
+        let words: Vec<String> = q["words"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|w| Some(w.as_str()?.to_string()))
+            .collect();
+        let model = q["model"].as_str();
+        let (text, lang, raw) = whisper
+            .decode(
+                &audio[s..e],
+                &text::prompt(&words, ""),
+                q["lang"].as_str().unwrap_or("he"),
+                model,
+            )
+            .map_err(|e| e.to_string())?;
+        let heard = text::kept(&text, &words);
+        let replace = q["replace"].as_object().cloned().unwrap_or_default();
+        let mut reply =
+            json!({"text": text::corrected(&heard, &replace), "heard": heard, "lang": lang});
+        if model.is_some() {
+            reply["raw"] = json!(raw);
+        }
+        out.push(reply);
     }
-    Ok(replies)
+    Ok(out)
 }
 
 struct Whisper {
@@ -182,7 +201,11 @@ struct Whisper {
 
 impl Whisper {
     fn new(fresh: bool) -> Result<Self, String> {
-        let salt = fnv(&fs::read("asr.py").map_err(|e| e.to_string())?, FNV0); // a decode change invalidates the cache
+        // a decode or filter change invalidates the cache
+        let salt = fnv(
+            concat!(include_str!("whisper.rs"), include_str!("text.rs")).as_bytes(),
+            FNV0,
+        );
         let cache = if fresh {
             HashMap::new()
         } else {
