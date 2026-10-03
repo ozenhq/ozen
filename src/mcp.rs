@@ -24,8 +24,8 @@ const LABELS: &str = "labels.json";
 const FIXES: &str = "fixes.json";
 const JUNK: &str = "junk.json"; // ids of old Whisper echoes (src/text.rs flags them when the transcriber starts); the panel hides them
 const STATS: &str = "stats.json";
-const VOCAB: &str = "vocab.json"; // word -> true, a synced map (src/crdt.rs)
-const VOCAB_TXT: &str = "vocab.txt"; // before vocab.json: words one per line or comma separated; moved on the next save
+pub(crate) const VOCAB: &str = "vocab.json"; // word -> true, a synced map (src/crdt.rs)
+pub(crate) const VOCAB_TXT: &str = "vocab.txt"; // before vocab.json: words one per line or comma separated; moved on the next save
 const APP_ID: &str = "com.tupe12334.ozen"; // Ozen.app's defaults domain, where the menu bar keeps the record mode
 
 type Row = Map<String, Value>;
@@ -81,7 +81,7 @@ enum Edit {
 
 /// lines.jsonl open for appending and locked. `rewrite` swaps in a new file while holding the old one's
 /// lock, so a lock won on a swapped-out file is retried on the current one (src/transcribe.rs does the same).
-fn locked() -> Result<File, String> {
+pub(crate) fn locked() -> Result<File, String> {
     loop {
         let f = OpenOptions::new()
             .create(true)
@@ -118,68 +118,6 @@ fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
     let tmp = format!("{LINES}.tmp");
     fs::write(&tmp, out).map_err(err)?;
     fs::rename(&tmp, LINES).map_err(err) // the old file's lock is released when f drops, after the swap
-}
-
-/// `ozen merge DIR`: merge another ozen folder's synced data into this one (src/crdt.rs lists what's
-/// synced), then relearn and retrain from the result like after any fix or tag.
-pub(crate) fn merge_from(dir: &str) -> Reply {
-    use crate::crdt::{merge_maps, merge_rows, parse_jsonl};
-    if !std::path::Path::new(dir).is_dir() {
-        return Err(format!("no folder {dir}"));
-    }
-    let raw = |f: &str| -> Row {
-        serde_json::from_slice(&fs::read(f).unwrap_or_default()).unwrap_or_default()
-    };
-    let vocab_raw = |d: &str| -> Row {
-        if fs::metadata(format!("{d}{VOCAB}")).is_ok() {
-            return raw(&format!("{d}{VOCAB}"));
-        }
-        let words = fs::read_to_string(format!("{d}{VOCAB_TXT}")).unwrap_or_default();
-        words
-            .split([',', '\n'])
-            .map(str::trim)
-            .filter(|w| !w.is_empty())
-            .map(|w| (w.into(), json!(true)))
-            .collect()
-    };
-    let theirs = format!("{}/", dir.trim_end_matches('/'));
-    for f in [TAGS, FIXES] {
-        let m = merge_maps(&raw(f), &raw(&format!("{theirs}{f}")));
-        fs::write(f, serde_json::to_string_pretty(&m).map_err(err)? + "\n").map_err(err)?;
-    }
-    let v = merge_maps(&vocab_raw(""), &vocab_raw(&theirs));
-    fs::write(VOCAB, serde_json::to_string_pretty(&v).map_err(err)? + "\n").map_err(err)?;
-    let _ = fs::remove_file(VOCAB_TXT);
-    let rows = |f: &str| -> Vec<Row> {
-        serde_json::from_slice(&fs::read(f).unwrap_or_default()).unwrap_or_default()
-    };
-    let p = merge_rows(
-        &rows(places::FILE),
-        &rows(&format!("{theirs}{}", places::FILE)),
-    );
-    fs::write(
-        places::FILE,
-        serde_json::to_string_pretty(&p).map_err(err)? + "\n",
-    )
-    .map_err(err)?;
-
-    let other = parse_jsonl(&fs::read_to_string(format!("{theirs}{LINES}")).unwrap_or_default());
-    let mut f = locked()?; // the transcriber appends under this lock: none of its lines is lost
-    let mut text = String::new();
-    f.read_to_string(&mut text).map_err(err)?;
-    let lines = merge_rows(&parse_jsonl(&text), &other);
-    let out: String = lines
-        .iter()
-        .map(|r| Value::Object(r.clone()).to_string() + "\n")
-        .collect();
-    let tmp = format!("{LINES}.tmp");
-    fs::write(&tmp, out).map_err(err)?;
-    fs::rename(&tmp, LINES).map_err(err)?;
-    drop(f);
-
-    crate::fixes::relearn()?;
-    retrain()?;
-    Ok(format!("merged: {} lines, {} places", lines.len(), p.len()))
 }
 
 fn append(r: Row) -> Result<(), String> {

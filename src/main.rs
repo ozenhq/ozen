@@ -11,6 +11,7 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod merge;
 mod mic;
 mod overlap;
 mod panel;
@@ -921,7 +922,7 @@ fn main() {
         }
         "retrain" => retrain(),
         "merge" => match std::env::args().nth(2) {
-            Some(dir) => match mcp::merge_from(&cwd.join(dir).to_string_lossy()) {
+            Some(dir) => match merge::merge_from(&cwd.join(dir).to_string_lossy()) {
                 Ok(s) => println!("{s}"),
                 Err(e) => {
                     eprintln!("{e}");
