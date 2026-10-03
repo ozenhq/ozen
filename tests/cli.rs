@@ -155,3 +155,78 @@ fn timebar_reports_done_skipped_and_waiting_chunks() {
     out.as_object_mut().unwrap().remove("now");
     insta::assert_json_snapshot!("timebar", out);
 }
+
+#[test]
+fn merging_two_macs_folders_either_way_gives_the_same_data() {
+    let line =
+        |id: &str, t: f64, text: &str| json!({"id": id, "t": t, "text": text, "e": [1.0, 0.0]});
+    // a Mac on files from before versions
+    let old = folder(&[
+        (
+            "lines.jsonl",
+            lines(&[line("1-mic-0", 1.0, "hi"), line("2-mic-0", 2.0, "yo")]),
+        ),
+        ("tags.json", json!({"1-mic-0": "Dana"}).to_string()),
+        ("vocab.txt", "Kev, PR\n".into()),
+        (
+            "places.json",
+            json!([{"label": "Home", "action": "off"}]).to_string(),
+        ),
+    ]);
+    // a Mac that since retagged line 1, deleted line 2, heard line 3 and added a place
+    let new = folder(&[
+        (
+            "lines.jsonl",
+            lines(&[
+                line("1-mic-0", 1.0, "hi"),
+                json!({"id": "2-mic-0", "v": 5, "del": true}),
+                line("3-mic-0@b", 3.0, "new"),
+            ]),
+        ),
+        ("tags.json", json!({"1-mic-0": {"v": 5, "val": "Noa"}}).to_string()),
+        ("vocab.json", json!({"Claude": {"v": 5, "val": true}}).to_string()),
+        (
+            "places.json",
+            json!([{"label": "Home", "action": "off"}, {"id": "9@b", "v": 5, "label": "Work", "action": "record"}])
+                .to_string(),
+        ),
+    ]);
+    let merge = |into: &TempDir, from: &TempDir| {
+        Command::cargo_bin("ozen")
+            .unwrap()
+            .env("OZEN_DIR", into.path())
+            .args(["merge", from.path().to_str().unwrap()])
+            .assert()
+            .success();
+    };
+    merge(&old, &new);
+    merge(&new, &old);
+    let files = ["lines.jsonl", "tags.json", "vocab.json", "places.json"];
+    let read = |d: &TempDir| files.map(|f| fs::read_to_string(d.path().join(f)).unwrap());
+    assert_eq!(read(&old), read(&new));
+    merge(&old, &new); // again: nothing changes
+    assert_eq!(read(&old), read(&new));
+
+    let shown = ozen(&old, &["transcript"]).to_string(); // the panel: the deleted line is gone
+    assert!(shown.contains("3-mic-0@b") && !shown.contains("2-mic-0"));
+    let tags: Value = serde_json::from_str(&read(&old)[1]).unwrap();
+    assert_eq!(tags["1-mic-0"]["val"], "Noa");
+    assert!(!old.path().join("vocab.txt").exists());
+    let vocab: Value = serde_json::from_str(&read(&old)[2]).unwrap();
+    assert_eq!(
+        vocab.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["Claude", "Kev", "PR"]
+    );
+    let lines_now = &read(&old)[0];
+    assert!(lines_now.contains("3-mic-0@b") && lines_now.contains(r#""del":true"#));
+    let places: Value = serde_json::from_str(&read(&old)[3]).unwrap();
+    assert_eq!(
+        places
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["label"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["Home", "Work"]
+    );
+}

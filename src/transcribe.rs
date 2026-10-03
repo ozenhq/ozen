@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-const VOCAB: &str = "vocab.txt"; // names/terms Whisper should spell right (Kev, PR, ...); one per line or comma-separated
 const LEARNED: &str = "learned.json"; // from your transcript fixes (ozen fix): words to hint, corrections to apply
 const ECHO_OVERLAP: f64 = 0.6; // mic turn mostly overlapping speaker output = echo, not a person in the room
 const ECHO_PAD: f64 = 0.3; // seconds; slack for capture-latency differences between streams
@@ -83,15 +82,11 @@ fn learned() -> Learned {
 }
 
 /// The vocabulary + words from your fixes, given to Whisper so it spells them. Not the known people's names: on
-/// room noise Whisper read them back as lines ("אורן דן, בן נחושתן, תודה רבה."); add a name to vocab.txt if it
+/// room noise Whisper read them back as lines ("אורן דן, בן נחושתן, תודה רבה."); add a name to the vocabulary if it
 /// keeps coming out wrong.
 fn hint_words() -> Vec<String> {
-    let vocab = fs::read_to_string(VOCAB).unwrap_or_default();
-    vocab
-        .split([',', '\n'])
-        .map(str::trim)
-        .filter(|w| !w.is_empty())
-        .map(String::from)
+    crate::mcp::vocab()
+        .into_iter()
         .chain(learned().vocab)
         .collect()
 }
@@ -561,7 +556,7 @@ impl Transcriber {
             println!("{line}");
             let e = unit(&esum);
             let mut rec = json!({
-                "id": format!("{ms}-{tag}-{i}"), "t": round(t_chunk + start, 2), "d": round(end - start, 2),
+                "id": crate::crdt::mint(&format!("{ms}-{tag}-{i}")), "t": round(t_chunk + start, 2), "d": round(end - start, 2),
                 "src": source(tag), "run": self.run, "spk": spk, "text": text,
                 "e": e.iter().map(|x| (x * 1e5).round() / 1e5).collect::<Vec<f32>>(),
             });

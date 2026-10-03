@@ -18,7 +18,7 @@ const FIX_AUDIO: &str = "fixes";
 /// How fixes turn into what the transcriber uses. `ozen eval` sweeps these to find the best values.
 #[derive(Clone, Copy, Debug)]
 pub struct Learn {
-    pub vocab: usize, // most learned hint words; Whisper's prompt is ~220 tokens, shared with vocab.txt and the previous line
+    pub vocab: usize, // most learned hint words; Whisper's prompt is ~220 tokens, shared with the vocabulary and the previous line
     pub repeat: usize, // the same correction this many times becomes an automatic replacement (0: never)
 }
 pub const LEARN: Learn = Learn {
@@ -128,7 +128,7 @@ pub fn fix(id: &str, text: &str) -> Result<(), String> {
         .iter()
         .find(|r| str_of(r, "id") == id)
         .ok_or(format!("no line {id}"))?;
-    let mut fixes = read(FIXES);
+    let mut fixes = crate::crdt::read_map(FIXES);
     if !text.is_empty() && text != str_of(line, "text") {
         fixes.insert(id.into(), json!(text));
         // recent/ rotates: keep the audio while it's still there
@@ -145,8 +145,14 @@ pub fn fix(id: &str, text: &str) -> Result<(), String> {
     } else {
         fixes.remove(id);
     }
-    write(FIXES, &Value::Object(fixes.clone()));
+    crate::crdt::write_map(FIXES, &fixes)?;
+    relearn()
+}
 
+/// Rebuild learned.json (and the fixes' audio dataset) from fixes.json; prints a summary.
+pub fn relearn() -> Result<(), String> {
+    let all = lines();
+    let fixes = crate::crdt::read_map(FIXES);
     let by_id = |s: &str| all.iter().find(|r| str_of(r, "id") == s);
     // Learn from what Whisper heard, before automatic corrections: undoing a wrong one then just cancels it.
     let pairs: Vec<(&str, &str)> = fixes
@@ -184,7 +190,11 @@ pub fn fix(id: &str, text: &str) -> Result<(), String> {
 
 /// Last n lines, time-ordered, with tagged/relabeled speakers and fixed text.
 pub fn show(n: usize) {
-    let (tags, labels, fixes) = (read("tags.json"), read("labels.json"), read(FIXES));
+    let (tags, labels, fixes) = (
+        crate::crdt::read_map("tags.json"),
+        read("labels.json"),
+        crate::crdt::read_map(FIXES),
+    );
     let mut all = lines();
     all.sort_by(|a, b| {
         a["t"]

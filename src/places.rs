@@ -1,6 +1,8 @@
 //! Places (places.json): labeled spots whose setting replaces Always/Meetings while you're within their radius.
 //! Where you are comes from the locate binary; this decides which place that is.
+use crate::crdt::{self, Row};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 
 pub const FILE: &str = "places.json";
@@ -11,6 +13,8 @@ const DEFAULT_RADIUS: f64 = 150.0; // meters
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Place {
     pub action: String, // "record" | "meetings" | "off"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>, // src/crdt.rs: None for a new place (saving mints one)
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lat: Option<f64>,
@@ -20,16 +24,30 @@ pub struct Place {
     pub radius: Option<f64>,
 }
 
-pub fn load(path: &str) -> Vec<Place> {
+fn raw(path: &str) -> Vec<Row> {
     fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 
+pub fn load(path: &str) -> Vec<Place> {
+    crdt::live_rows(&raw(path))
+        .into_iter()
+        .filter_map(|r| serde_json::from_value(Value::Object(r)).ok())
+        .collect()
+}
+
+/// Save `places` as the live list: places.json keeps versions and tombstones (src/crdt.rs).
 pub fn save(path: &str, places: &[Place]) -> Result<(), String> {
+    let live: Vec<Row> = places
+        .iter()
+        .filter_map(|p| serde_json::to_value(p).ok()?.as_object().cloned())
+        .collect();
     let tmp = format!("{path}.tmp");
-    let json = serde_json::to_string_pretty(places).map_err(|e| e.to_string())? + "\n";
+    let json = serde_json::to_string_pretty(&crdt::edit_rows(&raw(path), &live))
+        .map_err(|e| e.to_string())?
+        + "\n";
     fs::write(&tmp, json)
         .and_then(|_| fs::rename(&tmp, path))
         .map_err(|e| e.to_string())
@@ -72,6 +90,7 @@ mod tests {
     fn place(label: &str, lat: Option<f64>, lon: Option<f64>, radius: Option<f64>) -> Place {
         Place {
             action: "record".into(),
+            id: None,
             label: label.into(),
             lat,
             lon,
@@ -122,10 +141,9 @@ mod tests {
         .unwrap();
         set_location(f, 1, 32.1, 34.7).unwrap();
         let ps = load(f);
-        assert_eq!(
-            ps[0],
-            place("Home", Some(32.07), Some(34.8), None).tap_action("meetings")
-        );
+        let mut home = place("Home", Some(32.07), Some(34.8), None).tap_action("meetings");
+        home.id = Some("0000-Home".into()); // src/crdt.rs: an old place's id, kept from the first save on
+        assert_eq!(ps[0], home);
         assert_eq!(
             (ps[1].lat, ps[1].lon, ps[1].action.as_str()),
             (Some(32.1), Some(34.7), "record")

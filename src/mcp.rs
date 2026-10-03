@@ -24,7 +24,8 @@ const LABELS: &str = "labels.json";
 const FIXES: &str = "fixes.json";
 const JUNK: &str = "junk.json"; // ids of old Whisper echoes (src/text.rs flags them when the transcriber starts); the panel hides them
 const STATS: &str = "stats.json";
-const VOCAB: &str = "vocab.txt";
+const VOCAB: &str = "vocab.json"; // word -> true, a synced map (src/crdt.rs)
+const VOCAB_TXT: &str = "vocab.txt"; // before vocab.json: words one per line or comma separated; moved on the next save
 const APP_ID: &str = "com.tupe12334.ozen"; // Ozen.app's defaults domain, where the menu bar keeps the record mode
 
 type Row = Map<String, Value>;
@@ -103,9 +104,13 @@ fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
     f.read_to_string(&mut raw).map_err(err)?;
     let mut out = String::with_capacity(raw.len());
     for l in raw.lines() {
-        match serde_json::from_str::<Row>(l).map_or(Edit::Keep, |r| edit(&r)) {
-            Edit::Keep => out.push_str(l),
-            Edit::Drop => continue,
+        // a deleted line stays as a tombstone and an edited one gets a new version (src/crdt.rs)
+        match serde_json::from_str::<Row>(l).map_or(Edit::Keep, |r| match edit(&r) {
+            Edit::Keep => Edit::Keep,
+            Edit::Drop => Edit::Set(crate::crdt::tombstone(&r)),
+            Edit::Set(new) => Edit::Set(crate::crdt::bump(&r, new)),
+        }) {
+            Edit::Keep | Edit::Drop => out.push_str(l),
             Edit::Set(r) => out.push_str(&Value::Object(r).to_string()),
         }
         out.push('\n');
@@ -113,6 +118,68 @@ fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
     let tmp = format!("{LINES}.tmp");
     fs::write(&tmp, out).map_err(err)?;
     fs::rename(&tmp, LINES).map_err(err) // the old file's lock is released when f drops, after the swap
+}
+
+/// `ozen merge DIR`: merge another ozen folder's synced data into this one (src/crdt.rs lists what's
+/// synced), then relearn and retrain from the result like after any fix or tag.
+pub(crate) fn merge_from(dir: &str) -> Reply {
+    use crate::crdt::{merge_maps, merge_rows, parse_jsonl};
+    if !std::path::Path::new(dir).is_dir() {
+        return Err(format!("no folder {dir}"));
+    }
+    let raw = |f: &str| -> Row {
+        serde_json::from_slice(&fs::read(f).unwrap_or_default()).unwrap_or_default()
+    };
+    let vocab_raw = |d: &str| -> Row {
+        if fs::metadata(format!("{d}{VOCAB}")).is_ok() {
+            return raw(&format!("{d}{VOCAB}"));
+        }
+        let words = fs::read_to_string(format!("{d}{VOCAB_TXT}")).unwrap_or_default();
+        words
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .map(|w| (w.into(), json!(true)))
+            .collect()
+    };
+    let theirs = format!("{}/", dir.trim_end_matches('/'));
+    for f in [TAGS, FIXES] {
+        let m = merge_maps(&raw(f), &raw(&format!("{theirs}{f}")));
+        fs::write(f, serde_json::to_string_pretty(&m).map_err(err)? + "\n").map_err(err)?;
+    }
+    let v = merge_maps(&vocab_raw(""), &vocab_raw(&theirs));
+    fs::write(VOCAB, serde_json::to_string_pretty(&v).map_err(err)? + "\n").map_err(err)?;
+    let _ = fs::remove_file(VOCAB_TXT);
+    let rows = |f: &str| -> Vec<Row> {
+        serde_json::from_slice(&fs::read(f).unwrap_or_default()).unwrap_or_default()
+    };
+    let p = merge_rows(
+        &rows(places::FILE),
+        &rows(&format!("{theirs}{}", places::FILE)),
+    );
+    fs::write(
+        places::FILE,
+        serde_json::to_string_pretty(&p).map_err(err)? + "\n",
+    )
+    .map_err(err)?;
+
+    let other = parse_jsonl(&fs::read_to_string(format!("{theirs}{LINES}")).unwrap_or_default());
+    let mut f = locked()?; // the transcriber appends under this lock: none of its lines is lost
+    let mut text = String::new();
+    f.read_to_string(&mut text).map_err(err)?;
+    let lines = merge_rows(&parse_jsonl(&text), &other);
+    let out: String = lines
+        .iter()
+        .map(|r| Value::Object(r.clone()).to_string() + "\n")
+        .collect();
+    let tmp = format!("{LINES}.tmp");
+    fs::write(&tmp, out).map_err(err)?;
+    fs::rename(&tmp, LINES).map_err(err)?;
+    drop(f);
+
+    crate::fixes::relearn()?;
+    retrain()?;
+    Ok(format!("merged: {} lines, {} places", lines.len(), p.len()))
 }
 
 fn append(r: Row) -> Result<(), String> {
@@ -157,7 +224,11 @@ fn view(r: &Row, tags: &Row, labels: &Row, fixes: &Row, junk: &[String]) -> Valu
 }
 
 fn views(filter: impl Fn(&Row) -> bool) -> Vec<Value> {
-    let (tags, labels, fixes) = (read(TAGS), read(LABELS), read(FIXES));
+    let (tags, labels, fixes) = (
+        crate::crdt::read_map(TAGS),
+        read(LABELS),
+        crate::crdt::read_map(FIXES),
+    );
     let junk: Vec<String> = fs::read(JUNK)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -203,11 +274,11 @@ fn delete(ids: &[String]) -> Reply {
     if !unknown.is_empty() {
         return Err(format!("no lines {unknown:?}; nothing deleted"));
     }
-    let fixes = read(FIXES);
+    let fixes = crate::crdt::read_map(FIXES);
     for id in ids.iter().filter(|id| fixes.contains_key(*id)) {
         ozen(&["fix", id, ""])?; // while the line still exists: fix looks it up
     }
-    let tags = read(TAGS);
+    let tags = crate::crdt::read_map(TAGS);
     let tagged: Vec<String> = ids
         .iter()
         .filter(|id| {
@@ -252,9 +323,15 @@ fn save_places(p: &[places::Place]) -> Reply {
     serde_json::to_string(p).map_err(err)
 }
 
-/// vocab.txt is words one per line or comma separated; it's written back comma separated.
+/// The vocabulary: vocab.json's words, or vocab.txt's until the first save moves them.
 pub(crate) fn vocab() -> Vec<String> {
-    fs::read_to_string(VOCAB)
+    if fs::metadata(VOCAB).is_ok() {
+        return crate::crdt::read_map(VOCAB)
+            .into_iter()
+            .map(|(w, _)| w)
+            .collect();
+    }
+    fs::read_to_string(VOCAB_TXT)
         .unwrap_or_default()
         .split([',', '\n'])
         .map(str::trim)
@@ -264,7 +341,9 @@ pub(crate) fn vocab() -> Vec<String> {
 }
 
 fn save_vocab(words: &[String]) -> Reply {
-    fs::write(VOCAB, words.join(", ") + "\n").map_err(err)?;
+    let live: Row = words.iter().map(|w| (w.clone(), json!(true))).collect();
+    crate::crdt::write_map(VOCAB, &live)?;
+    let _ = fs::remove_file(VOCAB_TXT); // its words are in vocab.json now
     Ok(json!(words).to_string())
 }
 
@@ -527,7 +606,7 @@ impl Ozen {
         let ms = (t * 1000.0) as i64;
         let ids: Vec<String> = rows().iter().map(|r| str_of(r, "id").to_string()).collect();
         let id = (0..)
-            .map(|n| format!("{ms}-note-{n}"))
+            .map(|n| crate::crdt::mint(&format!("{ms}-note-{n}")))
             .find(|id| !ids.contains(id))
             .unwrap();
         let row = json!({"id": id, "t": (t * 100.0).round() / 100.0, "src": "note",
@@ -583,7 +662,7 @@ impl Ozen {
     )]
     async fn list_people(&self) -> Reply {
         let mut tagged = Map::new();
-        for name in read(TAGS)
+        for name in crate::crdt::read_map(TAGS)
             .values()
             .filter_map(Value::as_str)
             .filter(|s| !s.is_empty())
@@ -627,8 +706,13 @@ impl Ozen {
         }
         let mut all = places::load(places::FILE);
         let action = serde_json::to_value(&p.action).map_err(err)?;
+        let id = all
+            .iter()
+            .find(|x| x.label == p.label)
+            .and_then(|x| x.id.clone());
         let new = places::Place {
             action: action.as_str().unwrap_or("off").into(),
+            id,
             label: p.label.clone(),
             lat: p.lat,
             lon: p.lon,
@@ -751,13 +835,18 @@ mod tests {
         })
         .unwrap();
         let out = fs::read_to_string(LINES).unwrap();
-        assert_eq!(
-            out,
-            format!(
-                "{keep}\nnot json\n{}\n",
-                r#"{"id":"3-note-0","t":3.0,"text":"b"}"#
-            )
+        let out: Vec<&str> = out.lines().collect();
+        assert_eq!((out[0], out[2]), (keep, "not json"));
+        // the deleted line is a tombstone and the edit has a version (src/crdt.rs), so a merge keeps both
+        let (gone, edited): (Value, Value) = (
+            serde_json::from_str(out[1]).unwrap(),
+            serde_json::from_str(out[3]).unwrap(),
         );
+        assert_eq!(
+            (&gone["id"], &gone["del"], gone.get("t")),
+            (&json!("2-mic-0"), &json!(true), None)
+        );
+        assert_eq!((&edited["text"], edited["v"].is_u64()), (&json!("b"), true));
         assert!(!is_note(&rows()[0]) && is_note(&rows()[1]));
         fs::remove_dir_all(&dir).unwrap();
     }
