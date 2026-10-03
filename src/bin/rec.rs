@@ -365,6 +365,12 @@ fn publish_partials(out: &Path) {
     }
 }
 
+/// The checkout was deleted under a running recorder (a removed worktree): chunks would go nowhere and no `ozen`
+/// command could find or stop it (they match by checkout). Only "not found": a flaky volume's I/O error isn't.
+fn checkout_gone(out: &Path) -> bool {
+    fs::metadata(out.join(".partial")).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "chunks".into()));
     fs::create_dir_all(out.join(".partial")).expect("create chunk dir");
@@ -406,6 +412,13 @@ fn main() {
         }
         last_tick = Instant::now();
         tick += 1;
+        if checkout_gone(&out) {
+            eprintln!(
+                "chunk dir {} is gone (checkout deleted?): exiting",
+                out.display()
+            );
+            exit(0);
+        }
         // Once recording has worked, a failed rebuild is usually transient (right after wake, "Stream failed to
         // start audio" while audio comes back), so retry it like a missing display instead of exiting and leaving
         // the meeting unrecorded. Only a missing permission is final.
@@ -498,7 +511,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{fs, publish_partials, retryable};
+    use super::{checkout_gone, fs, publish_partials, retryable};
     use screencapturekit::error::{SCError, SCStreamErrorCode as C};
 
     #[test]
@@ -523,5 +536,15 @@ mod tests {
         assert!(out.join("1-mic.wav").exists());
         assert!(!out.join("2-call.wav").exists() && !out.join(".partial/2-call.wav").exists());
         fs::remove_dir_all(&out).unwrap();
+    }
+
+    #[test]
+    fn notices_a_deleted_checkout() {
+        let root = std::env::temp_dir().join(format!("ozen-gone-{}", std::process::id()));
+        let out = root.join("chunks");
+        fs::create_dir_all(out.join(".partial")).unwrap();
+        assert!(!checkout_gone(&out));
+        fs::remove_dir_all(&root).unwrap(); // like `git worktree remove`
+        assert!(checkout_gone(&out));
     }
 }
