@@ -140,10 +140,15 @@ pub fn is_live(r: &Row) -> bool {
     r.get("del") != Some(&Value::Bool(true))
 }
 
-/// What's left of a deleted row: enough to win the merge, nothing a reader would show.
+/// What's left of a deleted row: enough to win the merge, nothing a reader would show. A place keeps its
+/// label and action: builds before this parse places.json only when every row has them (a deleted place
+/// shows up again there, but the file isn't lost). A line keeps no text, voiceprint or time.
 pub fn tombstone(r: &Row) -> Row {
     let v = stamp(Some(&Value::Object(r.clone())));
-    let mut t = Row::new();
+    let mut t: Row = ["label", "action"]
+        .iter()
+        .filter_map(|k| Some((k.to_string(), r.get(*k)?.clone())))
+        .collect();
     t.insert("id".into(), r.get("id").cloned().unwrap_or(Value::Null));
     t.insert("v".into(), json!(v));
     t.insert("del".into(), json!(true));
@@ -279,6 +284,12 @@ mod tests {
         assert_eq!(live[1]["id"], "0001-Work");
         // saving unchanged rows changes nothing but adding the ids
         assert_eq!(live_rows(&edit_rows(&places, &live)), live);
+        // older builds read places.json as [{action, label, ...}]: a deleted place must still parse
+        let gone = edit_rows(&places, &live[..1]);
+        assert!(
+            gone.iter()
+                .all(|p| p["label"].is_string() && p["action"].is_string())
+        );
     }
 
     #[test]
