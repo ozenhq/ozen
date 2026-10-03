@@ -197,6 +197,16 @@ mod tests {
     }
 
     #[test]
+    fn starts_while_processing_a_backlog() {
+        // a backlog still being transcribed must not block a new recording (#76)
+        let mut m = Memory::default();
+        assert_eq!(
+            decide(&facts("always", "processing", None, None), &mut m),
+            Act::Start
+        );
+    }
+
+    #[test]
     fn waits_for_a_location_right_after_launch() {
         let mut m = Memory::default();
         let mut f = facts("always", "stopped", None, None);
