@@ -21,7 +21,9 @@
 //! transcript.txt, context/, pace.jsonl, here.json*, chunk audio (chunks/, recent/, fixes/), start.log,
 //! the record mode and switches (app defaults, dot files). After a merge, relearn and retrain.
 //!
-//! No crate imports: the menu bar app includes this file too (src/bin/bar/main.rs).
+//! Merging is the `crdts` crate's last-writer-wins register. No `crate::` imports: the menu bar app includes
+//! this file too (src/bin/bar/main.rs).
+use crdts::{CvRDT, LWWReg};
 use serde_json::{Map, Value, json};
 use std::fs;
 use std::sync::OnceLock;
@@ -32,15 +34,13 @@ pub type Row = Map<String, Value>;
 pub fn device() -> &'static str {
     static ID: OnceLock<String> = OnceLock::new();
     ID.get_or_init(|| {
-        unsafe extern "C" {
-            fn gethostuuid(id: *mut u8, wait: *const [i64; 2]) -> i32;
-        }
-        let mut id = [0u8; 16];
-        // SAFETY: a 16-byte uuid_t and a zero timespec (don't wait), as the man page asks.
-        if unsafe { gethostuuid(id.as_mut_ptr(), &[0, 0]) } != 0 {
-            return "local".into();
-        }
-        id[..4].iter().map(|b| format!("{b:02x}")).collect()
+        machine_uid::get().map_or("local".into(), |id| {
+            id.chars()
+                .filter(char::is_ascii_hexdigit)
+                .take(8)
+                .collect::<String>()
+                .to_lowercase()
+        })
     })
 }
 
@@ -64,9 +64,17 @@ pub fn mint(base: &str) -> String {
     format!("{base}@{}", device())
 }
 
-/// Whether record `a` wins over `b` (two versions of one key).
-fn wins(a: &Value, b: &Value) -> bool {
-    (v(a), a.to_string()) > (v(b), b.to_string())
+/// The winner of two versions of one record. The register's marker is ("v", the record's JSON): the JSON
+/// breaks ties between equal versions (old records are all 0) the same way on every Mac, and makes a marker
+/// name exactly one value, as the register requires.
+fn merged(a: &Value, b: &Value) -> Value {
+    let reg = |r: &Value| LWWReg {
+        val: r.clone(),
+        marker: (v(r), r.to_string()),
+    };
+    let mut x = reg(a);
+    x.merge(reg(b));
+    x.val
 }
 
 // ---- maps: tags.json, fixes.json, vocab.json ----
@@ -127,9 +135,8 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
 pub fn merge_maps(a: &Row, b: &Row) -> Row {
     let mut out = a.clone();
     for (k, y) in b {
-        if out.get(k).is_none_or(|x| wins(y, x)) {
-            out.insert(k.clone(), y.clone());
-        }
+        let m = out.get(k).map_or(y.clone(), |x| merged(x, y));
+        out.insert(k.clone(), m);
     }
     out
 }
@@ -227,17 +234,15 @@ pub fn edit_rows(raw: &[Row], live: &[Row]) -> Vec<Row> {
 
 /// Union by id, the winning version of each, sorted by id (ids start with their creation time).
 pub fn merge_rows(a: &[Row], b: &[Row]) -> Vec<Row> {
-    let mut by: std::collections::BTreeMap<String, Row> = Default::default();
+    let mut by: std::collections::BTreeMap<String, Value> = Default::default();
     for r in live_ids(a).into_iter().chain(live_ids(b)) {
-        let k = id(&r).to_string();
-        if by
-            .get(&k)
-            .is_none_or(|x| wins(&Value::Object(r.clone()), &Value::Object(x.clone())))
-        {
-            by.insert(k, r);
-        }
+        let (k, r) = (id(&r).to_string(), Value::Object(r));
+        let m = by.get(&k).map_or(r.clone(), |x| merged(x, &r));
+        by.insert(k, m);
     }
-    by.into_values().collect()
+    by.into_values()
+        .filter_map(|r| r.as_object().cloned())
+        .collect()
 }
 
 /// Every row with its id (live_rows' for the ones written before ids), tombstones included.
