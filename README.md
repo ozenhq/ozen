@@ -31,7 +31,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   disagree (two people at once, or one cutting in without a pause), `src/overlap.rs` separates it into one track per
   voice ([MossFormer2](https://github.com/modelscope/ClearerVoice-Studio), run in Rust on the GPU by `src/separate.rs`), splits each track where its
   voice changes, and each voice becomes its own line with its own speaker and time, so overlapping lines overlap in
-  the timeline too. Only such utterances are separated, so a single speaker costs nothing extra.
+  the timeline too. Only such utterances are separated, so a single speaker costs nothing extra. Separation is
+  skipped while more than `OZEN_SEPARATE_BACKLOG` chunks (default 6) wait, so the transcript never falls behind.
   `ozen eval-overlap` scores it on real speech.
 - **Learns from your tags.** Click any speaker name in the menu bar panel to set who really said that line.
   Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
@@ -80,7 +81,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   from, so undoing a wrong correction cancels it). A correction is skipped while any fix keeps that phrase as right. Each fix also keeps its chunk audio in `fixes/`
   with the right text (`fixes/dataset.jsonl`), ready for fine-tuning a model later.
 
-- **Runs from the menu bar.** `ozen-bar` puts an ear icon in the top menu bar: click it for the live transcript
+- **Runs from the menu bar.** Ozen.app (`ozen bar`) puts an ear icon in the top menu bar: click it for the live transcript
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon is a red filled ear only while recording; otherwise it's monochrome (ear stopped, pause paused,
   hourglass finishing transcription) and the panel says **Not recording** and why.
@@ -120,7 +121,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   starts a new one). Select one or more (⌘/⇧-click) and press **Open** to put their transcripts in a fresh folder
   under `context/`, then start Claude Code or Hermes there in a new Terminal window; the folder's `AGENTS.md` (and
   `CLAUDE.md`) tells the agent what it holds, and its `claude.command` / `hermes.command` reopen it with a double-click. **Auto add with Kev** also adds every other meeting that local [Kev](https://github.com/jaredpalmer/kev)
-  (`localhost:8009`) judges part of the same project or topic; its scores show before you pick the agent.
+  (`localhost:8009`, override with `OZEN_KEV`) judges part of the same project or topic; its scores show before you pick the agent.
 - **Ask about the meeting happening now.** **Ask AI** in the panel starts Claude Code or Hermes on the current
   meeting (one whose last line is under 10 minutes old), in `context/live/`. A background `ozen live-sync` rewrites
   that folder with the latest lines every 15s and exits when the meeting ends; the agent is told to reread it, and that
