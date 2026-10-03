@@ -14,6 +14,7 @@ mod mic;
 mod overlap;
 mod panel;
 mod places;
+mod procs;
 mod separate;
 mod text;
 mod timebar;
@@ -22,6 +23,7 @@ mod transcribe;
 mod voices;
 mod whisper;
 
+use procs::{Signal, ours, running, signal};
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -96,7 +98,7 @@ const LOCATE: &str = r"^target/locator/locate watch"; // the watcher `place` kee
 // macOS lists a bare binary under its file name in Privacy & Security, so run a copy named ozen.
 const REC_BIN: &str = "target/recorder/ozen";
 // The old path too, so pause/stop still reach a recorder started before the rename.
-const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so pgrep never matches shells that merely mention the command
+const REC: &str = r"^target/(recorder/ozen|release/rec) chunks"; // anchored so the process scan never matches shells that merely mention the command
 // The Python transcriber too, so stop and restarts still reach one started before the port to Rust.
 const TR: &str =
     r"/ozen transcribe chunks|uv run transcribe\.py chunks|python3 transcribe\.py chunks";
@@ -149,60 +151,8 @@ fn ok(c: &mut Command) -> bool {
     c.status().is_ok_and(|s| s.success())
 }
 
-/// PIDs from `lsof -Fpn -d cwd` output whose working directory is `dir`.
-fn pids_in(lsof: &str, dir: &Path) -> Vec<String> {
-    let mut pid = "";
-    let mut ours = Vec::new();
-    for l in lsof.lines() {
-        if let Some(p) = l.strip_prefix('p') {
-            pid = p;
-        } else if let Some(n) = l.strip_prefix('n')
-            && fs::canonicalize(n).is_ok_and(|n| n == dir)
-        {
-            ours.push(pid.to_string());
-        }
-    }
-    ours
-}
-
-/// Processes matching `pattern` that run in this checkout. The same commands run from another checkout,
-/// worktree or test copy (`ozen transcribe chunks` anywhere) are someone else's: never count or kill them.
-fn ours(pattern: &str) -> Vec<String> {
-    let Ok(found) = cmd("pgrep").args(["-f", pattern]).output() else {
-        return Vec::new();
-    };
-    let pids: Vec<&str> = std::str::from_utf8(&found.stdout)
-        .unwrap_or("")
-        .split_whitespace()
-        .collect();
-    if pids.is_empty() {
-        return Vec::new();
-    }
-    let Ok(cwd) = cmd("lsof")
-        .args(["-a", "-d", "cwd", "-Fpn", "-p", &pids.join(",")])
-        .output()
-    else {
-        return Vec::new();
-    };
-    let here = std::env::current_dir()
-        .and_then(fs::canonicalize)
-        .unwrap_or_default();
-    pids_in(&String::from_utf8_lossy(&cwd.stdout), &here)
-}
-
 fn now() -> f64 {
     chrono::Utc::now().timestamp_millis() as f64 / 1000.0
-}
-
-fn running(pattern: &str) -> bool {
-    !ours(pattern).is_empty()
-}
-
-fn signal(sig: &str, pattern: &str) {
-    let pids = ours(pattern);
-    if !pids.is_empty() {
-        let _ = cmd("kill").arg(sig).args(pids).status();
-    }
 }
 
 /// Keep start.log bounded: at `start`, move a log past 1 MiB aside to start.log.1 (one generation kept).
@@ -381,7 +331,7 @@ fn start_transcriber() {
 fn set_priority(low: bool) {
     for pid in ours(TR) {
         let _ = cmd("taskpolicy")
-            .args([if low { "-b" } else { "-B" }, "-p", &pid])
+            .args([if low { "-b" } else { "-B" }, "-p", &pid.to_string()])
             .status();
     }
 }
@@ -596,7 +546,7 @@ fn main() {
                 spawn_detached(cmd(REC_BIN).arg("chunks"), log().into(), log().into());
             }
         }
-        "pause" => signal("-INT", REC), // SIGINT: recorder flushes its current chunk first
+        "pause" => signal(Signal::Interrupt, REC), // SIGINT: recorder flushes its current chunk first
         "record" => {
             let _turn = starting();
             rotate_log();
@@ -639,7 +589,7 @@ fn main() {
         }
         "process" if std::env::args().nth(2).as_deref() == Some("stop") => {
             let _ = fs::remove_file(PROCESSING);
-            signal("-TERM", TR); // chunks are deleted only once transcribed, so the rest waits for the next run
+            signal(Signal::Term, TR); // chunks are deleted only once transcribed, so the rest waits for the next run
         }
         "process" => {
             let _turn = starting();
@@ -653,7 +603,7 @@ fn main() {
         "process-queue" => {
             while Path::new(PROCESSING).exists() {
                 if !running(REC) && chunks_waiting() == 0 {
-                    signal("-TERM", TR);
+                    signal(Signal::Term, TR);
                     let _ = fs::remove_file(PROCESSING);
                     break;
                 }
@@ -663,11 +613,11 @@ fn main() {
         }
         // Record only: no transcriber to drain. A `process` run finishes the queue by itself.
         "stop" if Path::new(RECORD_ONLY).exists() => {
-            signal("-INT", REC);
+            signal(Signal::Interrupt, REC);
             let _ = fs::remove_file(RECORD_ONLY);
         }
         "stop" => {
-            signal("-INT", REC);
+            signal(Signal::Interrupt, REC);
             File::create(".stopping").expect("create .stopping");
             let me = std::env::current_exe().expect("own path");
             spawn_detached(Command::new(me).arg("drain"), Stdio::null(), Stdio::null());
@@ -680,7 +630,7 @@ fn main() {
                 }
                 sleep(Duration::from_secs(1));
             }
-            signal("-TERM", TR);
+            signal(Signal::Term, TR);
             let _ = fs::remove_file(".stopping");
         }
         "status" => {
@@ -816,14 +766,14 @@ fn main() {
         "place" => {
             let ps = places::load(places::FILE);
             if !places::tracked(&ps) {
-                signal("-TERM", LOCATE);
+                signal(Signal::Term, LOCATE);
                 let _ = fs::remove_file(places::HERE);
                 let _ = fs::remove_file(format!("{}.error", places::HERE));
                 return println!(r#"{{"here":null,"place":null}}"#);
             }
             // After sleep the Mac may have moved: a new watcher sends a fresh fix; here.json holds the old one till then.
             if std::env::args().any(|a| a == "--restart") {
-                signal("-TERM", LOCATE);
+                signal(Signal::Term, LOCATE);
                 sleep(Duration::from_millis(200));
             }
             let _ = File::create(format!("{}.asked", places::HERE)); // the watcher's heartbeat
@@ -1098,22 +1048,6 @@ mod tests {
         assert!(!super::stale_env("transcribe-1b646a70201e1ec6", ps)); // running
         assert!(!super::stale_env("train-02cfad274e3027bf", ps)); // not one of our scripts
         assert!(!super::stale_env("transcribe-notahash", ps));
-    }
-
-    #[test]
-    fn keeps_only_processes_in_this_checkout() {
-        let tmp = std::env::temp_dir().canonicalize().unwrap();
-        let here = tmp.join(format!("ozen-pids-{}", std::process::id()));
-        let other = tmp.join(format!("ozen-pids-other-{}", std::process::id()));
-        std::fs::create_dir_all(&here).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        let out = format!(
-            "p10\nfcwd\nn{}\np11\nfcwd\nn{}\np12\nfcwd\nn/gone\n",
-            here.display(),
-            other.display()
-        );
-        assert_eq!(super::pids_in(&out, &here), ["10"]);
-        let _ = (std::fs::remove_dir(&here), std::fs::remove_dir(&other));
     }
 
     #[test]
