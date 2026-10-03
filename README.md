@@ -7,7 +7,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
 
 ## What it does
 
-- **Hears the call and the room.** The recorder (`src/bin/rec.rs`, run as `target/recorder/ozen` so macOS
+- **Hears the call and the room.** The recorder (`src/bin/rec/main.rs`, run as `target/recorder/ozen` so macOS
   lists it as ozen) uses ScreenCaptureKit to record three streams in 15s chunks:
   - `call`: audio from meeting apps only (Zoom, Chrome, Teams, Slack, FaceTime, Discord)
   - `mic`: your microphone
@@ -193,7 +193,7 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
 | `target/release/ozen eval-overlap [ami] [he] [call] [--n 20]` | Score people-talking-at-once separation (`src/overlap.rs`) on real speech: AMI meetings, Hebrew speakers, call-codec audio. Recall and extra words with utterances whole vs separated, for overlaps and solos; downloads each set once to `eval/data/` |
-| `cargo nextest run` | Every test: Rust unit tests, `tests/cli.rs` running the CLI on sample folders (`OZEN_DIR`) the way the panel calls it, and `insta` snapshots (`cargo insta review` after an intended change) |
+| `cargo nextest run` | Every test: Rust unit tests (each file's in `<file>_tests.rs` beside it, loaded with `#[cfg(test)] #[path = "<file>_tests.rs"] mod tests;`), `tests/cli.rs` running the CLI on sample folders (`OZEN_DIR`) the way the panel calls it, and `insta` snapshots (`cargo insta review` after an intended change) |
 | `target/release/ozen show [N]` | Last N lines with tag-corrected speakers and fixed text |
 
 ## Tuning how fixes teach
