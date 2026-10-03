@@ -365,10 +365,10 @@ fn publish_partials(out: &Path) {
     }
 }
 
-/// The checkout was deleted under a running recorder (a removed worktree): its chunk dir no longer resolves, so
-/// every chunk would go nowhere and no `ozen` command could find or stop this process (they match by checkout).
+/// The checkout was deleted under a running recorder (a removed worktree): chunks would go nowhere and no `ozen`
+/// command could find or stop it (they match by checkout). Only "not found": a flaky volume's I/O error isn't.
 fn checkout_gone(out: &Path) -> bool {
-    !out.join(".partial").is_dir()
+    fs::metadata(out.join(".partial")).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
 }
 
 fn main() {
