@@ -4,7 +4,7 @@
 //!
 //! Also the app's side of location: only the app can show the location prompt (the locate binary uses the
 //! answer), and it writes here.json itself when the locate binary can't (here.json.error).
-use crate::{App, cli};
+use crate::{App, cli, crdt};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, sel};
@@ -38,7 +38,13 @@ pub fn load() -> Vec<Value> {
     };
     from_file
         .or_else(legacy)
-        .and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok())
+        .and_then(|b| serde_json::from_slice::<Vec<crdt::Row>>(&b).ok())
+        .map(|raw| {
+            crdt::live_rows(&raw)
+                .into_iter()
+                .map(Value::Object)
+                .collect()
+        })
         .unwrap_or_else(|| {
             vec![
                 json!({"label": "Home", "action": "off"}),
@@ -47,11 +53,20 @@ pub fn load() -> Vec<Value> {
         })
 }
 
-/// Sorted keys, as src/places.rs writes it.
+/// Sorted keys, as src/places.rs writes it; versions and tombstones kept (src/crdt.rs).
 fn save(places: &[Value]) {
     let path = file();
     let tmp = path.with_extension("json.tmp");
-    let text = serde_json::to_string_pretty(places).unwrap_or_default() + "\n";
+    let raw: Vec<crdt::Row> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let live: Vec<crdt::Row> = places
+        .iter()
+        .filter_map(|p| p.as_object().cloned())
+        .collect();
+    let text =
+        serde_json::to_string_pretty(&crdt::edit_rows(&raw, &live)).unwrap_or_default() + "\n";
     if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
         objc2_foundation::NSUserDefaults::standardUserDefaults()
             .removeObjectForKey(ns_string!("places")); // migrated

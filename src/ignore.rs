@@ -43,11 +43,11 @@ const DEFAULT_THRESHOLD: f32 = 0.4; // src/train.rs's until it has calibrated on
 
 /// Tag `ids` as `name` (empty clears) in tags.json, keeping every other tag.
 pub fn tag(ids: &[String], name: &str) {
-    let mut tags = read(TAGS);
+    let mut tags = crate::crdt::read_map(TAGS);
     for id in ids {
         tags.insert(id.clone(), name.trim().into());
     }
-    write(TAGS, &Value::Object(tags));
+    crate::crdt::write_map(TAGS, &tags).expect("write tags.json");
 }
 
 fn unit(v: &Value) -> Option<Vec<f32>> {
@@ -112,7 +112,7 @@ fn registry() -> (Vec<Vec<f32>>, f32) {
 /// Run after src/train.rs retrains: rewrite ignore.json and label lines that sound like an ignored voice (never
 /// unsure, so Review skips them).
 pub fn apply() {
-    let tags = read(TAGS);
+    let tags = crate::crdt::read_map(TAGS);
     // Keyed by id like src/train.rs: a line written twice (two transcribers on one chunk) counts once.
     let lines: Vec<(String, Vec<f32>)> = lines()
         .into_iter()

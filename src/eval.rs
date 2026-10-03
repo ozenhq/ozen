@@ -365,15 +365,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             test.len()
         ));
     }
-    // The prompt the live transcriber starts from: vocab.txt. (The previous line is left out: it changes from
+    // The prompt the live transcriber starts from: the vocabulary. (The previous line is left out: it changes from
     // meeting to meeting, and the eval must not.)
-    let base: Vec<String> = fs::read_to_string("vocab.txt")
-        .unwrap_or_default()
-        .split([',', '\n'])
-        .map(str::trim)
-        .filter(|w| !w.is_empty())
-        .map(String::from)
-        .collect();
+    let base: Vec<String> = crate::mcp::vocab();
     let mut whisper = Whisper::new(args.iter().any(|a| a == "--fresh"))?;
 
     // Your fixes: what Whisper hears on the teach lines today, and what was really said.

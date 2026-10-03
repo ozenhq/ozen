@@ -300,7 +300,7 @@ pub fn retrain(retry: bool) {
         .filter_map(|mut r| Some((r.get("id")?.as_str()?.to_string(), r.remove("e")?)))
         .filter(|(_, e)| e.as_array().is_some_and(|a| !a.is_empty()))
         .collect();
-    let tags: IndexMap<String, Value> = read(TAGS).unwrap_or_default();
+    let tags: IndexMap<String, Value> = crate::crdt::read_map(TAGS).into_iter().collect();
     let voices = Path::new(REPO).join("voices");
     let sample_dir = Path::new(REPO).join("samples");
     fs::create_dir_all(&voices).expect("create voices/voices");

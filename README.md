@@ -15,8 +15,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
     tells the transcriber when the computer itself is talking.
 - **Transcribes Hebrew and English.** On-device Whisper (large-v3-turbo, run on the GPU in Rust by `src/whisper.rs`) per utterance, language picked between `he` and `en`
   for each one: Hebrew goes to [ivrit.ai's Hebrew-trained turbo](https://huggingface.co/mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx),
-  English to stock large-v3-turbo. Each call is hinted with `vocab.txt` (terms and names to spell right, e.g. Kev,
-  PR, code review; edit freely) and the previous line. Known filler that Whisper invents
+  English to stock large-v3-turbo. Each call is hinted with the vocabulary (terms and names to spell right, e.g. Kev,
+  PR, code review; `vocab.json`, edited through the MCP tools; an older `vocab.txt` moves there on the first edit) and the previous line. Known filler that Whisper invents
   on noise ("Thank you.", "תודה רבה") is dropped, and so are lines where it loops one phrase ("Amen. Amen.
   Amen."). Older lines these filters would drop are hidden from the panel (ids in `junk.json`; delete it to show
   them again).
@@ -45,6 +45,10 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   retrain commits locally and the next one pushes it. Because each retrain resets `~/ozen/voices` to the remote
   before rebuilding, change voices by tagging, never by editing files there. A Mac's own tags live in its
   `tags.json` and `lines.jsonl`, which never leave it; that's what the rebuild re-applies.
+- **Keeps your data ready to sync.** Lines, tags, fixes, places and the vocabulary are saved as CRDTs: every
+  record has a version, deletes leave a tombstone, and new ids name the Mac that made them, so two Macs' folders
+  merge without conflicts, whatever the order. Files from older versions load as they are. `ozen merge DIR`
+  merges another ozen folder (another Mac's, a backup) into this one. What's synced and how: [src/crdt.rs](src/crdt.rs).
 - **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
   name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
   Each ignore is its own voice (Ignored, Ignored 2…); pick **Same voice as Ignored 2** when it's that video again.
@@ -211,7 +215,7 @@ with `--real` once you have a few dozen fixes.
 ## Limits
 
 - Lines arrive ~15–30s after speech (chunked, not streaming).
-- English terms spoken inside Hebrew are the weakest spot; add them to `vocab.txt`. Distant voices in the room are hard to hear.
+- English terms spoken inside Hebrew are the weakest spot; add them to the vocabulary. Distant voices in the room are hard to hear.
 - You talking over the computer voice or a remote speaker can be dropped as echo when your voices sound alike.
 - macOS Speak Selection isn't heard on `local` (ScreenCaptureKit doesn't capture that system voice), so text it reads
   aloud is transcribed as a room speaker. Marking that voice with **Ignore this voice** can drop it.

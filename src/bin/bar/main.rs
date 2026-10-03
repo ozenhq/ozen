@@ -10,6 +10,9 @@
 //! a render check (it matched the Swift app it replaced).
 mod auto;
 mod cli;
+#[path = "../../crdt.rs"]
+#[allow(dead_code)] // the app uses a few of its functions
+mod crdt; // places.json and fixes.json are synced data
 mod install;
 mod map;
 mod places;
@@ -1416,9 +1419,10 @@ impl App {
         let Some(original) = self.ivars().view.borrow().heard.get(id).cloned() else {
             return;
         };
-        let fixes = std::fs::read(cli::dir().join("fixes.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        let fixes = cli::dir()
+            .join("fixes.json")
+            .to_str()
+            .map(|f| Value::Object(crdt::read_map(f)));
         let current = self
             .ivars()
             .pending_fixes

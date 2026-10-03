@@ -4,7 +4,8 @@
 //! and this transcriber run's unnamed speakers (S1, S2...), which only mean something within one run.
 //! Renaming onto an existing name merges the two; forgetting clears the tags on this Mac only (the
 //! shared registry drops the person when no Mac tags them any more).
-use crate::fixes::{lines, read, write};
+use crate::crdt::{read_map, write_map};
+use crate::fixes::{lines, read};
 use crate::ignore::is_ignored;
 use serde_json::{Map, Value, json};
 
@@ -92,12 +93,12 @@ fn summarize(rows: &[Row], tags: &Row, labels: &Row, fixes: &Row) -> Vec<Value> 
 }
 
 pub fn list() -> Vec<Value> {
-    summarize(&lines(), &read(TAGS), &read(LABELS), &read(FIXES))
+    summarize(&lines(), &read_map(TAGS), &read(LABELS), &read_map(FIXES))
 }
 
 /// Replace every tag `from` with `to` (empty clears them) in tags.json. The caller retrains.
 pub fn retag(from: &str, to: &str) -> Result<usize, String> {
-    let mut tags = read(TAGS);
+    let mut tags = read_map(TAGS);
     let mut n = 0;
     for v in tags.values_mut().filter(|v| v.as_str() == Some(from)) {
         *v = json!(to.trim());
@@ -106,7 +107,7 @@ pub fn retag(from: &str, to: &str) -> Result<usize, String> {
     if n == 0 {
         return Err(format!("no lines are tagged {from:?}"));
     }
-    write(TAGS, &Value::Object(tags));
+    write_map(TAGS, &tags)?;
     Ok(n)
 }
 

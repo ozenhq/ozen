@@ -1,5 +1,6 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
 mod compare;
+mod crdt;
 mod dmg;
 mod ecapa;
 mod eval;
@@ -10,6 +11,7 @@ mod ignore;
 mod low_disk_alert;
 mod mcp;
 mod meetings;
+mod merge;
 mod mic;
 mod overlap;
 mod panel;
@@ -32,7 +34,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | merge | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -50,7 +52,7 @@ ozen control: start | pause | resume | stop | record | process | priority | stat
   eval-overlap [ami] [he] [call] [--n 20]
                 score separating people talking at once on real speech (see src/eval_overlap.rs)
   compare [N]   transcribe the last N chunks with speech in recent/ (default 6) with stock Whisper, the
-                Hebrew model and Hebrew + vocab.txt, to judge a model or prompt change on your own speech
+                Hebrew model and Hebrew + vocabulary, to judge a model or prompt change on your own speech
   fix ID [TEXT] correct a transcript line (empty clears); relearns the words and corrections the transcriber uses
   tag ID [NAME] set who said a transcript line (empty clears), then retrain
   ignore ID...  tag transcript lines as a new voice to ignore (a video playing nearby: Ignored, Ignored 2...),
@@ -71,6 +73,8 @@ ozen control: start | pause | resume | stop | record | process | priority | stat
                 makes FROM a new ignored voice
   forget NAME   clear every tag NAME on this Mac, then retrain; `forget 'Ignored 2'` stops ignoring that voice
   retrain       rebuild voiceprints, labels and the ignored voices from all tags
+  merge DIR     merge another ozen folder's lines, tags, fixes, places and vocabulary into this one (another
+                Mac's, a backup), then relearn and retrain; merging is safe to repeat (src/crdt.rs)
   show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   place [--restart]
@@ -913,10 +917,11 @@ fn main() {
                 println!("{USAGE}");
                 exit(2);
             }
-            ignore::tag(&ids, &ignore::fresh(&fixes::read("tags.json")));
+            ignore::tag(&ids, &ignore::fresh(&crdt::read_map("tags.json")));
             retrain();
         }
         "retrain" => retrain(),
+        "merge" => merge::cli(&cwd, USAGE),
         // The meeting app using the microphone now: {"app": "Zoom"} or {"app": null}. Meetings mode polls it.
         "mic" => println!("{}", serde_json::json!({"app": mic::meeting_app()})),
         "voices" => println!("{}", serde_json::Value::from(voices::list())),
@@ -966,7 +971,7 @@ fn main() {
             }
             // Ignoring a person starts a voice of its own rather than merging into the other ignored ones.
             let to = if to == ignore::IGNORE && from != to {
-                ignore::fresh(&fixes::read("tags.json"))
+                ignore::fresh(&crdt::read_map("tags.json"))
             } else {
                 to
             };

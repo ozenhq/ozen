@@ -41,7 +41,10 @@ fn read_json(path: &str) -> Value {
 /// Every transcript line, time ordered, rendered like `ozen show`: speakers corrected by your tags.
 fn lines() -> Vec<Line> {
     let raw = fs::read_to_string("lines.jsonl").unwrap_or_default();
-    let (tags, labels) = (read_json("tags.json"), read_json("labels.json"));
+    let (tags, labels) = (
+        Value::Object(crate::crdt::read_map("tags.json")),
+        read_json("labels.json"),
+    );
     render(&raw, &tags, &labels, &read_json("junk.json"))
 }
 

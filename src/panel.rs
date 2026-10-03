@@ -34,9 +34,10 @@ fn rows() -> Vec<Row> {
         .lines()
         .filter_map(|l| serde_json::from_str::<Row>(l).ok())
         .filter(|r| {
-            r.get("id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| !junk.contains(id))
+            crate::crdt::is_live(r)
+                && r.get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !junk.contains(id))
         })
         .collect()
 }
@@ -169,7 +170,7 @@ pub fn tag_menu_json(id: &str) -> Value {
     json!(tag_menu(
         id,
         &rows(),
-        &read(TAGS),
+        &crate::crdt::read_map(TAGS),
         &read(LABELS),
         &registry()
     ))
@@ -177,7 +178,12 @@ pub fn tag_menu_json(id: &str) -> Value {
 
 pub fn unsure_json() -> Value {
     let threshold = read(STATS).get("threshold").and_then(Value::as_f64);
-    json!(unsure(&rows(), &read(TAGS), &read(LABELS), threshold))
+    json!(unsure(
+        &rows(),
+        &crate::crdt::read_map(TAGS),
+        &read(LABELS),
+        threshold
+    ))
 }
 
 pub fn controls_json(state: &str, split: bool) -> Value {
@@ -315,7 +321,7 @@ fn local(t: f64) -> chrono::DateTime<chrono::Local> {
 pub fn transcript_json(pending: &str) -> Value {
     let pending: Row = serde_json::from_str(pending).unwrap_or_default();
     let merged = |file: &str, key: &str| {
-        let mut m = read(file);
+        let mut m = crate::crdt::read_map(file);
         if let Some(p) = pending.get(key).and_then(Value::as_object) {
             m.extend(p.clone());
         }
@@ -327,6 +333,7 @@ pub fn transcript_json(pending: &str) -> Value {
     let raw: Vec<Row> = all[all.len().saturating_sub(HISTORY)..]
         .iter()
         .filter_map(|l| serde_json::from_str(l).ok())
+        .filter(crate::crdt::is_live)
         .collect();
     let junk: BTreeSet<String> = fs::read(JUNK)
         .ok()
@@ -334,18 +341,23 @@ pub fn transcript_json(pending: &str) -> Value {
         .unwrap_or_default();
     let threshold = read(STATS).get("threshold").and_then(Value::as_f64);
     // Review leaves out lines the panel just tagged (unsure() only knows the written tags)
-    let unsure: Vec<Value> = unsure(&rows(), &read(TAGS), &read(LABELS), threshold)
-        .into_iter()
-        .filter(|u| {
-            u["id"].as_str().is_some_and(|id| {
-                !pending
-                    .get("tags")
-                    .and_then(|t| t.get(id))
-                    .and_then(Value::as_str)
-                    .is_some_and(|n| !n.is_empty())
-            })
+    let unsure: Vec<Value> = unsure(
+        &rows(),
+        &crate::crdt::read_map(TAGS),
+        &read(LABELS),
+        threshold,
+    )
+    .into_iter()
+    .filter(|u| {
+        u["id"].as_str().is_some_and(|id| {
+            !pending
+                .get("tags")
+                .and_then(|t| t.get(id))
+                .and_then(Value::as_str)
+                .is_some_and(|n| !n.is_empty())
         })
-        .collect();
+    })
+    .collect();
     transcript(
         &raw,
         &junk,

@@ -19,12 +19,14 @@ candle-core = { version = "0.11.0", features = ["accelerate", "metal"] }
 candle-metal-kernels = "0.11.0"
 candle-nn = { version = "0.11.0", features = ["metal", "accelerate"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+crdts = "7.3.2"
 dispatch2 = "0.3"
 ds_parser = "0.4.0"
 flate2 = "1.1.10"
 hound = "3.5.1"
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
+machine-uid = "0.6.0"
 objc2 = "0.6"
 objc2-app-kit = "0.3"  # AppKit, all of it: the menu bar app (src/bin/bar.rs) uses most classes
 objc2-core-location = { version = "0.3.2", features = ["CLLocation", "CLLocationManager", "CLLocationManagerDelegate", "block2"] }

@@ -162,10 +162,11 @@ pub fn mark_junk() {
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .filter(|r| {
-            junk(
-                r["heard"].as_str().or(r["text"].as_str()).unwrap_or(""),
-                &names,
-            )
+            r["del"] != true
+                && junk(
+                    r["heard"].as_str().or(r["text"].as_str()).unwrap_or(""),
+                    &names,
+                )
         })
         .map(|r| r["id"].clone())
         .collect();
