@@ -1,4 +1,5 @@
 //! ozen control. Owns the recorder and transcriber processes; the menu bar app only asks it.
+mod app_plist;
 mod compare;
 mod crdt;
 mod dmg;
@@ -494,23 +495,11 @@ fn build_app(app: &str) -> bool {
         .map_or("dev".into(), |o| {
             String::from_utf8_lossy(&o.stdout).trim().to_string()
         });
-    fs::write(format!("{app}/Contents/Info.plist"), format!(r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Ozen</string>
-  <key>CFBundleDisplayName</key><string>Ozen</string>
-  <key>CFBundleIdentifier</key><string>com.tupe12334.ozen</string>
-  <key>CFBundleExecutable</key><string>Ozen</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>{version}</string>
-  <key>LSMinimumSystemVersion</key><string>15.0</string>
-  <key>LSUIElement</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>Ozen transcribes what you say in meetings, on this Mac only.</string>
-  <key>NSAudioCaptureUsageDescription</key><string>Ozen transcribes the meeting audio, on this Mac only.</string>
-  <key>NSLocationUsageDescription</key><string>Ozen starts or stops recording when you arrive at places you set, like Home or Work.</string>
-</dict></plist>
-"#)).expect("write Info.plist");
+    fs::write(
+        format!("{app}/Contents/Info.plist"),
+        app_plist::info_plist(&version),
+    )
+    .expect("write Info.plist");
     sign(app, true); // macOS grants permissions only to signed apps
     // Register with Launch Services + Spotlight so it's findable right away, not after the next index pass.
     let _ = cmd("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
