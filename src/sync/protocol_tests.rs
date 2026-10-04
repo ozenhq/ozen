@@ -37,7 +37,7 @@ impl Mac {
     fn new(dir: &Path) -> Self {
         Mac {
             dir: dir.into(),
-            s: Session::new([7; 32], "vault"),
+            s: Session::with([7; 32], "vault", Coalesced::new(|| {})),
         }
     }
     fn hello(&mut self) -> Vec<Vec<u8>> {
@@ -169,7 +169,7 @@ fn a_frame_from_another_vault_or_garbage_is_an_error_not_a_merge() {
     let mut a = Mac::new(da.path());
     let mut b = Mac {
         dir: db.path().into(),
-        s: Session::new([8; 32], "vault"),
+        s: Session::with([8; 32], "vault", Coalesced::new(|| {})),
     };
     let f = a.hello();
     assert!(at(&b.dir, || b.s.receive(&f[0])).is_err());

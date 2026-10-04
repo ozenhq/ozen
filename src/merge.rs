@@ -19,9 +19,17 @@ pub fn merge_from(dir: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// Writes `bytes` to `path` unless the file already holds exactly that.
+fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
+    match fs::read(path) {
+        Ok(old) if old == bytes => Ok(()),
+        _ => write_atomic(path, bytes),
+    }
+}
+
 fn save(path: &str, v: &impl serde::Serialize) -> Result<(), String> {
     let json = serde_json::to_string_pretty(v).map_err(|e| e.to_string())? + "\n";
-    write_atomic(path, json.as_bytes())
+    write_new(path, json.as_bytes())
 }
 
 /// One folder's synced data (src/crdt.rs lists it), raw: tombstones and versions included.
@@ -68,32 +76,55 @@ pub fn merge_files(dir: &str) -> Result<String, String> {
     if !std::path::Path::new(dir).is_dir() {
         return Err(format!("no folder {dir}"));
     }
-    apply(&read_synced(&format!("{}/", dir.trim_end_matches('/'))))
+    let a = apply(&read_synced(&format!("{}/", dir.trim_end_matches('/'))))?;
+    Ok(format!("merged: {} lines, {} places", a.lines, a.places))
+}
+
+/// What `apply` did.
+pub struct Applied {
+    /// Some record here is different now: relearn and retrain.
+    pub changed: bool,
+    pub lines: usize,
+    pub places: usize,
 }
 
 /// Merges `theirs` into this folder's synced files: what `ozen merge` and sync both do. Every file is
 /// replaced crash-safely (`write_atomic`), all under the transcriber's lines.jsonl lock, so none of its
-/// lines is lost and two merges never interleave.
-pub fn apply(theirs: &Synced) -> Result<String, String> {
+/// lines is lost and two merges never interleave. A file that would come out the same isn't rewritten.
+pub fn apply(theirs: &Synced) -> Result<Applied, String> {
     let mut lock = locked()?;
     let ours = read_synced("");
-    save(TAGS, &merge_maps(&ours.tags, &theirs.tags))?;
-    save(FIXES, &merge_maps(&ours.fixes, &theirs.fixes))?;
-    save(VOCAB, &merge_maps(&ours.vocab, &theirs.vocab))?;
-    let _ = fs::remove_file(VOCAB_TXT);
+    let mut changed = false;
+    for (f, mine, other) in [
+        (TAGS, &ours.tags, &theirs.tags),
+        (FIXES, &ours.fixes, &theirs.fixes),
+        (VOCAB, &ours.vocab, &theirs.vocab),
+    ] {
+        let m = merge_maps(mine, other);
+        changed |= &m != mine;
+        save(f, &m)?;
+    }
+    let _ = fs::remove_file(VOCAB_TXT); // vocab.json holds its words now
     let p = merge_rows(&ours.places, &theirs.places);
+    changed |= p != merge_rows(&ours.places, &[]);
     save(places::FILE, &p)?;
 
     let mut text = String::new(); // under the lock: every line the transcriber has written
     lock.read_to_string(&mut text).map_err(|e| e.to_string())?;
-    let lines = merge_rows(&parse_jsonl(&text), &theirs.lines);
+    let mine = parse_jsonl(&text);
+    let lines = merge_rows(&mine, &theirs.lines);
+    changed |= lines != merge_rows(&mine, &[]);
     let out: String = lines
         .iter()
         .map(|r| Value::Object(r.clone()).to_string() + "\n")
         .collect();
-    write_atomic(LINES, out.as_bytes())?;
+    write_new(LINES, out.as_bytes())?;
     drop(lock);
-    Ok(format!("merged: {} lines, {} places", lines.len(), p.len()))
+    Ok(Applied {
+        changed,
+        lines: lines.len(),
+        places: p.len(),
+    })
 }
 
 /// `ozen merge DIR` (DIR relative to where it was called from): prints the result, or exits 1.

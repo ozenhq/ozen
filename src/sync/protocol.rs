@@ -1,10 +1,11 @@
 //! What two Macs of one vault say to each other. The relay keeps nothing, so Macs online together work
 //! out between them what each lacks: each sends a summary (every synced record's version and hash), the
 //! other answers with each record it has newer, different at the same version, or missing from the
-//! summary, and both merge what they get through `ozen merge`'s path (`merge::apply`). A local edit goes
+//! summary, and both merge what they get through `ozen merge`'s path (apply.rs, which also retrains). A local edit goes
 //! out as soon as `changes` is called. Messages are JSON, deflated, then sealed (seal.rs) into frames;
 //! carrying the frames is the connection's job.
 #![allow(dead_code)] // ponytail: driven by the connection (OFE-7)
+use super::apply::{self, Coalesced};
 use super::key::Key;
 use super::seal;
 use crate::crdt::{live_ids, v};
@@ -115,15 +116,23 @@ pub struct Session {
     told: BTreeMap<Id, Mark>,
     /// Summaries still arriving: id -> (parts, part -> entries).
     partial: BTreeMap<u64, (u32, BTreeMap<u32, Vec<Entry>>)>,
+    /// Relearn and retrain after received records change something.
+    after: Coalesced,
 }
 
 impl Session {
     pub fn new(seal_key: Key, vault: &str) -> Self {
+        Session::with(seal_key, vault, Coalesced::retrain())
+    }
+
+    /// A session that runs `after` (instead of relearn + `ozen retrain`) when received records change something.
+    pub fn with(seal_key: Key, vault: &str, after: Coalesced) -> Self {
         Session {
             seal_key,
             vault: vault.into(),
             told: BTreeMap::new(),
             partial: BTreeMap::new(),
+            after,
         }
     }
 
@@ -237,7 +246,7 @@ impl Session {
                     .iter()
                     .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
                     .collect();
-                merge::apply(&synced(r))?;
+                apply::received(&synced(r), &self.after)?;
                 // A record that merged to exactly what the sender has is known to them: not a change to
                 // send back. One where ours won stays unmarked, so `changes` sends it.
                 let ours = records(&merge::read_synced(""));
