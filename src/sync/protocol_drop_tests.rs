@@ -47,27 +47,54 @@ fn a_garbage_frame_between_two_good_ones_is_dropped_and_counted() {
 #[test]
 fn a_frame_under_an_old_key_or_with_a_flipped_byte_is_dropped_not_merged() {
     let (_da, _db, mut b, good) = two_tag_frames();
-    let old_key = seal::seal(&[9; 32], "vault", &good[0][..10]).unwrap();
+    // a real records frame from a Mac still on another key (after a rotate)
+    let dc = folder(json!([]), json!({"z": {"v": 1, "val": "Gal"}}));
+    let mut c = Mac {
+        dir: dc.path().into(),
+        s: Session::with([9; 32], "vault", Coalesced::new(|| {})),
+    };
+    let old_key = c.changes();
+    assert_eq!(old_key.len(), 1);
     let mut flipped = good[0].clone();
     flipped[40] ^= 1;
     let not_a_message = raw_frame(&[VERSION, 1, 2, 3]);
-    for f in [&old_key, &flipped, &not_a_message] {
+    let version_0 = raw_frame(&[0]);
+    let empty = raw_frame(&[]);
+    for f in [&old_key[0], &flipped, &not_a_message, &version_0, &empty] {
         b.receive(f);
     }
-    assert_eq!(b.s.dropped.bad, 3);
+    assert_eq!(b.s.dropped.bad, 5);
     assert!(b.synced().is_empty(), "nothing merged");
+}
+
+#[test]
+fn a_frame_inflating_past_a_frame_of_json_is_dropped() {
+    use flate2::{Compression, write::DeflateEncoder};
+    use std::io::Write;
+    let (_da, _db, mut b, _) = two_tag_frames();
+    let mut z = DeflateEncoder::new(vec![VERSION], Compression::best());
+    z.write_all(&vec![b' '; 4 << 20]).unwrap(); // 4 MiB of spaces deflates to a few KiB
+    b.receive(&raw_frame(&z.finish().unwrap()));
+    assert_eq!(b.s.dropped.bad, 1);
 }
 
 #[test]
 fn a_frame_from_a_newer_protocol_is_held_back_with_update_ozen() {
     let (_da, _db, mut b, good) = two_tag_frames();
-    // a v2 Mac's records: whatever follows the version byte, this build must not merge it
-    let mut v2 = vec![VERSION + 1];
-    v2.extend(&good[0]); // any bytes
+    // a v2 Mac's records frame, otherwise valid for v1: this build must still not merge it
+    let mut v2 = seal::open(&[7; 32], "vault", &good[0]).unwrap();
+    v2[0] = VERSION + 1;
     b.receive(&raw_frame(&v2));
     assert!(b.synced().is_empty());
     assert_eq!((b.s.dropped.newer, b.s.dropped.bad), (1, 0));
     assert!(b.s.dropped.advice().unwrap().contains("update ozen"));
+    assert!(
+        b.s.dropped
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("protocol 2")
+    );
     assert_eq!(Dropped::default().advice(), None);
 }
 

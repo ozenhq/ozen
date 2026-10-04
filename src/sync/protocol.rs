@@ -109,6 +109,14 @@ fn groups<T: Serialize>(items: Vec<T>) -> (Vec<Vec<T>>, Vec<T>) {
     (out, big)
 }
 
+/// The version byte of a frame that opens (for messages; 0 if it doesn't).
+fn frame_version(key: &Key, vault: &str, frame: &[u8]) -> u8 {
+    seal::open(key, vault, frame)
+        .ok()
+        .and_then(|p| p.first().copied())
+        .unwrap_or(0)
+}
+
 /// What happened to frames this Mac couldn't use, for `ozen sync status`.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Dropped {
@@ -233,8 +241,10 @@ impl Session {
             Some(&v) if v > VERSION => return Ok(None),
             v => return Err(format!("frame with protocol version {v:?}")),
         }
+        // A sender's JSON is at most BUDGET per frame; anything inflating past that is no frame of ours.
         let mut json = vec![];
         DeflateDecoder::new(&plain[1..])
+            .take(BUDGET as u64 + 1024)
             .read_to_end(&mut json)
             .map_err(|e| format!("frame does not inflate: {e}"))?;
         serde_json::from_slice(&json)
@@ -252,7 +262,10 @@ impl Session {
             Ok(Some(m)) => m,
             Ok(None) => {
                 self.dropped.newer += 1;
-                self.dropped.last_error = Some("frame from a newer ozen".into());
+                self.dropped.last_error = Some(format!(
+                    "frame from a newer ozen (protocol {}, this one speaks {VERSION})",
+                    frame_version(&self.seal_key, &self.vault, frame)
+                ));
                 return Ok(vec![]);
             }
             Err(e) => {
