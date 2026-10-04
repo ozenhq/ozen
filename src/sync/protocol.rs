@@ -13,7 +13,7 @@ use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::io::Read;
 
 /// A synced record: (kind, key). The kinds are the synced files: tags, fixes, vocab, places, lines.
@@ -84,33 +84,37 @@ fn synced(recs: Vec<(String, String, Value)>) -> Synced {
     s
 }
 
-/// `items` in groups whose JSON fits one frame. One item over the budget is an error.
-fn groups<T: Serialize>(items: Vec<T>) -> Result<Vec<Vec<T>>, String> {
-    let mut out: Vec<Vec<T>> = vec![];
+/// `items` in groups whose JSON fits one frame (always at least one group, maybe empty). An item that
+/// can't fit even alone is left out and returned separately.
+fn groups<T: Serialize>(items: Vec<T>) -> (Vec<Vec<T>>, Vec<T>) {
+    let (mut out, mut big): (Vec<Vec<T>>, Vec<T>) = (vec![vec![]], vec![]);
     let mut size = 0;
     for it in items {
-        let n = serde_json::to_vec(&it).map_err(|e| e.to_string())?.len() + 1;
+        let n = serde_json::to_vec(&it).map_or(usize::MAX, |j| j.len() + 1);
         if n > BUDGET {
-            return Err(format!("a record of {n} bytes is too big to sync"));
+            big.push(it);
+            continue;
         }
-        if out.is_empty() || size + n > BUDGET {
+        if size + n > BUDGET {
             out.push(vec![]);
             size = 0;
         }
         size += n;
-        out.last_mut().expect("pushed").push(it);
+        out.last_mut().expect("one group").push(it);
     }
-    Ok(out)
+    (out, big)
 }
 
-/// One Mac's side of the conversation with the vault's other Macs, over one connection.
+/// One Mac's side of the conversation with the vault's other Macs, over one connection. Records only
+/// flow in answer to a summary or as local changes, so every Mac says `hello` when it connects and when
+/// the online count rises (relay presence frames, OFE-31).
 pub struct Session {
     seal_key: Key,
     vault: String,
     /// What the other Macs last heard about each record here, so `changes` sends only what's new.
     told: BTreeMap<Id, Mark>,
-    /// Summaries still arriving: id -> (parts so far, entries).
-    partial: HashMap<u64, (u32, Vec<Entry>)>,
+    /// Summaries still arriving: id -> (parts, part -> entries).
+    partial: BTreeMap<u64, (u32, BTreeMap<u32, Vec<Entry>>)>,
 }
 
 impl Session {
@@ -119,7 +123,7 @@ impl Session {
             seal_key,
             vault: vault.into(),
             told: BTreeMap::new(),
-            partial: HashMap::new(),
+            partial: BTreeMap::new(),
         }
     }
 
@@ -130,15 +134,24 @@ impl Session {
         seal::seal(&self.seal_key, &self.vault, &plain)
     }
 
-    fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<Vec<Vec<u8>>, String> {
+    /// Frames carrying `recs`, and the ids that went out. A record too big for one frame stays here
+    /// (reported on stderr): the rest still go.
+    fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<(Vec<Vec<u8>>, Vec<Id>), String> {
         let flat = recs.into_iter().map(|((k, key), r)| (k, key, r)).collect();
-        groups(flat)?
-            .into_iter()
-            .map(|r| self.frame(&Msg::Records { r }))
-            .collect()
+        let (groups, big) = groups(flat);
+        for (k, key, _) in big {
+            eprintln!("sync: {k} {key} is too big for one frame; not sent");
+        }
+        let mut sent = vec![];
+        let mut frames = vec![];
+        for r in groups.into_iter().filter(|g| !g.is_empty()) {
+            sent.extend(r.iter().map(|(k, key, _)| (k.clone(), key.clone())));
+            frames.push(self.frame(&Msg::Records { r })?);
+        }
+        Ok((frames, sent))
     }
 
-    /// The summary of everything here, as frames: sent on connecting and when another Mac comes online.
+    /// The summary of everything here, as frames (at least one, so a Mac with nothing yet still asks).
     pub fn hello(&mut self) -> Result<Vec<Vec<u8>>, String> {
         let ours = records(&merge::read_synced(""));
         self.told = ours.iter().map(|(id, r)| (id.clone(), mark(r))).collect();
@@ -147,7 +160,7 @@ impl Session {
             .iter()
             .map(|((k, key), (v, h))| (k.clone(), key.clone(), *v, h.clone()))
             .collect();
-        let parts = groups(s)?;
+        let parts = groups(s).0;
         let id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as u64);
@@ -168,14 +181,17 @@ impl Session {
 
     /// Frames with every record that changed here since the other Macs last heard about it.
     pub fn changes(&mut self) -> Result<Vec<Vec<u8>>, String> {
-        let changed: Vec<(Id, Value)> = records(&merge::read_synced(""))
-            .into_iter()
-            .filter(|(id, r)| self.told.get(id) != Some(&mark(r)))
+        let ours = records(&merge::read_synced(""));
+        let changed: Vec<(Id, Value)> = ours
+            .iter()
+            .filter(|(id, r)| self.told.get(*id) != Some(&mark(r)))
+            .map(|(id, r)| (id.clone(), r.clone()))
             .collect();
-        for (id, r) in &changed {
-            self.told.insert(id.clone(), mark(r));
+        let (frames, sent) = self.records_frames(changed)?;
+        for id in sent {
+            self.told.insert(id.clone(), mark(&ours[&id]));
         }
-        self.records_frames(changed)
+        Ok(frames)
     }
 
     /// Handles one frame from another Mac; returns the frames to send back. A summary is answered (once
@@ -187,14 +203,13 @@ impl Session {
             .read_to_end(&mut json)
             .map_err(|e| format!("frame does not inflate: {e}"))?;
         match serde_json::from_slice(&json).map_err(|e| format!("frame is not a message: {e}"))? {
-            Msg::Summary { id, parts, s, .. } => {
+            Msg::Summary { id, part, parts, s } => {
                 if self.partial.len() >= PARTIAL && !self.partial.contains_key(&id) {
-                    self.partial.clear(); // ponytail: only stale partials pile up this far
+                    self.partial.pop_first(); // the oldest: ids are send times
                 }
-                let p = self.partial.entry(id).or_default();
-                p.0 += 1;
-                p.1.extend(s);
-                if p.0 < parts {
+                let p = self.partial.entry(id).or_insert((parts, BTreeMap::new()));
+                p.1.insert(part, s); // a repeated part replaces itself
+                if (p.1.len() as u32) < p.0 {
                     return Ok(vec![]);
                 }
                 let theirs: BTreeMap<Id, Mark> = self
@@ -202,7 +217,8 @@ impl Session {
                     .remove(&id)
                     .expect("entry")
                     .1
-                    .into_iter()
+                    .into_values()
+                    .flatten()
                     .map(|(k, key, v, h)| ((k, key), (v, h)))
                     .collect();
                 let lack = records(&merge::read_synced(""))
@@ -214,20 +230,20 @@ impl Session {
                             .is_none_or(|(tv, th)| v > *tv || (v == *tv && h != *th))
                     })
                     .collect();
-                self.records_frames(lack)
+                Ok(self.records_frames(lack)?.0)
             }
             Msg::Records { r } => {
-                let got: Vec<Id> = r
+                let got: Vec<(Id, Mark)> = r
                     .iter()
-                    .map(|(k, key, _)| (k.clone(), key.clone()))
+                    .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
                     .collect();
                 merge::apply(&synced(r))?;
-                // What's here now for those records is what the sender has too, or wins over it on merge:
-                // not a local change to send back.
+                // A record that merged to exactly what the sender has is known to them: not a change to
+                // send back. One where ours won stays unmarked, so `changes` sends it.
                 let ours = records(&merge::read_synced(""));
-                for id in got {
-                    if let Some(r) = ours.get(&id) {
-                        self.told.insert(id, mark(r));
+                for (id, m) in got {
+                    if ours.get(&id).map(mark).as_ref() == Some(&m) {
+                        self.told.insert(id, m);
                     }
                 }
                 Ok(vec![])

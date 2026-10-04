@@ -135,6 +135,11 @@ fn a_local_edit_goes_out_alone_and_lands() {
     let db = folder(json!([]), json!({}));
     let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
     exchange(&mut a, &mut b);
+    assert_eq!(
+        b.synced(),
+        a.synced(),
+        "the Mac with nothing got everything"
+    );
     assert!(
         a.changes().is_empty() && b.changes().is_empty(),
         "nothing new after the exchange"
@@ -228,4 +233,112 @@ fn real_folder_sizes() {
     let (summary, edit) = sizes(&dir);
     eprintln!("{lines} lines: summary {summary} bytes, one-tag edit {edit} bytes");
     assert!(summary < 30_000 && edit <= 4096);
+}
+
+#[test]
+fn a_mac_with_no_files_at_all_gets_everything_of_every_kind() {
+    let da = folder(
+        json!([{"id": "1@a", "v": 1, "text": "hi"}]),
+        json!({"1@a": "Dana"}),
+    );
+    std::fs::write(
+        da.path().join("fixes.json"),
+        json!({"1@a": "hi there"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(da.path().join("vocab.txt"), "Kev, PR\n").unwrap();
+    std::fs::write(
+        da.path().join("places.json"),
+        json!([{"label": "Home", "action": "off"}]).to_string(),
+    )
+    .unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    exchange(&mut a, &mut b);
+    let got = b.synced();
+    assert_eq!(got, a.synced());
+    for kind in ["lines", "tags", "fixes", "vocab", "places"] {
+        assert!(got.keys().any(|(k, _)| k == kind), "no {kind}");
+    }
+}
+
+#[test]
+fn an_edit_that_wins_over_a_received_one_still_goes_out() {
+    let da = folder(json!([]), json!({"x": {"v": 1, "val": "Dana"}}));
+    let db = folder(json!([]), json!({}));
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    exchange(&mut a, &mut b);
+    // both edit x before hearing from the other; B's is newer
+    let tags = |d: &Path, v: u64, val: &str| {
+        std::fs::write(
+            d.join("tags.json"),
+            json!({"x": {"v": v, "val": val}}).to_string(),
+        )
+        .unwrap()
+    };
+    tags(db.path(), 3, "Noa");
+    tags(da.path(), 2, "Gal");
+    let from_a = a.changes();
+    pipe(&mut a, &mut b, from_a, vec![]);
+    let from_b = b.changes();
+    assert_eq!(from_b.len(), 1, "B's winning edit is still sent");
+    pipe(&mut a, &mut b, vec![], from_b);
+    for m in [&a, &b] {
+        assert_eq!(
+            m.synced()[&("tags".into(), "x".into())]["val"],
+            json!("Noa")
+        );
+    }
+}
+
+#[test]
+fn a_record_too_big_for_a_frame_stays_and_the_rest_go() {
+    let da = folder(json!([]), json!({}));
+    let db = folder(json!([]), json!({}));
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    exchange(&mut a, &mut b);
+    let huge = "x".repeat(seal::MAX);
+    std::fs::write(
+        da.path().join("tags.json"),
+        json!({"big": {"v": 1, "val": huge}, "small": {"v": 1, "val": "Dana"}}).to_string(),
+    )
+    .unwrap();
+    let out = a.changes();
+    assert_eq!(out.len(), 1);
+    pipe(&mut a, &mut b, out, vec![]);
+    let got = b.synced();
+    assert!(got.contains_key(&("tags".into(), "small".into())));
+    assert!(!got.contains_key(&("tags".into(), "big".into())));
+}
+
+#[test]
+fn a_summary_in_many_parts_arriving_twice_and_out_of_order_still_answers_once() {
+    let tags: serde_json::Map<String, Value> = (0..4000)
+        .map(|i| (format!("tag-{i:05}"), json!({"v": i, "val": "Dana"})))
+        .collect();
+    let da = folder(json!([]), Value::Object(tags));
+    let db = tempfile::tempdir().unwrap();
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    let hb = b.hello();
+    let mut ha = a.hello();
+    assert!(ha.len() > 1, "{} part(s)", ha.len());
+    ha.reverse();
+    let dup = ha.clone();
+    ha.extend(dup);
+    let mut replies = vec![];
+    for f in &ha {
+        replies.extend(b.receive(f));
+    }
+    assert!(replies.is_empty(), "B has nothing A lacks");
+    pipe(&mut a, &mut b, vec![], hb);
+    assert_eq!(b.synced().len(), 4000);
+}
+
+#[test]
+fn record_hashes_are_pinned() {
+    // Every Mac must hash a record identically: serde_json writes keys sorted and floats round-trip.
+    assert_eq!(
+        mark(&json!({"val": "Dana", "v": 1})),
+        (1, "d9b8eb182db8a62b".into())
+    );
 }
