@@ -1,15 +1,18 @@
 //! What two Macs of one vault say to each other. The relay keeps nothing, so Macs online together work
-//! out between them what each lacks: each sends a summary (every synced record's version and hash), the
-//! other answers with each record it has newer, different at the same version, or missing from the
+//! out between them what each lacks: each sends its 256 bucket hashes (buckets.rs); the other answers
+//! with a summary (each record's version and hash) of just the buckets that differ; that is answered
+//! with each record the answering Mac has newer, different at the same version, or missing from the
 //! summary, and both merge what they get through `ozen merge`'s path (apply.rs, which also retrains). A local edit goes
 //! out as soon as `changes` is called. Messages are JSON, deflated, then sealed (seal.rs) into frames;
 //! carrying the frames is the connection's job.
 #![allow(dead_code)] // ponytail: driven by the connection (OFE-7)
 use super::apply::{self, Coalesced};
+use super::buckets;
 use super::key::Key;
 use super::seal;
 use crate::crdt::{live_ids, v};
 use crate::merge::{self, Synced};
+use base64::Engine;
 use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,9 +21,9 @@ use std::collections::BTreeMap;
 use std::io::Read;
 
 /// A synced record: (kind, key). The kinds are the synced files: tags, fixes, vocab, places, lines.
-type Id = (String, String);
+pub(super) type Id = (String, String);
 /// What a summary says about a record: its version, and the first 8 bytes of SHA-256 of its JSON (hex).
-type Mark = (u64, String);
+pub(super) type Mark = (u64, String);
 /// One summary line: (kind, key, v, hash).
 type Entry = (String, String, u64, String);
 /// Raw JSON per frame: deflated, it stays under `seal::MAX` even when nothing compresses.
@@ -34,12 +37,16 @@ const PARTIAL: usize = 8;
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 enum Msg {
-    /// Part `part` (of `parts`) of summary `id`: (kind, key, v, hash) for records the sender has.
+    /// The sender's 256 bucket hashes, 16 bytes each, base64.
+    Buckets { h: String },
+    /// Part `part` (of `parts`) of summary `id`: (kind, key, v, hash) for the sender's records in buckets
+    /// `b`.
     Summary {
         id: u64,
         part: u32,
         parts: u32,
         s: Vec<Entry>,
+        b: Vec<u8>,
     },
     /// Records for the receiver to merge: (kind, key, record).
     Records { r: Vec<(String, String, Value)> },
@@ -64,6 +71,14 @@ fn records(s: &Synced) -> BTreeMap<Id, Value> {
         }
     }
     out
+}
+
+/// The bucket hashes of records marked `m`.
+fn hashes(m: &BTreeMap<Id, Mark>) -> Vec<u8> {
+    buckets::hashes(
+        m.iter()
+            .map(|((k, key), (v, h))| (k.as_str(), key.as_str(), *v, h.as_str())),
+    )
 }
 
 fn mark(r: &Value) -> Mark {
@@ -190,13 +205,20 @@ impl Session {
         Ok((frames, sent))
     }
 
-    /// The summary of everything here, as frames (at least one, so a Mac with nothing yet still asks).
+    /// The bucket hashes of everything here, one frame: sent on connecting and when another Mac comes
+    /// online. The other Mac answers with summaries of the buckets that differ.
     pub fn hello(&mut self) -> Result<Vec<Vec<u8>>, String> {
         let ours = records(&merge::read_synced(""));
         self.told = ours.iter().map(|(id, r)| (id.clone(), mark(r))).collect();
-        let s: Vec<_> = self
-            .told
+        let h = base64::engine::general_purpose::STANDARD.encode(hashes(&self.told));
+        Ok(vec![self.frame(&Msg::Buckets { h })?])
+    }
+
+    /// Summary frames of the records here in buckets `b` (at least one frame, even with none).
+    fn summary(&self, ours: &BTreeMap<Id, Mark>, b: Vec<u8>) -> Result<Vec<Vec<u8>>, String> {
+        let s: Vec<Entry> = ours
             .iter()
+            .filter(|((k, key), _)| b.contains(&buckets::of(k, key)))
             .map(|((k, key), (v, h))| (k.clone(), key.clone(), *v, h.clone()))
             .collect();
         let parts = groups(s).0;
@@ -213,6 +235,7 @@ impl Session {
                     part: i as u32,
                     parts: n,
                     s,
+                    b: b.clone(),
                 })
             })
             .collect()
@@ -275,7 +298,27 @@ impl Session {
             }
         };
         match msg {
-            Msg::Summary { id, part, parts, s } => {
+            Msg::Buckets { h } => {
+                let theirs = base64::engine::general_purpose::STANDARD
+                    .decode(h)
+                    .unwrap_or_default();
+                let ours: BTreeMap<Id, Mark> = records(&merge::read_synced(""))
+                    .iter()
+                    .map(|(id, r)| (id.clone(), mark(r)))
+                    .collect();
+                let diff = buckets::differing(&hashes(&ours), &theirs);
+                if diff.is_empty() {
+                    return Ok(vec![]); // in sync
+                }
+                self.summary(&ours, diff)
+            }
+            Msg::Summary {
+                id,
+                part,
+                parts,
+                s,
+                b,
+            } => {
                 if self.partial.len() >= PARTIAL && !self.partial.contains_key(&id) {
                     self.partial.pop_first(); // the oldest: ids are send times
                 }
@@ -295,6 +338,7 @@ impl Session {
                     .collect();
                 let lack = records(&merge::read_synced(""))
                     .into_iter()
+                    .filter(|((k, key), _)| b.contains(&buckets::of(k, key)))
                     .filter(|(id, r)| {
                         let (v, h) = mark(r);
                         theirs
@@ -327,6 +371,9 @@ impl Session {
 #[cfg(test)]
 #[path = "protocol_drop_tests.rs"]
 mod drop_tests;
+#[cfg(test)]
+#[path = "protocol_scale_tests.rs"]
+mod scale_tests;
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
