@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io::Read;
 
-const TAGS: &str = "tags.json";
-const FIXES: &str = "fixes.json";
-const LINES: &str = "lines.jsonl";
+pub const TAGS: &str = "tags.json";
+pub const FIXES: &str = "fixes.json";
+pub const LINES: &str = "lines.jsonl";
 
 /// `ozen merge DIR`: merge another ozen folder's synced data into this one (src/crdt.rs lists what's
 /// synced), then relearn and retrain from the result like after any fix or tag.
@@ -24,21 +24,25 @@ fn save(path: &str, v: &impl serde::Serialize) -> Result<(), String> {
     write_atomic(path, json.as_bytes())
 }
 
-/// The file half of `merge_from`: merges `dir`'s synced files into the ones here. Every file is replaced
-/// crash-safely (`write_atomic`), all under the transcriber's lines.jsonl lock, so none of its lines is
-/// lost and two merges never interleave.
-pub fn merge_files(dir: &str) -> Result<String, String> {
-    if !std::path::Path::new(dir).is_dir() {
-        return Err(format!("no folder {dir}"));
-    }
-    let mut lock = locked()?;
-    let raw = |f: &str| -> Row {
-        serde_json::from_slice(&fs::read(f).unwrap_or_default()).unwrap_or_default()
+/// One folder's synced data (src/crdt.rs lists it), raw: tombstones and versions included.
+#[derive(Default)]
+pub struct Synced {
+    pub tags: Row,
+    pub fixes: Row,
+    pub vocab: Row,
+    pub places: Vec<Row>,
+    pub lines: Vec<Row>,
+}
+
+/// The synced data in folder `d` ("" for this one, otherwise ending in '/'). A folder from before
+/// vocab.json has its words in vocab.txt.
+pub fn read_synced(d: &str) -> Synced {
+    let map = |f: &str| -> Row {
+        serde_json::from_slice(&fs::read(format!("{d}{f}")).unwrap_or_default()).unwrap_or_default()
     };
-    let vocab_raw = |d: &str| -> Row {
-        if fs::metadata(format!("{d}{VOCAB}")).is_ok() {
-            return raw(&format!("{d}{VOCAB}"));
-        }
+    let vocab = if fs::metadata(format!("{d}{VOCAB}")).is_ok() {
+        map(VOCAB)
+    } else {
         let words = fs::read_to_string(format!("{d}{VOCAB_TXT}")).unwrap_or_default();
         words
             .split([',', '\n'])
@@ -47,25 +51,42 @@ pub fn merge_files(dir: &str) -> Result<String, String> {
             .map(|w| (w.into(), json!(true)))
             .collect()
     };
-    let theirs = format!("{}/", dir.trim_end_matches('/'));
-    for f in [TAGS, FIXES] {
-        save(f, &merge_maps(&raw(f), &raw(&format!("{theirs}{f}"))))?;
+    Synced {
+        tags: map(TAGS),
+        fixes: map(FIXES),
+        vocab,
+        places: serde_json::from_slice(
+            &fs::read(format!("{d}{}", places::FILE)).unwrap_or_default(),
+        )
+        .unwrap_or_default(),
+        lines: parse_jsonl(&fs::read_to_string(format!("{d}{LINES}")).unwrap_or_default()),
     }
-    save(VOCAB, &merge_maps(&vocab_raw(""), &vocab_raw(&theirs)))?;
+}
+
+/// The file half of `merge_from`: merges `dir`'s synced files into the ones here (see `apply`).
+pub fn merge_files(dir: &str) -> Result<String, String> {
+    if !std::path::Path::new(dir).is_dir() {
+        return Err(format!("no folder {dir}"));
+    }
+    apply(&read_synced(&format!("{}/", dir.trim_end_matches('/'))))
+}
+
+/// Merges `theirs` into this folder's synced files: what `ozen merge` and sync both do. Every file is
+/// replaced crash-safely (`write_atomic`), all under the transcriber's lines.jsonl lock, so none of its
+/// lines is lost and two merges never interleave.
+pub fn apply(theirs: &Synced) -> Result<String, String> {
+    let mut lock = locked()?;
+    let ours = read_synced("");
+    save(TAGS, &merge_maps(&ours.tags, &theirs.tags))?;
+    save(FIXES, &merge_maps(&ours.fixes, &theirs.fixes))?;
+    save(VOCAB, &merge_maps(&ours.vocab, &theirs.vocab))?;
     let _ = fs::remove_file(VOCAB_TXT);
-    let rows = |f: &str| -> Vec<Row> {
-        serde_json::from_slice(&fs::read(f).unwrap_or_default()).unwrap_or_default()
-    };
-    let p = merge_rows(
-        &rows(places::FILE),
-        &rows(&format!("{theirs}{}", places::FILE)),
-    );
+    let p = merge_rows(&ours.places, &theirs.places);
     save(places::FILE, &p)?;
 
-    let other = parse_jsonl(&fs::read_to_string(format!("{theirs}{LINES}")).unwrap_or_default());
-    let mut text = String::new();
+    let mut text = String::new(); // under the lock: every line the transcriber has written
     lock.read_to_string(&mut text).map_err(|e| e.to_string())?;
-    let lines = merge_rows(&parse_jsonl(&text), &other);
+    let lines = merge_rows(&parse_jsonl(&text), &theirs.lines);
     let out: String = lines
         .iter()
         .map(|r| Value::Object(r.clone()).to_string() + "\n")

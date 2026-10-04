@@ -53,7 +53,8 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-fn v(r: &Value) -> u64 {
+/// A record's version: its "v", 0 for one written before versions.
+pub fn v(r: &Value) -> u64 {
     r.get("v").and_then(Value::as_u64).unwrap_or(0)
 }
 
@@ -299,7 +300,7 @@ pub fn merge_rows(a: &[Row], b: &[Row]) -> Vec<Row> {
 }
 
 /// Every row with its id (live_rows' for the ones written before ids), tombstones included.
-fn live_ids(raw: &[Row]) -> Vec<Row> {
+pub fn live_ids(raw: &[Row]) -> Vec<Row> {
     let named = live_rows(raw);
     let mut named = named.into_iter();
     raw.iter()
