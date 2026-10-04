@@ -37,7 +37,7 @@ impl Mac {
     fn new(dir: &Path) -> Self {
         Mac {
             dir: dir.into(),
-            s: Session::new([7; 32], "vault"),
+            s: Session::with([7; 32], "vault", Coalesced::new(|| {})),
         }
     }
     fn hello(&mut self) -> Vec<Vec<u8>> {
@@ -169,7 +169,7 @@ fn a_frame_from_another_vault_or_garbage_is_an_error_not_a_merge() {
     let mut a = Mac::new(da.path());
     let mut b = Mac {
         dir: db.path().into(),
-        s: Session::new([8; 32], "vault"),
+        s: Session::with([8; 32], "vault", Coalesced::new(|| {})),
     };
     let f = a.hello();
     assert!(at(&b.dir, || b.s.receive(&f[0])).is_err());
@@ -347,4 +347,28 @@ fn record_hashes_are_pinned() {
         mark(&json!({"val": "Dana", "v": 1})),
         (1, "d9b8eb182db8a62b".into())
     );
+}
+
+#[test]
+fn received_records_that_change_something_retrain_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let runs = std::sync::Arc::new(AtomicUsize::new(0));
+    let r = runs.clone();
+    let da = folder(json!([]), json!({"x": {"v": 1, "val": "Dana"}}));
+    let db = folder(json!([]), json!({}));
+    let mut a = Mac::new(da.path());
+    let mut b = Mac {
+        dir: db.path().into(),
+        s: Session::with(
+            [7; 32],
+            "vault",
+            Coalesced::new(move || {
+                r.fetch_add(1, Ordering::SeqCst);
+            }),
+        ),
+    };
+    exchange(&mut a, &mut b);
+    exchange(&mut a, &mut b); // in sync now: nothing lands, nothing retrains
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
 }

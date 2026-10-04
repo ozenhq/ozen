@@ -1,5 +1,6 @@
 //! `ozen sync`: share lines, tags, fixes, places and vocabulary with your other Macs through a relay
 //! (ozenhq/sync) that only sees encrypted ops.
+pub mod apply;
 pub mod config;
 pub mod key;
 pub mod protocol;
