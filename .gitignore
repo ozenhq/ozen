@@ -53,3 +53,6 @@ pace.jsonl
 # kept current by the locate watcher while some place has coordinates (ozen place)
 here.json
 here.json.*
+
+# relay URL saved by `ozen sync init --server` (the vault key lives in the Keychain)
+.sync-url

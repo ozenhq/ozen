@@ -23,6 +23,7 @@ crdts = "7.3.2"
 dispatch2 = "0.3"
 ds_parser = "0.4.0"
 flate2 = "1.1.10"
+hkdf = "0.13.0"
 hound = "3.5.1"
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
@@ -38,14 +39,17 @@ plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
 screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }
+security-framework = "3.7.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+sha2 = "0.11.0"
 signal-hook = "0.4.4"
 similar = "3.2.0"
 strsim = "0.11.1"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["rt", "macros", "io-std"] }
+url = "2.5.8"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

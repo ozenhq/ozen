@@ -18,6 +18,7 @@ mod panel;
 mod places;
 mod procs;
 mod separate;
+mod sync;
 mod text;
 mod timebar;
 mod train;
@@ -34,7 +35,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | merge | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | merge | sync | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -75,6 +76,9 @@ ozen control: start | pause | resume | stop | record | process | priority | stat
   retrain       rebuild voiceprints, labels and the ignored voices from all tags
   merge DIR     merge another ozen folder's lines, tags, fixes, places and vocabulary into this one (another
                 Mac's, a backup), then relearn and retrain; merging is safe to repeat (src/crdt.rs)
+  sync init [--server URL]
+                make this Mac's sync vault key (kept in the login Keychain; running it again keeps it) and
+                save the relay URL after checking it answers; OZEN_SYNC_URL overrides the saved one
   show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   place [--restart]
@@ -922,6 +926,7 @@ fn main() {
         }
         "retrain" => retrain(),
         "merge" => merge::cli(&cwd, USAGE),
+        "sync" => sync::cli(USAGE),
         // The meeting app using the microphone now: {"app": "Zoom"} or {"app": null}. Meetings mode polls it.
         "mic" => println!("{}", serde_json::json!({"app": mic::meeting_app()})),
         "voices" => println!("{}", serde_json::Value::from(voices::list())),

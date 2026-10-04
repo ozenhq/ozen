@@ -1,0 +1,74 @@
+//! The vault key: 32 random bytes in the login Keychain (never in the ozen folder), and what the
+//! relay (ozenhq/sync src/auth) and the encryption derive from it.
+use hkdf::Hkdf;
+use security_framework::passwords::{get_generic_password, set_generic_password};
+use security_framework::random::SecRandom;
+use sha2::{Digest, Sha256};
+
+const SERVICE: &str = "ozen-sync";
+const ACCOUNT: &str = "vault-key";
+
+pub type Key = [u8; 32];
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn hkdf(key: &Key, info: &str) -> Key {
+    let mut out = [0; 32];
+    Hkdf::<Sha256>::new(None, key)
+        .expand(info.as_bytes(), &mut out)
+        .expect("32 bytes is a valid HKDF-SHA256 length");
+    out
+}
+
+/// The vault's name on the relay: hex(SHA-256(key)), 64 lowercase hex chars.
+pub fn vault_id(key: &Key) -> String {
+    hex(&Sha256::digest(key))
+}
+
+/// The bearer token the relay checks: an HKDF output separate from the encryption key.
+#[allow(dead_code)] // ponytail: used by push/pull (OFE-7, OFE-8)
+pub fn token(key: &Key) -> String {
+    hex(&hkdf(key, "ozen-sync token"))
+}
+
+/// The key ops are sealed with; never sent anywhere.
+#[allow(dead_code)] // ponytail: used by encrypting ops (OFE-12)
+pub fn seal_key(key: &Key) -> Key {
+    hkdf(key, "ozen-sync seal")
+}
+
+/// The stored key, or a new random one saved through `write`. Running it again keeps the key.
+pub fn load_or_create(
+    read: impl FnOnce() -> Result<Option<Vec<u8>>, String>,
+    write: impl FnOnce(&Key) -> Result<(), String>,
+) -> Result<Key, String> {
+    if let Some(k) = read()? {
+        return k
+            .try_into()
+            .map_err(|_| "vault key in the Keychain is not 32 bytes".into());
+    }
+    let mut k = [0; 32];
+    SecRandom::default()
+        .copy_bytes(&mut k)
+        .map_err(|e| format!("random key: {e}"))?;
+    write(&k)?;
+    Ok(k)
+}
+
+/// The key in the login Keychain, made on first use.
+pub fn keychain() -> Result<Key, String> {
+    load_or_create(
+        || match get_generic_password(SERVICE, ACCOUNT) {
+            Ok(k) => Ok(Some(k)),
+            Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
+            Err(e) => Err(format!("Keychain: {e}")),
+        },
+        |k| set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}")),
+    )
+}
+
+#[cfg(test)]
+#[path = "key_tests.rs"]
+mod tests;
