@@ -59,6 +59,10 @@ fn tampered_or_mismatched_frames_do_not_open() {
     assert!(open(&KEY, "ab13", &f).is_err(), "wrong vault id");
     assert!(open(&KEY, VAULT, &f[..f.len() - 1]).is_err(), "truncated");
     assert!(
+        open(&KEY, VAULT, &[&f[..], &[0]].concat()).is_err(),
+        "extended"
+    );
+    assert!(
         open(&KEY, VAULT, &f[..10]).is_err(),
         "truncated below the nonce"
     );

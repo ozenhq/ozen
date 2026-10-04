@@ -42,7 +42,8 @@ pub fn seal(seal_key: &Key, vault_id: &str, plaintext: &[u8]) -> Result<Vec<u8>,
     Ok([&nonce[..], &ct].concat())
 }
 
-/// The plaintext of a frame sealed by `seal` with the same key and vault id; any other frame errors.
+/// The plaintext of a frame sealed with this key and vault id; a frame that is not a bucket size,
+/// was altered, or was sealed under another key or vault errors.
 #[allow(dead_code)] // ponytail: used by the sync protocol (OFE-10)
 pub fn open(seal_key: &Key, vault_id: &str, frame: &[u8]) -> Result<Vec<u8>, String> {
     if !BUCKETS.contains(&frame.len()) {
