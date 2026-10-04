@@ -26,6 +26,8 @@
 use crdts::{CvRDT, LWWReg};
 use serde_json::{Map, Value, json};
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 use std::sync::OnceLock;
 
 pub type Row = Map<String, Value>;
@@ -123,13 +125,31 @@ pub fn edit_map(mut raw: Row, live: &Row) -> Row {
 /// Save `live` as the map file at `path` (see `edit_map`).
 pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
     let raw = edit_map(read_raw(path), live);
-    let tmp = format!("{path}.tmp");
-    fs::write(
-        &tmp,
-        serde_json::to_string_pretty(&raw).expect("json") + "\n",
+    write_atomic(
+        path,
+        (serde_json::to_string_pretty(&raw).expect("json") + "\n").as_bytes(),
     )
-    .and_then(|_| fs::rename(&tmp, path))
-    .map_err(|e| format!("write {path}: {e}"))
+}
+
+/// Replace the file at `path` so that a crash at any moment leaves the old file or the new one, never a
+/// truncated one: these files are the only copy of the user's data (the sync relay keeps none). Writes a
+/// temp file beside it, fsyncs it (F_FULLFSYNC on macOS), then renames it over. A killed writer can leave
+/// its temp file (`.tmp` + random, tempfile's naming) behind, never a half-written `path`.
+pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
+    write_atomic_then(path, bytes, || {})
+}
+
+/// `write_atomic`, running `before_rename` once the temp file is on disk (tests kill the writer there).
+fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> Result<(), String> {
+    let err = |e: std::io::Error| format!("write {path}: {e}");
+    let p = Path::new(path);
+    let dir = p.parent().filter(|d| !d.as_os_str().is_empty());
+    let mut f = tempfile::NamedTempFile::new_in(dir.unwrap_or(Path::new("."))).map_err(err)?;
+    f.write_all(bytes).map_err(err)?;
+    f.as_file().sync_all().map_err(err)?;
+    before_rename();
+    f.persist(p).map_err(|e| err(e.error))?;
+    Ok(())
 }
 
 pub fn merge_maps(a: &Row, b: &Row) -> Row {

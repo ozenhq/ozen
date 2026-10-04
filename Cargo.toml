@@ -46,6 +46,7 @@ sha2 = "0.11.0"
 signal-hook = "0.4.4"
 similar = "3.2.0"
 strsim = "0.11.1"
+tempfile = "3.27.0"  # crash-safe writes of synced files (crdt::write_atomic)
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["rt", "macros", "io-std"] }
@@ -55,4 +56,3 @@ url = "2.5.8"
 assert_cmd = "2.2.2"
 insta = { version = "1.48.0", features = ["json"] }
 proptest = "1.11.0"
-tempfile = "3.27.0"

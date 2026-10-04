@@ -105,3 +105,51 @@ proptest! {
         prop_assert_eq!(merge_rows(&a, &a), a);
     }
 }
+
+/// Set in the child process `a_writer_killed_before_the_rename_leaves_the_old_file` starts.
+const HANG: &str = "OZEN_TEST_HANG_BEFORE_RENAME";
+
+#[test]
+fn a_writer_killed_before_the_rename_leaves_the_old_file() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let name = module_path!().split_once("::").unwrap().1.to_string()
+        + "::a_writer_killed_before_the_rename_leaves_the_old_file";
+    if let Ok(path) = std::env::var(HANG) {
+        // the child: write the new file, then hang before the rename until the parent kills it
+        let _ = write_atomic_then(&path, b"new", || {
+            println!("ready");
+            std::io::stdout().flush().unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(600));
+        });
+        return;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("tags.json");
+    fs::write(&path, "old").unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--nocapture", "--test-threads=1"])
+        .env(HANG, &path)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let out = BufReader::new(child.stdout.take().unwrap());
+    assert!(
+        out.lines()
+            .map_while(Result::ok)
+            .any(|l| l.contains("ready"))
+    );
+    child.kill().unwrap(); // SIGKILL: no destructor runs, like a crash or a force quit
+    child.wait().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    // the new bytes were fully on disk in the temp file; only the rename was missing
+    let tmp: Vec<_> = fs::read_dir(d.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p != &path)
+        .collect();
+    assert_eq!(tmp.len(), 1);
+    assert_eq!(fs::read_to_string(&tmp[0]).unwrap(), "new");
+    write_atomic(path.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+}

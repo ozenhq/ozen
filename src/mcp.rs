@@ -115,9 +115,7 @@ fn rewrite(mut edit: impl FnMut(&Row) -> Edit) -> Result<(), String> {
         }
         out.push('\n');
     }
-    let tmp = format!("{LINES}.tmp");
-    fs::write(&tmp, out).map_err(err)?;
-    fs::rename(&tmp, LINES).map_err(err) // the old file's lock is released when f drops, after the swap
+    crate::crdt::write_atomic(LINES, out.as_bytes()) // the old file's lock is released when f drops, after the swap
 }
 
 fn append(r: Row) -> Result<(), String> {
