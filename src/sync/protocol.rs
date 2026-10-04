@@ -312,5 +312,8 @@ impl Session {
 }
 
 #[cfg(test)]
+#[path = "protocol_drop_tests.rs"]
+mod drop_tests;
+#[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
