@@ -14,7 +14,7 @@ fn at<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
     r
 }
 
-fn folder(lines: Value, tags: Value) -> tempfile::TempDir {
+pub(super) fn folder(lines: Value, tags: Value) -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     let rows: String = lines
         .as_array()
@@ -28,13 +28,13 @@ fn folder(lines: Value, tags: Value) -> tempfile::TempDir {
 }
 
 /// A Mac: its folder and its session.
-struct Mac {
-    dir: PathBuf,
-    s: Session,
+pub(super) struct Mac {
+    pub(super) dir: PathBuf,
+    pub(super) s: Session,
 }
 
 impl Mac {
-    fn new(dir: &Path) -> Self {
+    pub(super) fn new(dir: &Path) -> Self {
         Mac {
             dir: dir.into(),
             s: Session::with([7; 32], "vault", Coalesced::new(|| {})),
@@ -43,13 +43,13 @@ impl Mac {
     fn hello(&mut self) -> Vec<Vec<u8>> {
         at(&self.dir, || self.s.hello()).unwrap()
     }
-    fn changes(&mut self) -> Vec<Vec<u8>> {
+    pub(super) fn changes(&mut self) -> Vec<Vec<u8>> {
         at(&self.dir, || self.s.changes()).unwrap()
     }
-    fn receive(&mut self, f: &[u8]) -> Vec<Vec<u8>> {
+    pub(super) fn receive(&mut self, f: &[u8]) -> Vec<Vec<u8>> {
         at(&self.dir, || self.s.receive(f)).unwrap()
     }
-    fn synced(&self) -> BTreeMap<Id, Value> {
+    pub(super) fn synced(&self) -> BTreeMap<Id, Value> {
         at(&self.dir, || records(&merge::read_synced("")))
     }
 }
@@ -74,7 +74,7 @@ fn pipe(a: &mut Mac, b: &mut Mac, mut to_b: Vec<Vec<u8>>, mut to_a: Vec<Vec<u8>>
 }
 
 /// Both Macs come online together: each sends its summary, each answers.
-fn exchange(a: &mut Mac, b: &mut Mac) -> usize {
+pub(super) fn exchange(a: &mut Mac, b: &mut Mac) -> usize {
     let (ha, hb) = (a.hello(), b.hello());
     pipe(a, b, ha, hb)
 }
@@ -160,20 +160,6 @@ fn a_local_edit_goes_out_alone_and_lands() {
         b.changes().is_empty(),
         "a received record is not echoed back"
     );
-}
-
-#[test]
-fn a_frame_from_another_vault_or_garbage_is_an_error_not_a_merge() {
-    let da = folder(json!([]), json!({"x": {"v": 1, "val": "Dana"}}));
-    let db = folder(json!([]), json!({}));
-    let mut a = Mac::new(da.path());
-    let mut b = Mac {
-        dir: db.path().into(),
-        s: Session::with([8; 32], "vault", Coalesced::new(|| {})),
-    };
-    let f = a.hello();
-    assert!(at(&b.dir, || b.s.receive(&f[0])).is_err());
-    assert!(at(&b.dir, || b.s.receive(b"junk")).is_err());
 }
 
 /// A folder shaped like a real one: `n` lines with 192-float voiceprints and Hebrew text, a tag on most.

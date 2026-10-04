@@ -25,6 +25,9 @@ type Mark = (u64, String);
 type Entry = (String, String, u64, String);
 /// Raw JSON per frame: deflated, it stays under `seal::MAX` even when nothing compresses.
 const BUDGET: usize = seal::MAX - 256;
+/// Protocol version, the first byte of every frame's plaintext. A newer one from an updated Mac isn't
+/// merged here: its records might not mean what this build thinks (the user is told to update ozen).
+pub const VERSION: u8 = 1;
 /// Unfinished summaries kept; a summary whose last part never came (a lagging Mac) is forgotten.
 const PARTIAL: usize = 8;
 
@@ -106,6 +109,31 @@ fn groups<T: Serialize>(items: Vec<T>) -> (Vec<Vec<T>>, Vec<T>) {
     (out, big)
 }
 
+/// The version byte of a frame that opens (for messages; 0 if it doesn't).
+fn frame_version(key: &Key, vault: &str, frame: &[u8]) -> u8 {
+    seal::open(key, vault, frame)
+        .ok()
+        .and_then(|p| p.first().copied())
+        .unwrap_or(0)
+}
+
+/// What happened to frames this Mac couldn't use, for `ozen sync status`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Dropped {
+    /// Frames that didn't open (another key, altered) or didn't parse: dropped, not merged.
+    pub bad: u64,
+    /// Frames from a newer protocol version: not merged until this Mac updates ozen.
+    pub newer: u64,
+    pub last_error: Option<String>,
+}
+
+impl Dropped {
+    /// The line to show the user, if any.
+    pub fn advice(&self) -> Option<&'static str> {
+        (self.newer > 0).then_some("another Mac runs a newer ozen: update ozen to sync with it")
+    }
+}
+
 /// One Mac's side of the conversation with the vault's other Macs, over one connection. Records only
 /// flow in answer to a summary or as local changes, so every Mac says `hello` when it connects and when
 /// the online count rises (relay presence frames, OFE-31).
@@ -118,6 +146,7 @@ pub struct Session {
     partial: BTreeMap<u64, (u32, BTreeMap<u32, Vec<Entry>>)>,
     /// Relearn and retrain after received records change something.
     after: Coalesced,
+    pub dropped: Dropped,
 }
 
 impl Session {
@@ -133,11 +162,12 @@ impl Session {
             told: BTreeMap::new(),
             partial: BTreeMap::new(),
             after,
+            dropped: Dropped::default(),
         }
     }
 
     fn frame(&self, m: &Msg) -> Result<Vec<u8>, String> {
-        let mut z = DeflateEncoder::new(vec![], Compression::default());
+        let mut z = DeflateEncoder::new(vec![VERSION], Compression::default());
         serde_json::to_writer(&mut z, m).map_err(|e| e.to_string())?;
         let plain = z.finish().map_err(|e| e.to_string())?;
         seal::seal(&self.seal_key, &self.vault, &plain)
@@ -203,15 +233,48 @@ impl Session {
         Ok(frames)
     }
 
-    /// Handles one frame from another Mac; returns the frames to send back. A summary is answered (once
-    /// all its parts are in) with the records the other Mac lacks; records are merged into the files here.
-    pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    /// The message in `frame`: Err for one that doesn't open or parse, Ok(None) for a newer version's.
+    fn decode(&self, frame: &[u8]) -> Result<Option<Msg>, String> {
         let plain = seal::open(&self.seal_key, &self.vault, frame)?;
+        match plain.first() {
+            Some(&VERSION) => {}
+            Some(&v) if v > VERSION => return Ok(None),
+            v => return Err(format!("frame with protocol version {v:?}")),
+        }
+        // A sender's JSON is at most BUDGET per frame; anything inflating past that is no frame of ours.
         let mut json = vec![];
-        DeflateDecoder::new(&plain[..])
+        DeflateDecoder::new(&plain[1..])
+            .take(BUDGET as u64 + 1024)
             .read_to_end(&mut json)
             .map_err(|e| format!("frame does not inflate: {e}"))?;
-        match serde_json::from_slice(&json).map_err(|e| format!("frame is not a message: {e}"))? {
+        serde_json::from_slice(&json)
+            .map(Some)
+            .map_err(|e| format!("frame is not a message: {e}"))
+    }
+
+    /// Handles one frame from another Mac; returns the frames to send back. A summary is answered (once
+    /// all its parts are in) with the records the other Mac lacks; records are merged into the files here.
+    /// A frame this Mac can't use is dropped and counted in `dropped`, never merged, and the session
+    /// goes on: the sender still has its records and resends them at the next summary exchange. Only
+    /// failing to write here is an error.
+    pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let msg = match self.decode(frame) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                self.dropped.newer += 1;
+                self.dropped.last_error = Some(format!(
+                    "frame from a newer ozen (protocol {}, this one speaks {VERSION})",
+                    frame_version(&self.seal_key, &self.vault, frame)
+                ));
+                return Ok(vec![]);
+            }
+            Err(e) => {
+                self.dropped.bad += 1;
+                self.dropped.last_error = Some(e);
+                return Ok(vec![]);
+            }
+        };
+        match msg {
             Msg::Summary { id, part, parts, s } => {
                 if self.partial.len() >= PARTIAL && !self.partial.contains_key(&id) {
                     self.partial.pop_first(); // the oldest: ids are send times
@@ -261,6 +324,9 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+#[path = "protocol_drop_tests.rs"]
+mod drop_tests;
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
