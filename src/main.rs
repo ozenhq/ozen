@@ -18,6 +18,7 @@ mod panel;
 mod places;
 mod procs;
 mod separate;
+mod sync;
 mod text;
 mod timebar;
 mod train;
@@ -34,7 +35,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const USAGE: &str = "\
-ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | merge | show | place | places | meetings | gather | live | open | app | bar | mcp
+ozen control: start | pause | resume | stop | record | process | priority | status | health | look | fix | eval | compare | tag | ignore | tag-menu | mic | transcript | unsure | controls | voices | name | rename | forget | retrain | merge | sync | show | place | places | meetings | gather | live | open | app | bar | mcp
   start/resume  record + transcribe
   pause         stop recording; transcriber stays loaded so resume is instant
   stop          stop recording, finish transcribing what's queued, then exit
@@ -922,6 +923,7 @@ fn main() {
         }
         "retrain" => retrain(),
         "merge" => merge::cli(&cwd, USAGE),
+        "sync" => sync::cli(),
         // The meeting app using the microphone now: {"app": "Zoom"} or {"app": null}. Meetings mode polls it.
         "mic" => println!("{}", serde_json::json!({"app": mic::meeting_app()})),
         "voices" => println!("{}", serde_json::Value::from(voices::list())),
