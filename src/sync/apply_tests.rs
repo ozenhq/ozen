@@ -106,3 +106,27 @@ fn a_received_tag_and_tombstone_land_once_and_the_same_again_changes_nothing() {
         "one retrain, for the first batch only"
     );
 }
+
+#[test]
+fn a_panicking_run_does_not_stop_later_ones() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let (done, finished) = mpsc::channel::<usize>();
+    let done = Mutex::new(done);
+    let r = runs.clone();
+    let job = Coalesced::new(move || {
+        let n = r.fetch_add(1, Ordering::SeqCst) + 1;
+        done.lock().unwrap().send(n).unwrap();
+        if n == 1 {
+            panic!("relearn failed");
+        }
+    });
+    job.request();
+    assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(1));
+    std::thread::sleep(Duration::from_millis(100)); // let the panicked run unwind and finish
+    job.request();
+    assert_eq!(
+        finished.recv_timeout(Duration::from_secs(5)),
+        Ok(2),
+        "it runs again"
+    );
+}

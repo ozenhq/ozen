@@ -348,3 +348,27 @@ fn record_hashes_are_pinned() {
         (1, "d9b8eb182db8a62b".into())
     );
 }
+
+#[test]
+fn received_records_that_change_something_retrain_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let runs = std::sync::Arc::new(AtomicUsize::new(0));
+    let r = runs.clone();
+    let da = folder(json!([]), json!({"x": {"v": 1, "val": "Dana"}}));
+    let db = folder(json!([]), json!({}));
+    let mut a = Mac::new(da.path());
+    let mut b = Mac {
+        dir: db.path().into(),
+        s: Session::with(
+            [7; 32],
+            "vault",
+            Coalesced::new(move || {
+                r.fetch_add(1, Ordering::SeqCst);
+            }),
+        ),
+    };
+    exchange(&mut a, &mut b);
+    exchange(&mut a, &mut b); // in sync now: nothing lands, nothing retrains
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+}

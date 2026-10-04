@@ -35,9 +35,10 @@ pub(crate) fn read(path: &str) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+/// Replaces the file whole (`write_atomic`): the transcriber reads learned.json while sync relearns.
 pub(crate) fn write(path: &str, v: &Value) {
-    fs::write(path, serde_json::to_string_pretty(v).expect("json") + "\n")
-        .unwrap_or_else(|e| panic!("write {path}: {e}"));
+    let json = serde_json::to_string_pretty(v).expect("json") + "\n";
+    crate::crdt::write_atomic(path, json.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// Transcript lines in file order (only lines with a voiceprint, like src/train.rs).

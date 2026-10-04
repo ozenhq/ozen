@@ -22,15 +22,18 @@ impl Coalesced {
         }
     }
 
-    /// Relearn, then retrain in a child `ozen retrain` (this binary), waiting for it on the job's thread.
+    /// Relearn, then retrain in a child `ozen retrain`, waiting for it on the job's thread. The child is
+    /// this binary: sync runs inside `ozen`, whose working directory is already the ozen checkout.
     pub fn retrain() -> Self {
         Coalesced::new(|| {
             if let Err(e) = crate::fixes::relearn() {
                 eprintln!("sync: relearn: {e}");
             }
             let exe = std::env::current_exe().unwrap_or_else(|_| "ozen".into());
-            if let Err(e) = std::process::Command::new(exe).arg("retrain").status() {
-                eprintln!("sync: retrain: {e}");
+            match std::process::Command::new(exe).arg("retrain").status() {
+                Ok(s) if s.success() => {}
+                Ok(s) => eprintln!("sync: ozen retrain exited with {s}"),
+                Err(e) => eprintln!("sync: ozen retrain: {e}"),
             }
         })
     }
@@ -47,7 +50,10 @@ impl Coalesced {
         let me = self.clone();
         std::thread::spawn(move || {
             loop {
-                (me.job)();
+                // A job that panics (relearn on a full disk) must not leave `running` set for good, or
+                // nothing would ever retrain again.
+                // (the panic hook has already reported it)
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (me.job)()));
                 let mut s = me.state.lock().unwrap();
                 if !s.1 {
                     s.0 = false;
