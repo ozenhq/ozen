@@ -5,6 +5,12 @@ pub mod key;
 
 use std::path::Path;
 
+const USAGE: &str = "\
+ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
+  init [--server URL]
+                make this Mac's vault key (kept in the login Keychain; running it again keeps it) and save
+                the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one";
+
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>) -> Result<String, String> {
     let k = key::keychain()?;
@@ -21,14 +27,14 @@ pub fn init(server: Option<&str>) -> Result<String, String> {
     })
 }
 
-/// `ozen sync ...`: prints the result, or exits 1 (2 on bad usage).
-pub fn cli(usage: &str) {
+/// `ozen sync ...`: prints the result, or exits 1 (2 with its usage on bad arguments).
+pub fn cli() {
     let a: Vec<String> = std::env::args().skip(2).collect();
     let server = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["init"] => None,
         ["init", "--server", url] => Some(url.to_string()),
         _ => {
-            eprintln!("{usage}");
+            eprintln!("{USAGE}");
             std::process::exit(2);
         }
     };
