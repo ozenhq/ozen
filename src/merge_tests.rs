@@ -35,7 +35,9 @@ fn snapshot(d: &Path) -> Vec<(String, String)> {
 
 /// `merge_files(from)` run inside `into`, as `ozen` runs it from the ozen folder.
 fn merge(into: &Path, from: &Path) -> Result<String, String> {
-    let _cwd = crate::CWD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let back = std::env::current_dir().unwrap();
     std::env::set_current_dir(into).unwrap();
     let r = merge_files(&from.to_string_lossy());
