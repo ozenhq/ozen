@@ -127,6 +127,14 @@ fn a_writer_killed_before_the_rename_leaves_the_old_file() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("tags.json");
     fs::write(&path, "old").unwrap();
+    /// Killed however the test ends, so a failed assertion never leaves the child sleeping.
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", &name, "--nocapture", "--test-threads=1"])
         .env(HANG, &path)
@@ -134,13 +142,14 @@ fn a_writer_killed_before_the_rename_leaves_the_old_file() {
         .spawn()
         .unwrap();
     let out = BufReader::new(child.stdout.take().unwrap());
+    let child = Kill(child);
     assert!(
         out.lines()
             .map_while(Result::ok)
-            .any(|l| l.contains("ready"))
+            .any(|l| l.contains("ready")),
+        "child never reached the rename (test name filter {name}?)"
     );
-    child.kill().unwrap(); // SIGKILL: no destructor runs, like a crash or a force quit
-    child.wait().unwrap();
+    drop(child); // SIGKILL: no destructor runs in the child, like a crash or a force quit
     assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     // the new bytes were fully on disk in the temp file; only the rename was missing
     let tmp: Vec<_> = fs::read_dir(d.path())
@@ -152,4 +161,23 @@ fn a_writer_killed_before_the_rename_leaves_the_old_file() {
     assert_eq!(fs::read_to_string(&tmp[0]).unwrap(), "new");
     write_atomic(path.to_str().unwrap(), b"new").unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+}
+
+#[test]
+fn a_rewrite_keeps_the_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("lines.jsonl");
+    let p = path.to_str().unwrap();
+    write_atomic(p, b"a").unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    write_atomic(p, b"b").unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
 }

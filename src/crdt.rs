@@ -27,6 +27,7 @@ use crdts::{CvRDT, LWWReg};
 use serde_json::{Map, Value, json};
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -135,6 +136,7 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
 /// truncated one: these files are the only copy of the user's data (the sync relay keeps none). Writes a
 /// temp file beside it, fsyncs it (F_FULLFSYNC on macOS), then renames it over. A killed writer can leave
 /// its temp file (`.tmp` + random, tempfile's naming) behind, never a half-written `path`.
+/// ponytail: such leftovers are never cleaned up; they're rare (a crash mid-write) and harmless.
 pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
     write_atomic_then(path, bytes, || {})
 }
@@ -143,13 +145,22 @@ pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
 fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> Result<(), String> {
     let err = |e: std::io::Error| format!("write {path}: {e}");
     let p = Path::new(path);
-    let dir = p.parent().filter(|d| !d.as_os_str().is_empty());
-    let mut f = tempfile::NamedTempFile::new_in(dir.unwrap_or(Path::new("."))).map_err(err)?;
+    let dir = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    // keep the file's mode (tempfile makes 0600); a new file gets the usual 0644
+    let mode =
+        fs::metadata(p).map_or_else(|_| fs::Permissions::from_mode(0o644), |m| m.permissions());
+    let mut f = tempfile::Builder::new()
+        .permissions(mode)
+        .tempfile_in(dir)
+        .map_err(err)?;
     f.write_all(bytes).map_err(err)?;
     f.as_file().sync_all().map_err(err)?;
     before_rename();
     f.persist(p).map_err(|e| err(e.error))?;
-    Ok(())
+    fs::File::open(dir).and_then(|d| d.sync_all()).map_err(err) // the rename itself, durable too
 }
 
 pub fn merge_maps(a: &Row, b: &Row) -> Row {
