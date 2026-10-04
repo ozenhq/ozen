@@ -2,6 +2,7 @@
 //! (ozenhq/sync) that only sees encrypted ops.
 pub mod config;
 pub mod key;
+pub mod local;
 pub mod protocol;
 pub mod seal;
 

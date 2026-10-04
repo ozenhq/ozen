@@ -39,6 +39,13 @@ pub fn seal_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync seal")
 }
 
+/// The key two Macs on one network prove they share before syncing directly (local.rs). Unlike the
+/// token, the relay never sees anything derived from it.
+#[allow(dead_code)] // ponytail: started with the background connection (OFE-7)
+pub fn lan_key(key: &Key) -> Key {
+    hkdf(key, "ozen-sync lan")
+}
+
 /// The stored key, or a new random one saved through `write`. Running it again keeps the key.
 pub fn load_or_create(
     read: impl FnOnce() -> Result<Option<Vec<u8>>, String>,
