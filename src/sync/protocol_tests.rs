@@ -317,21 +317,27 @@ fn a_summary_in_many_parts_arriving_twice_and_out_of_order_still_answers_once() 
         .map(|i| (format!("tag-{i:05}"), json!({"v": i, "val": "Dana"})))
         .collect();
     let da = folder(json!([]), Value::Object(tags));
-    let db = tempfile::tempdir().unwrap();
+    let db = folder(json!([]), json!({"only-b": {"v": 1, "val": "Noa"}}));
     let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
     let hb = b.hello();
     let mut ha = a.hello();
     assert!(ha.len() > 1, "{} part(s)", ha.len());
     ha.reverse();
-    let dup = ha.clone();
-    ha.extend(dup);
+    let dup = ha[1..].to_vec(); // every part but the last-sent arrives twice, before completion
+    ha.splice(1..1, dup);
     let mut replies = vec![];
     for f in &ha {
         replies.extend(b.receive(f));
     }
-    assert!(replies.is_empty(), "B has nothing A lacks");
-    pipe(&mut a, &mut b, vec![], hb);
-    assert_eq!(b.synced().len(), 4000);
+    assert_eq!(
+        replies.len(),
+        1,
+        "B answers the summary once, with the record A lacks"
+    );
+    replies.extend(hb);
+    pipe(&mut a, &mut b, vec![], replies); // B's answer and B's own summary, to A
+    assert_eq!(b.synced().len(), 4001);
+    assert_eq!(a.synced(), b.synced());
 }
 
 #[test]
