@@ -18,11 +18,22 @@ pub fn of(kind: &str, key: &str) -> u8 {
 pub fn hashes<'a>(marks: impl IntoIterator<Item = (&'a str, &'a str, u64, &'a str)>) -> Vec<u8> {
     let mut h: Vec<Sha256> = (0..N).map(|_| Sha256::new()).collect();
     for (kind, key, v, hash) in marks {
-        h[of(kind, key) as usize].update(format!("{kind}\0{key}\0{v}\0{hash}\n").as_bytes());
+        // lengths first, so no key can be read as another record's fields
+        let line = format!("{}:{kind}{}:{key}{v}:{hash}\n", kind.len(), key.len());
+        h[of(kind, key) as usize].update(line.as_bytes());
     }
     h.into_iter()
         .flat_map(|x| x.finalize()[..H].to_vec())
         .collect()
+}
+
+/// `b` as a lookup table: which buckets it names.
+pub fn set(b: &[u8]) -> [bool; N] {
+    let mut s = [false; N];
+    for &i in b {
+        s[i as usize] = true;
+    }
+    s
 }
 
 /// The buckets whose hashes differ; every bucket when `theirs` isn't a full set of hashes.

@@ -216,9 +216,10 @@ impl Session {
 
     /// Summary frames of the records here in buckets `b` (at least one frame, even with none).
     fn summary(&self, ours: &BTreeMap<Id, Mark>, b: Vec<u8>) -> Result<Vec<Vec<u8>>, String> {
+        let wanted = buckets::set(&b);
         let s: Vec<Entry> = ours
             .iter()
-            .filter(|((k, key), _)| b.contains(&buckets::of(k, key)))
+            .filter(|((k, key), _)| wanted[buckets::of(k, key) as usize])
             .map(|((k, key), (v, h))| (k.clone(), key.clone(), *v, h.clone()))
             .collect();
         let parts = groups(s).0;
@@ -336,9 +337,10 @@ impl Session {
                     .flatten()
                     .map(|(k, key, v, h)| ((k, key), (v, h)))
                     .collect();
+                let wanted = buckets::set(&b);
                 let lack = records(&merge::read_synced(""))
                     .into_iter()
-                    .filter(|((k, key), _)| b.contains(&buckets::of(k, key)))
+                    .filter(|((k, key), _)| wanted[buckets::of(k, key) as usize])
                     .filter(|(id, r)| {
                         let (v, h) = mark(r);
                         theirs
