@@ -26,6 +26,9 @@
 use crdts::{CvRDT, LWWReg};
 use serde_json::{Map, Value, json};
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::OnceLock;
 
 pub type Row = Map<String, Value>;
@@ -123,13 +126,63 @@ pub fn edit_map(mut raw: Row, live: &Row) -> Row {
 /// Save `live` as the map file at `path` (see `edit_map`).
 pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
     let raw = edit_map(read_raw(path), live);
-    let tmp = format!("{path}.tmp");
-    fs::write(
-        &tmp,
-        serde_json::to_string_pretty(&raw).expect("json") + "\n",
+    write_atomic(
+        path,
+        (serde_json::to_string_pretty(&raw).expect("json") + "\n").as_bytes(),
     )
-    .and_then(|_| fs::rename(&tmp, path))
-    .map_err(|e| format!("write {path}: {e}"))
+}
+
+/// Replace the file at `path` so that a crash at any moment leaves the old file or the new one, never a
+/// truncated one: these files are the only copy of the user's data (the sync relay keeps none). Writes a
+/// temp file beside it, fsyncs it (F_FULLFSYNC on macOS), then renames it over. A killed writer can leave
+/// its temp file (`.<name>.<random>.tmp`) behind, never a half-written `path`; the next write of the same
+/// file removes such leftovers once they're a minute old (a younger one may be another writer's, mid-write).
+pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
+    write_atomic_then(path, bytes, || {})
+}
+
+/// `write_atomic`, running `before_rename` once the temp file is on disk (tests kill the writer there).
+fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> Result<(), String> {
+    let err = |e: std::io::Error| format!("write {path}: {e}");
+    let p = Path::new(path);
+    let dir = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    // keep the file's mode (tempfile makes 0600); a new file gets the usual 0644
+    let mode =
+        fs::metadata(p).map_or_else(|_| fs::Permissions::from_mode(0o644), |m| m.permissions());
+    let name = p
+        .file_name()
+        .map_or(String::new(), |n| n.to_string_lossy().into());
+    let prefix = format!(".{name}.");
+    remove_stale_temps(dir, &prefix);
+    let mut f = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(".tmp")
+        .permissions(mode)
+        .tempfile_in(dir)
+        .map_err(err)?;
+    f.write_all(bytes).map_err(err)?;
+    f.as_file().sync_all().map_err(err)?;
+    before_rename();
+    f.persist(p).map_err(|e| err(e.error))?;
+    fs::File::open(dir).and_then(|d| d.sync_all()).map_err(err) // the rename itself, durable too
+}
+
+/// Removes `write_atomic` temp files (`<prefix><random>.tmp`) a killed writer left in `dir` over a minute ago.
+fn remove_stale_temps(dir: &Path, prefix: &str) {
+    let stale = |e: &fs::DirEntry| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|a| a.as_secs() >= 60))
+    };
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if n.starts_with(prefix) && n.ends_with(".tmp") && stale(&e) {
+            let _ = fs::remove_file(e.path());
+        }
+    }
 }
 
 pub fn merge_maps(a: &Row, b: &Row) -> Row {
