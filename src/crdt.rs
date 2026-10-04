@@ -135,8 +135,8 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
 /// Replace the file at `path` so that a crash at any moment leaves the old file or the new one, never a
 /// truncated one: these files are the only copy of the user's data (the sync relay keeps none). Writes a
 /// temp file beside it, fsyncs it (F_FULLFSYNC on macOS), then renames it over. A killed writer can leave
-/// its temp file (`.tmp` + random, tempfile's naming) behind, never a half-written `path`.
-/// ponytail: such leftovers are never cleaned up; they're rare (a crash mid-write) and harmless.
+/// its temp file (`.<name>.<random>.tmp`) behind, never a half-written `path`; the next write of the same
+/// file removes such leftovers once they're a minute old (a younger one may be another writer's, mid-write).
 pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
     write_atomic_then(path, bytes, || {})
 }
@@ -152,7 +152,14 @@ fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> 
     // keep the file's mode (tempfile makes 0600); a new file gets the usual 0644
     let mode =
         fs::metadata(p).map_or_else(|_| fs::Permissions::from_mode(0o644), |m| m.permissions());
+    let name = p
+        .file_name()
+        .map_or(String::new(), |n| n.to_string_lossy().into());
+    let prefix = format!(".{name}.");
+    remove_stale_temps(dir, &prefix);
     let mut f = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(".tmp")
         .permissions(mode)
         .tempfile_in(dir)
         .map_err(err)?;
@@ -161,6 +168,21 @@ fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> 
     before_rename();
     f.persist(p).map_err(|e| err(e.error))?;
     fs::File::open(dir).and_then(|d| d.sync_all()).map_err(err) // the rename itself, durable too
+}
+
+/// Removes `write_atomic` temp files (`<prefix><random>.tmp`) a killed writer left in `dir` over a minute ago.
+fn remove_stale_temps(dir: &Path, prefix: &str) {
+    let stale = |e: &fs::DirEntry| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|a| a.as_secs() >= 60))
+    };
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if n.starts_with(prefix) && n.ends_with(".tmp") && stale(&e) {
+            let _ = fs::remove_file(e.path());
+        }
+    }
 }
 
 pub fn merge_maps(a: &Row, b: &Row) -> Row {

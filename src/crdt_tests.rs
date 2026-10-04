@@ -181,3 +181,28 @@ fn a_rewrite_keeps_the_file_mode() {
         0o640
     );
 }
+
+#[test]
+fn the_next_write_removes_a_crashed_writers_old_temp_file() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("tags.json");
+    let old = d.path().join(".tags.json.abc123.tmp");
+    let young = d.path().join(".tags.json.def456.tmp"); // maybe another writer, mid-write
+    let other = d.path().join(".fixes.json.abc123.tmp"); // another file's
+    for f in [&old, &young, &other] {
+        fs::write(f, "partial").unwrap();
+    }
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for f in [&old, &other] {
+        fs::File::options()
+            .write(true)
+            .open(f)
+            .unwrap()
+            .set_modified(hour_ago)
+            .unwrap();
+    }
+    write_atomic(path.to_str().unwrap(), b"new").unwrap();
+    assert!(!old.exists());
+    assert!(young.exists() && other.exists());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+}
