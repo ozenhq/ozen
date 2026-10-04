@@ -8,10 +8,10 @@ use std::path::Path;
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>) -> Result<String, String> {
     let k = key::keychain()?;
-    let url = match server {
-        Some(s) => Some(config::save(s, Path::new(config::FILE))?),
-        None => config::server()?,
-    };
+    if let Some(s) = server {
+        config::save(s, Path::new(config::FILE))?;
+    }
+    let url = config::server()?; // OZEN_SYNC_URL still wins over what was just saved
     let id = key::vault_id(&k);
     Ok(match url {
         Some(u) => format!("vault {id}\nrelay {u}"),

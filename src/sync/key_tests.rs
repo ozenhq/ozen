@@ -16,7 +16,7 @@ fn ids_are_pinned_for_a_fixed_key() {
     // computed independently with Python's hashlib/hmac (RFC 5869, no salt)
     assert_eq!(
         vault_id(&KEY),
-        "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+        "96e30ee41d949acadae54cca5765bad30e12e1539cf36207ddfd359431628c69"
     );
     assert_eq!(
         token(&KEY),
@@ -30,6 +30,8 @@ fn ids_are_pinned_for_a_fixed_key() {
         |s: &str| s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     assert!(hex64(&vault_id(&KEY)) && hex64(&token(&KEY)));
     assert_ne!(token(&KEY), hex(&seal_key(&KEY)));
+    // what the relay recomputes from the bearer token alone
+    assert_eq!(vault_id(&KEY), hex(&Sha256::digest(token(&KEY).as_bytes())));
 }
 
 #[test]

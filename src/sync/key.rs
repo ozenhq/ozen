@@ -22,15 +22,15 @@ fn hkdf(key: &Key, info: &str) -> Key {
     out
 }
 
-/// The vault's name on the relay: hex(SHA-256(key)), 64 lowercase hex chars.
-pub fn vault_id(key: &Key) -> String {
-    hex(&Sha256::digest(key))
-}
-
 /// The bearer token the relay checks: an HKDF output separate from the encryption key.
-#[allow(dead_code)] // ponytail: used by push/pull (OFE-7, OFE-8)
 pub fn token(key: &Key) -> String {
     hex(&hkdf(key, "ozen-sync token"))
+}
+
+/// The vault's name on the relay: hex(SHA-256(token)), 64 lowercase hex chars. The relay checks a
+/// Mac's token by hashing it, so it stores nothing (ozenhq/sync OFE-26).
+pub fn vault_id(key: &Key) -> String {
+    hex(&Sha256::digest(token(key).as_bytes()))
 }
 
 /// The key ops are sealed with; never sent anywhere.

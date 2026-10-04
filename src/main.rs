@@ -78,7 +78,7 @@ ozen control: start | pause | resume | stop | record | process | priority | stat
                 Mac's, a backup), then relearn and retrain; merging is safe to repeat (src/crdt.rs)
   sync init [--server URL]
                 make this Mac's sync vault key (kept in the login Keychain; running it again keeps it) and
-                save the relay URL after checking it answers; OZEN_SYNC_URL overrides the saved one
+                save the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one
   show [N]      print the last N transcript lines (default 40), speakers corrected by your tags
   health        prints one line per problem (recording blocked or on hold, silent mic, transcriber down or behind)
   place [--restart]
