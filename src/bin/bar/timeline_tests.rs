@@ -70,7 +70,7 @@ fn the_meeting_line_names_its_day() {
     assert_eq!(head(a, a + 1320.0, day), format!("Today {hm}–{end} · 22m"));
     assert_eq!(
         head(a, a + 1320.0, day.succ_opt().unwrap()),
-        format!("Yesterday {hm}–{end} · 22m")
+        format!("{} {hm}–{end} · 22m", at.format("%d %b"))
     );
     assert!(
         head(a, a + 1320.0, day + chrono::Days::new(3))
