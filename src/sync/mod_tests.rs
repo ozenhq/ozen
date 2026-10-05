@@ -39,3 +39,10 @@ fn no_source_in_sync_formats_a_full_vault_id() {
     }
     assert!(found.is_empty(), "{found:#?}");
 }
+
+#[test]
+fn the_short_id_is_at_most_8_chars_whatever_it_is_given() {
+    assert_eq!(key::short(VAULT), "96e30ee4");
+    assert_eq!(key::short("abc"), "abc");
+    assert_eq!(key::short("aaaaaaaé…"), "aaaaaaaé");
+}

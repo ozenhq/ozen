@@ -36,7 +36,10 @@ pub fn vault_id(key: &Key) -> String {
 /// The vault id as shown to people: its first 8 hex chars, enough to tell vaults apart. The full id is
 /// what the relay sees for one user's Macs, so it never goes to output, logs or screenshots (OFE-80).
 pub fn short(vault_id: &str) -> &str {
-    &vault_id[..vault_id.len().min(8)]
+    vault_id
+        .char_indices()
+        .nth(8)
+        .map_or(vault_id, |(i, _)| &vault_id[..i])
 }
 
 /// The key ops are sealed with; never sent anywhere.
