@@ -10,6 +10,7 @@ use super::apply::{self, Coalesced};
 use super::buckets;
 pub use super::dropped::Dropped;
 use super::key::Key;
+use super::marks::Marks;
 use super::parts;
 use super::seal;
 use crate::crdt::{live_ids, v};
@@ -80,14 +81,6 @@ fn records(s: &Synced) -> BTreeMap<Id, Value> {
     out
 }
 
-/// The bucket hashes of records marked `m`.
-fn hashes(m: &BTreeMap<Id, Mark>) -> Vec<u8> {
-    buckets::hashes(
-        m.iter()
-            .map(|((k, key), (v, h))| (k.as_str(), key.as_str(), *v, h.as_str())),
-    )
-}
-
 pub(super) fn mark(r: &Value) -> Mark {
     let h = Sha256::digest(crate::crdt::canonical(r).as_bytes());
     (v(r), h[..8].iter().map(|b| format!("{b:02x}")).collect())
@@ -125,6 +118,8 @@ pub struct Session {
     parts: parts::Pending,
     /// Relearn and retrain after received records change something.
     after: Coalesced,
+    /// Marks and bucket hashes of the records here, kept while the files don't change.
+    marks: Marks,
     pub dropped: Dropped,
 }
 
@@ -143,6 +138,7 @@ impl Session {
             parts: parts::Pending::default(),
             after,
             dropped: Dropped::default(),
+            marks: Marks::default(),
         }
     }
 
@@ -180,10 +176,18 @@ impl Session {
     /// The bucket hashes of everything here, one frame: sent on connecting and when another Mac comes
     /// online. The other Mac answers with summaries of the buckets that differ.
     pub fn hello(&mut self) -> Result<Vec<Vec<u8>>, String> {
-        let ours = records(&merge::read_synced(""));
-        self.told = ours.iter().map(|(id, r)| (id.clone(), mark(r))).collect();
-        let h = base64::engine::general_purpose::STANDARD.encode(hashes(&self.told));
+        let (ours, hashes) = self.ours();
+        let h = base64::engine::general_purpose::STANDARD.encode(hashes);
+        self.told = ours.clone();
         Ok(vec![self.frame(&Msg::Buckets { h })?])
+    }
+
+    /// The marks and bucket hashes of the records here, read from the files only when they changed.
+    fn ours(&mut self) -> (&BTreeMap<Id, Mark>, &[u8]) {
+        self.marks.current(|| {
+            let all = records(&merge::read_synced(""));
+            all.iter().map(|(id, r)| (id.clone(), mark(r))).collect()
+        })
     }
 
     /// Summary frames of the records here in buckets `b` (at least one frame, even with none).
@@ -275,14 +279,12 @@ impl Session {
                 let theirs = base64::engine::general_purpose::STANDARD
                     .decode(h)
                     .unwrap_or_default();
-                let ours: BTreeMap<Id, Mark> = records(&merge::read_synced(""))
-                    .iter()
-                    .map(|(id, r)| (id.clone(), mark(r)))
-                    .collect();
-                let diff = buckets::differing(&hashes(&ours), &theirs);
+                let (ours, hashes) = self.ours();
+                let diff = buckets::differing(hashes, &theirs);
                 if diff.is_empty() {
                     return Ok(vec![]); // in sync
                 }
+                let ours = ours.clone();
                 self.summary(&ours, diff)
             }
             Msg::Summary {
@@ -375,6 +377,9 @@ mod fuzz_tests;
 #[cfg(test)]
 #[path = "protocol_golden_tests.rs"]
 mod golden_tests;
+#[cfg(test)]
+#[path = "protocol_marks_tests.rs"]
+mod marks_tests;
 #[cfg(test)]
 #[path = "protocol_parts_tests.rs"]
 mod parts_tests;
