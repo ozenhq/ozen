@@ -52,47 +52,95 @@ fn json_value() -> impl Strategy<Value = Value> {
 
 fn kind() -> impl Strategy<Value = String> {
     prop_oneof![
-        Just("tags".to_string()),
-        Just("fixes".into()),
-        Just("vocab".into()),
-        Just("places".into()),
-        Just("lines".into()),
-        ".{0,8}",
+        4 => prop_oneof![
+            Just("tags".to_string()),
+            Just("fixes".into()),
+            Just("vocab".into()),
+            Just("places".into()),
+            Just("lines".into()),
+        ],
+        1 => ".{0,8}",
+    ]
+}
+
+/// Keys mostly from a small pool that includes the fixture's records, so received records collide with
+/// what's there (higher, lower and equal versions), and sometimes anything.
+fn key() -> impl Strategy<Value = String> {
+    prop_oneof![
+        4 => prop_oneof![Just("1@a".to_string()), Just("2@b".into()), Just("x".into())],
+        1 => ".{0,8}",
+    ]
+}
+
+/// A record value: mostly the shapes real records have (row or map entry, live or deleted, any
+/// version), sometimes arbitrary JSON.
+fn record(key: String) -> impl Strategy<Value = Value> {
+    prop_oneof![
+        3 => (0u64..4, prop::option::of(".{0,6}")).prop_map(move |(v, x)| match x {
+            Some(x) => json!({"id": key, "v": v, "t": 1.0, "text": x, "val": x, "label": x}),
+            None => json!({"id": key, "v": v, "del": true}),
+        }),
+        1 => json_value(),
     ]
 }
 
 /// A message with the right shape and anything inside it.
 fn message() -> impl Strategy<Value = Value> {
     prop_oneof![
-        prop_oneof![
+        2 => prop_oneof![
             prop::collection::vec(any::<u8>(), 0..5000).prop_map(|b| base64::engine::general_purpose::STANDARD.encode(b)),
             ".{0,40}",
         ]
         .prop_map(|h| json!({"t": "buckets", "h": h})),
-        (
-            any::<u64>(),
-            any::<u32>(),
-            prop_oneof![Just(0u32), Just(1), 1u32..4, any::<u32>()],
-            prop::collection::vec((kind(), ".{0,8}", any::<u64>(), ".{0,20}"), 0..20),
+        // ids from a small pool, so parts of one summary meet, repeat, and more than 8 unfinished
+        // summaries force evictions
+        3 => (
+            prop_oneof![4 => 0u64..12, 1 => any::<u64>()],
+            prop_oneof![4 => 0u32..3, 1 => any::<u32>()],
+            prop_oneof![4 => 0u32..4, 1 => any::<u32>()],
+            prop::collection::vec((kind(), key(), 0u64..4, ".{0,20}"), 0..20),
             prop::collection::vec(any::<u8>(), 0..300),
         )
             .prop_map(|(id, part, parts, s, b)| json!({"t": "summary", "id": id, "part": part, "parts": parts, "s": s, "b": b})),
-        prop::collection::vec((kind(), ".{0,8}", json_value()), 0..12)
+        4 => prop::collection::vec((kind(), key()).prop_flat_map(|(k, key)| (Just(k), Just(key.clone()), record(key))), 0..12)
             .prop_map(|r| json!({"t": "records", "r": r})),
-        json_value(),
+        1 => json_value(),
     ]
 }
 
-/// One received frame, at any depth of the format.
+/// A version byte: mostly this protocol's, sometimes an old or newer one.
+fn version() -> impl Strategy<Value = u8> {
+    prop_oneof![8 => Just(VERSION), 1 => Just(0u8), 1 => any::<u8>()]
+}
+
+/// One received frame, at any depth of the format, weighted toward the deep layers.
 fn frame() -> impl Strategy<Value = Vec<u8>> {
     prop_oneof![
-        prop::collection::vec(any::<u8>(), 0..2048),
-        prop::collection::vec(any::<u8>(), 0..2048).prop_map(|p| sealed(&p)),
-        (any::<u8>(), prop::collection::vec(any::<u8>(), 0..2048))
+        1 => prop::collection::vec(any::<u8>(), 0..2048),
+        1 => prop::collection::vec(any::<u8>(), 0..2048).prop_map(|p| sealed(&p)),
+        // a version byte, then bytes that may not inflate
+        2 => (version(), prop::collection::vec(any::<u8>(), 0..2048))
+            .prop_map(|(v, b)| sealed(&[&[v], &b[..]].concat())),
+        2 => (version(), prop::collection::vec(any::<u8>(), 0..2048))
             .prop_map(|(v, b)| sealed(&deflated(v, &b))),
-        message().prop_map(|m| sealed(&deflated(VERSION, m.to_string().as_bytes()))),
-        message().prop_map(|m| sealed(&deflated(VERSION + 1, m.to_string().as_bytes()))),
+        12 => message().prop_map(|m| sealed(&deflated(VERSION, m.to_string().as_bytes()))),
+        1 => message().prop_map(|m| sealed(&deflated(VERSION + 1, m.to_string().as_bytes()))),
     ]
+}
+
+/// Every file in `dir`, name -> bytes.
+fn snapshot(dir: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_file())
+        .map(|p| {
+            (
+                p.file_name().unwrap().to_string_lossy().into(),
+                std::fs::read(&p).unwrap(),
+            )
+        })
+        .collect()
 }
 
 /// The synced files parse as what they must be; `read_synced` would hide a broken one behind a default.
@@ -128,6 +176,7 @@ proptest! {
         for f in &frames {
             let verdict = m.s.decode(f);
             let before = m.s.dropped.clone();
+            let files = snapshot(d.path());
             m.receive(f); // a panic here fails the case, and proptest shrinks it
             let after = &m.s.dropped;
             match verdict {
@@ -135,7 +184,14 @@ proptest! {
                 Ok(None) => prop_assert_eq!((after.bad, after.newer), (before.bad, before.newer + 1)),
                 Err(_) => prop_assert_eq!((after.bad, after.newer), (before.bad + 1, before.newer)),
             }
+            if !matches!(verdict, Ok(Some(_))) {
+                prop_assert_eq!(snapshot(d.path()), files, "a dropped frame changed the files");
+            }
             prop_assert_eq!(files_ok(d.path()), Ok(()));
+            // the Mac's own records are never lost: at worst replaced by a newer version or a tombstone
+            let have = m.synced();
+            prop_assert!(have.contains_key(&("lines".into(), "1@a".into())));
+            prop_assert!(have.contains_key(&("tags".into(), "1@a".into())));
         }
     }
 }
