@@ -158,7 +158,10 @@ pub fn talk(
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let writer = std::thread::spawn(move || {
         for f in rx {
-            write_frame(&mut w, &f)?;
+            if let Err(e) = write_frame(&mut w, &f) {
+                let _ = w.shutdown(std::net::Shutdown::Both); // unblocks the reader too
+                return Err(e);
+            }
         }
         Ok::<(), String>(())
     });
