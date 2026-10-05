@@ -1,34 +1,55 @@
 # If ozen recorded you
 
-Someone in your meeting uses ozen, an app that transcribes meetings on their Mac. This page says what that means for you, in plain words. Each point links to the code or page that backs it.
+Someone you talked to uses ozen, an app that records and transcribes conversations on their Mac. This page says what that means for you, in plain words.
 
-## What's recorded
+## What ozen records
 
-- The meeting's audio: what comes out of the call app and what the Mac's microphone hears ([how it records](../README.md#what-it-does)).
-- From that audio, ozen keeps a transcript: what was said, when, and who it thinks said it.
-- To tell speakers apart, it keeps a voiceprint for each line: numbers that describe a voice, not a recording of it ([`src/ecapa.rs`](../src/ecapa.rs)). Voiceprints are biometric data.
+- **Calls.** It records the sound of the call apps on the Mac (Zoom, Meet, Teams and others) and what the Mac's microphone hears.
+- **The room, sometimes all day.** In *Always* mode the microphone records everything said near the Mac, not only meetings. The Mac's other sounds, like a video playing, are recorded too.
+- **A transcript.** From the sound, ozen writes down what was said, when, and who it thinks said it.
+- **Voiceprints.** To tell voices apart, ozen stores a voiceprint for each line: numbers that describe how a voice sounds, not a recording of it. A voiceprint is biometric data, like a fingerprint.
+- **Screenshots, when asked.** If the user asks ozen to look at their screen, it saves a screenshot of it.
+
+Sources: [what ozen does](../README.md#what-it-does), [`src/ecapa.rs`](../src/ecapa.rs).
 
 ## Where it's kept
 
-- **On the user's own Mac.** The transcript and voiceprints stay in a folder there. There's no ozen account and no ozen server that keeps meetings.
-- **Audio is mostly deleted.** Each 15-second piece of audio is deleted once it's transcribed. The newest 20 pieces (about 5 minutes) are kept so the user can compare transcription models. The audio of a line whose text the user corrected is kept to teach the transcriber ([`src/transcribe.rs`](../src/transcribe.rs)).
-- **Voiceprints, today, also on GitHub.** So that all of the user's Macs recognize the same people, voiceprints are also pushed to a private GitHub repository the user owns ([voices registry](../README.md#what-it-does)). This stops once sync can carry them instead.
+- **On the user's own Mac.** There's no ozen account, and no ozen server keeps recordings or transcripts.
+- **Sound is mostly deleted.** Sound is recorded in 15-second pieces, and each piece is deleted once it's written down. ozen keeps:
+  - the newest pieces, about the last 10 minutes, so the user can check the transcription;
+  - the piece behind any line the user corrected, to teach the transcriber.
+- **Copies for AI assistants.** When the user opens a meeting in an AI assistant, ozen also writes a plain-text copy of that meeting, and of related ones it picks, into a `context` folder on the Mac.
+- **Voiceprints also go to GitHub.** So that all the user's Macs recognize the same people, voiceprints are also uploaded to a GitHub repository the user chooses. ozen's instructions say to keep that repository private, but that's up to the user.
+
+Sources: [`src/transcribe.rs`](../src/transcribe.rs), [`src/meetings.rs`](../src/meetings.rs), [the voices registry](../README.md#what-it-does), [ozen's privacy notes](../README.md#privacy).
 
 ## Between the user's Macs
 
-If the user turns on sync, their Macs share the transcript with each other:
+If the user turns on sync, their Macs share the transcript with each other. They do it directly when they're on the same network, and otherwise through a relay server that only passes messages along.
 
-- directly, when the Macs are on the same network;
-- otherwise, through a relay that only passes sealed messages along.
+The messages are encrypted with a key that only those Macs have. The relay can't read them and doesn't store them, not even in encrypted form.
 
-The messages are encrypted with a key only those Macs hold, and the relay stores nothing, not even the encrypted messages. Details: [how sync works](https://github.com/ozenhq/sync/blob/main/docs/architecture.md).
+Source: [how sync works](https://github.com/ozenhq/sync/blob/main/docs/architecture.md).
 
-## When the user asks an AI about the meeting
+## When an AI assistant is involved
 
-The user can open a meeting in an AI assistant (Claude or Hermes) to ask questions about it ([`src/meetings.rs`](../src/meetings.rs) `open`). The meeting's text then goes to that AI service, under that service's own terms. The same goes for a screenshot of the user's screen if they ask the assistant to look ([`ozen look`](../README.md#use)). Nothing goes to an AI service unless the user uses an assistant with ozen.
+The user can connect an AI assistant, such as Claude or Hermes, to ozen and ask it about their meetings.
+
+- **Whole history.** A connected assistant can read the whole transcript history, not only the meeting the user asked about.
+- **What gets sent.** What it reads, and any screenshot it asks for, goes to that AI company and falls under that company's own terms.
+- **Live meetings.** While a meeting is open in an assistant, ozen updates the assistant's copy every 15 seconds.
+
+Sources: [`src/mcp.rs`](../src/mcp.rs), [`src/meetings.rs`](../src/meetings.rs), [commands](../README.md#use).
 
 ## Asking for a meeting to be deleted
 
-Ask the person who recorded you. They can delete a meeting from the transcript, along with its speaker names, corrections and labels, through ozen's assistant tools ([`delete_meeting`](../src/mcp.rs)). With sync on, the deletion reaches their other Macs too, because a delete is kept as a marker that wins over the old copy ([`src/crdt.rs`](../src/crdt.rs)).
+Ask the person who recorded you. Their AI assistant can delete a meeting from the transcript, along with its speaker names, corrections and labels. With sync on, the deletion reaches their other Macs too.
 
-Deleting a meeting doesn't touch the plain-text `transcript.txt` log or audio kept for corrections, so ask them to clear those as well. Voiceprints already pushed to GitHub stay in that repository's history.
+Deleting a meeting this way doesn't remove everything. Ask them to also clear:
+
+- the plain-text log, `transcript.txt`;
+- sound kept for corrections, and the last few minutes of sound;
+- copies in the `context` folder, and screenshots;
+- voiceprints already uploaded to GitHub, which stay in that repository's history until removed there.
+
+Sources: [`delete_meeting` in `src/mcp.rs`](../src/mcp.rs), [`src/crdt.rs`](../src/crdt.rs).
