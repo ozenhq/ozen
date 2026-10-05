@@ -145,11 +145,7 @@ impl Meeting {
     pub fn row(&self) -> String {
         let mins = ((self.lines.last().unwrap().t - self.start()) / 60.0).ceil() as i64;
         let first = self.lines[0].text.split_once("): ").map_or("", |(_, t)| t);
-        let preview: String = first
-            .chars()
-            .take(80)
-            .collect::<String>()
-            .replace('\t', " ");
+        let preview = preview(first, PREVIEW).replace('\t', " ");
         let when = local(self.start()).format("%a %d %b %H:%M");
         format!(
             "{}\t{when}\t{mins}\t{}\t{preview}",
@@ -157,6 +153,21 @@ impl Meeting {
             self.lines.len()
         )
     }
+}
+
+const PREVIEW: usize = 80; // chars of a meeting's first line in the Meetings table
+
+/// `s` cut to `max` chars at a word boundary, with "…" when anything was cut.
+fn preview(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max - 1).collect();
+    let word = cut
+        .rfind(' ')
+        .filter(|&i| i > 0)
+        .map_or(&cut[..], |i| &cut[..i]);
+    format!("{}…", word.trim_end_matches([' ', ',', '.']))
 }
 
 /// Ask Kev which of `others` belong with `picked`: one yes/no question per meeting, `BATCH` per request.

@@ -146,3 +146,14 @@ fn a_long_silence_starts_a_new_meeting() {
         [("100", 2), ("1301", 2)]
     );
 }
+
+#[test]
+fn previews_cut_at_a_word_and_say_so() {
+    assert_eq!(preview("short line.", 80), "short line.");
+    assert_eq!(
+        preview("keeping up with the thought process", 30),
+        "keeping up with the thought…"
+    );
+    assert_eq!(preview("one, two three", 9), "one…");
+    assert_eq!(preview("unbrokenwordthatgoeson", 8), "unbroke…");
+}
