@@ -103,7 +103,7 @@ fn malformed_records_fail() {
         (
             "lines",
             "1",
-            json!({"id": "1", "t": 1.0, "text": "x".repeat(70_000)}),
+            json!({"id": "1", "t": 1.0, "text": "x".repeat(super::super::parts::CAP)}),
         ),
     ];
     for (k, key, r) in fail {

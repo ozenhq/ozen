@@ -10,7 +10,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 /// One message of each kind, as protocol v1 sends it.
-fn messages() -> [(&'static str, Msg); 3] {
+fn messages() -> [(&'static str, Msg); 4] {
     [
         (
             "buckets",
@@ -40,6 +40,17 @@ fn messages() -> [(&'static str, Msg); 3] {
                     ),
                 ],
             },
+        ),
+        (
+            "part",
+            Msg::Part(parts::Part {
+                k: "lines".into(),
+                key: "1@a".into(),
+                v: 2,
+                i: 0,
+                n: 2,
+                d: base64::engine::general_purpose::STANDARD.encode(br#"{"id":"1@a","#),
+            }),
         ),
     ]
 }
@@ -94,7 +105,7 @@ fn golden_v1_frames_still_open_and_parse_to_the_same_json() {
 fn golden_v1_records_frame_still_merges() {
     let d = folder(json!([]), json!({}));
     let mut b = Mac::new(d.path());
-    let [_, _, (name, msg)] = messages();
+    let [_, _, (name, msg), _] = messages();
     let f = frame(&b.s, name, &msg);
     assert!(b.receive(&f).is_empty());
     assert_eq!(b.s.dropped, Dropped::default());

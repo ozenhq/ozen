@@ -1,0 +1,5 @@
+---
+source: src/sync/protocol_golden_tests.rs
+expression: "serde_json::to_string(&msg).unwrap()"
+---
+{"t":"part","k":"lines","key":"1@a","v":2,"i":0,"n":2,"d":"eyJpZCI6IjFAYSIs"}

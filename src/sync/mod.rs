@@ -3,8 +3,10 @@
 pub mod apply;
 pub mod buckets;
 pub mod config;
+pub mod dropped;
 pub mod key;
 pub mod local;
+pub mod parts;
 pub mod protocol;
 pub mod seal;
 pub mod valid;

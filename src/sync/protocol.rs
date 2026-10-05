@@ -8,7 +8,9 @@
 #![allow(dead_code)] // ponytail: driven by the connection (OFE-7)
 use super::apply::{self, Coalesced};
 use super::buckets;
+pub use super::dropped::Dropped;
 use super::key::Key;
+use super::parts;
 use super::seal;
 use crate::crdt::{live_ids, v};
 use crate::merge::{self, Synced};
@@ -51,6 +53,8 @@ enum Msg {
     },
     /// Records for the receiver to merge: (kind, key, record).
     Records { r: Vec<(String, String, Value)> },
+    /// One part of a record too big for one frame (parts.rs).
+    Part(parts::Part),
 }
 
 /// Every synced record in `s`. Rows written before ids get theirs from `live_ids`, as `merge_rows` does.
@@ -104,52 +108,12 @@ fn synced(recs: Vec<(String, String, Value)>) -> Synced {
     s
 }
 
-/// `items` in groups whose JSON fits one frame (always at least one group, maybe empty). An item that
-/// can't fit even alone is left out and returned separately.
-fn groups<T: Serialize>(items: Vec<T>) -> (Vec<Vec<T>>, Vec<T>) {
-    let (mut out, mut big): (Vec<Vec<T>>, Vec<T>) = (vec![vec![]], vec![]);
-    let mut size = 0;
-    for it in items {
-        let n = serde_json::to_vec(&it).map_or(usize::MAX, |j| j.len() + 1);
-        if n > BUDGET {
-            big.push(it);
-            continue;
-        }
-        if size + n > BUDGET {
-            out.push(vec![]);
-            size = 0;
-        }
-        size += n;
-        out.last_mut().expect("one group").push(it);
-    }
-    (out, big)
-}
-
 /// The version byte of a frame that opens (for messages; 0 if it doesn't).
 fn frame_version(key: &Key, vault: &str, frame: &[u8]) -> u8 {
     seal::open(key, vault, frame)
         .ok()
         .and_then(|p| p.first().copied())
         .unwrap_or(0)
-}
-
-/// What happened to frames this Mac couldn't use, for `ozen sync status`.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct Dropped {
-    /// Frames that didn't open (another key, altered) or didn't parse: dropped, not merged.
-    pub bad: u64,
-    /// Frames from a newer protocol version: not merged until this Mac updates ozen.
-    pub newer: u64,
-    /// Records in frames that opened fine but failed validation (valid.rs): dropped, not merged.
-    pub records: u64,
-    pub last_error: Option<String>,
-}
-
-impl Dropped {
-    /// The line to show the user, if any.
-    pub fn advice(&self) -> Option<&'static str> {
-        (self.newer > 0).then_some("another Mac runs a newer ozen: update ozen to sync with it")
-    }
 }
 
 /// One Mac's side of the conversation with the vault's other Macs, over one connection. Records only
@@ -162,6 +126,8 @@ pub struct Session {
     told: BTreeMap<Id, Mark>,
     /// Summaries still arriving: id -> (parts, part -> entries).
     partial: BTreeMap<u64, (u32, BTreeMap<u32, Vec<Entry>>)>,
+    /// Records too big for one frame, still arriving in parts.
+    parts: parts::Pending,
     /// Relearn and retrain after received records change something.
     after: Coalesced,
     pub dropped: Dropped,
@@ -179,6 +145,7 @@ impl Session {
             vault: vault.into(),
             told: BTreeMap::new(),
             partial: BTreeMap::new(),
+            parts: parts::Pending::default(),
             after,
             dropped: Dropped::default(),
         }
@@ -191,16 +158,23 @@ impl Session {
         seal::seal(&self.seal_key, &self.vault, &plain)
     }
 
-    /// Frames carrying `recs`, and the ids that went out. A record too big for one frame stays here
-    /// (reported on stderr): the rest still go.
+    /// Frames carrying `recs`, and the ids that went out. A record too big for one frame goes in parts;
+    /// one over `parts::CAP` stays here (reported on stderr): the rest still go.
     fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<(Vec<Vec<u8>>, Vec<Id>), String> {
         let flat = recs.into_iter().map(|((k, key), r)| (k, key, r)).collect();
-        let (groups, big) = groups(flat);
-        for (k, key, _) in big {
-            eprintln!("sync: {k} {key} is too big for one frame; not sent");
+        let (groups, big) = parts::groups(flat, BUDGET);
+        let (mut sent, mut frames) = (vec![], vec![]);
+        for (k, key, r) in big {
+            match parts::split(&k, &key, &r, BUDGET) {
+                Ok(ps) => {
+                    for p in ps {
+                        frames.push(self.frame(&Msg::Part(p))?);
+                    }
+                    sent.push((k, key));
+                }
+                Err(e) => eprintln!("sync: {e}; not sent"),
+            }
         }
-        let mut sent = vec![];
-        let mut frames = vec![];
         for r in groups.into_iter().filter(|g| !g.is_empty()) {
             sent.extend(r.iter().map(|(k, key, _)| (k.clone(), key.clone())));
             frames.push(self.frame(&Msg::Records { r })?);
@@ -225,7 +199,7 @@ impl Session {
             .filter(|((k, key), _)| wanted[buckets::of(k, key) as usize])
             .map(|((k, key), (v, h))| (k.clone(), key.clone(), *v, h.clone()))
             .collect();
-        let parts = groups(s).0;
+        let parts = parts::groups(s, BUDGET).0;
         let id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as u64);
@@ -353,28 +327,44 @@ impl Session {
                     .collect();
                 Ok(self.records_frames(lack)?.0)
             }
-            Msg::Records { r } => {
-                let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
-                if let Some(e) = errors.last() {
-                    self.dropped.records += errors.len() as u64;
-                    self.dropped.last_error = Some(e.clone());
-                }
-                let got: Vec<(Id, Mark)> = r
-                    .iter()
-                    .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
-                    .collect();
-                apply::received(&synced(r), &self.after)?;
-                // A record that merged to exactly what the sender has is known to them: not a change to
-                // send back. One where ours won stays unmarked, so `changes` sends it.
-                let ours = records(&merge::read_synced(""));
-                for (id, m) in got {
-                    if ours.get(&id).map(mark).as_ref() == Some(&m) {
-                        self.told.insert(id, m);
+            Msg::Part(p) => {
+                let now = std::time::Instant::now();
+                self.dropped.bad += self.parts.expire(now) as u64;
+                match self.parts.add(p, BUDGET, now) {
+                    Ok(Some(rec)) => self.merge(vec![rec]),
+                    Ok(None) => Ok(vec![]),
+                    Err(e) => {
+                        self.dropped.bad += 1;
+                        self.dropped.last_error = Some(e);
+                        Ok(vec![])
                     }
                 }
-                Ok(vec![])
+            }
+            Msg::Records { r } => self.merge(r),
+        }
+    }
+
+    /// Merges received records (kind, key, record) into the files here.
+    fn merge(&mut self, r: Vec<(String, String, Value)>) -> Result<Vec<Vec<u8>>, String> {
+        let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
+        if let Some(e) = errors.last() {
+            self.dropped.records += errors.len() as u64;
+            self.dropped.last_error = Some(e.clone());
+        }
+        let got: Vec<(Id, Mark)> = r
+            .iter()
+            .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
+            .collect();
+        apply::received(&synced(r), &self.after)?;
+        // A record that merged to exactly what the sender has is known to them: not a change to
+        // send back. One where ours won stays unmarked, so `changes` sends it.
+        let ours = records(&merge::read_synced(""));
+        for (id, m) in got {
+            if ours.get(&id).map(mark).as_ref() == Some(&m) {
+                self.told.insert(id, m);
             }
         }
+        Ok(vec![])
     }
 }
 
@@ -387,6 +377,9 @@ mod fuzz_tests;
 #[cfg(test)]
 #[path = "protocol_golden_tests.rs"]
 mod golden_tests;
+#[cfg(test)]
+#[path = "protocol_parts_tests.rs"]
+mod parts_tests;
 #[cfg(test)]
 #[path = "protocol_prop_tests.rs"]
 mod prop_tests;
