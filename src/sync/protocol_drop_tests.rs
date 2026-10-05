@@ -180,3 +180,15 @@ fn malformed_records_are_dropped_and_counted_and_the_good_ones_still_merge() {
     let after = std::fs::read_to_string(d.path().join("lines.jsonl")).unwrap();
     assert!(!after.contains("noon"));
 }
+
+#[test]
+fn two_versions_of_one_key_in_a_frame_keep_the_winner_whatever_their_order() {
+    let newer = json!(["tags", "x", {"v": 5, "val": "Noa"}]);
+    let older = json!(["tags", "x", {"v": 2, "val": "Dana"}]);
+    for r in [json!([newer, older]), json!([older, newer])] {
+        let d = folder(json!([]), json!({}));
+        let mut m = Mac::new(d.path());
+        m.receive(&records_frame(r));
+        assert_eq!(m.synced()[&("tags".into(), "x".into())]["val"], "Noa");
+    }
+}
