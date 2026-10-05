@@ -224,7 +224,8 @@ pub fn stats(d: &Data, a: f64, b: f64, clock: &dyn Clock) -> Vec<[String; 3]> {
             },
             if took == 0.0 {
                 "nothing timed in view"
-            } else if audio >= took {
+            } else if (audio / took * 10.0).round() >= 10.0 {
+                // as rounded for display: 0.96 shows 1.0×
                 "faster than real time"
             } else {
                 "slower than real time"
