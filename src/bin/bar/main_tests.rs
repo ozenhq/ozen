@@ -1,4 +1,4 @@
-use super::{idle_status, meeting_cell, transcribe_switched};
+use super::{idle_status, meeting_cell, menu_header, transcribe_switched};
 
 #[test]
 fn transcribe_switch_stops_or_catches_up() {
@@ -48,4 +48,13 @@ fn idle_status_says_what_ozen_is_doing_once() {
         idle_status("processing", 3, false, ""),
         "Transcribing 3 chunks…"
     );
+}
+
+#[test]
+fn the_menu_opens_with_the_panel_status() {
+    assert_eq!(
+        menu_header("● Recording · Work", "recording"),
+        "● Recording · Work"
+    );
+    assert_eq!(menu_header("", "stopped"), "stopped");
 }
