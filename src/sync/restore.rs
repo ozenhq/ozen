@@ -12,6 +12,9 @@ pub const DIR: &str = ".sync-restore";
 /// Records in a received batch past which a restore point is taken first.
 pub const BIG: usize = 100;
 const KEEP: usize = 5;
+/// A sync that brings a big history comes in many frames: one restore point, before the first, covers
+/// them all. A big batch within this long of the newest point takes none.
+const BURST: Duration = Duration::from_secs(10 * 60);
 const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// While this exists, sync stays off here (run.rs); `ozen sync init` removes it.
 pub const PAUSED: &str = ".sync-paused";
@@ -49,6 +52,22 @@ pub fn size(theirs: &Synced) -> usize {
         + theirs.vocab.len()
         + theirs.places.len()
         + theirs.lines.len()
+}
+
+/// Before merging `theirs`: a restore point if it's big and none was taken in this burst. Refuses
+/// while `ozen sync undo` has paused sync, so a frame that arrives during an undo can't merge again
+/// what was just put back.
+pub fn before(theirs: &Synced) -> Result<(), String> {
+    if Path::new(PAUSED).exists() {
+        return Err("sync is paused after `ozen sync undo`: not merging".into());
+    }
+    let recent = points()
+        .last()
+        .is_some_and(|(t, _)| now().saturating_sub(*t) < BURST.as_secs());
+    if size(theirs) > BIG && !recent {
+        take()?;
+    }
+    Ok(())
 }
 
 /// Copies the synced files here into a new restore point (a file that doesn't exist is left out, and
@@ -90,19 +109,24 @@ pub fn undo() -> Result<String, String> {
     };
     fs::write(PAUSED, "").map_err(|e| format!("{PAUSED}: {e}"))?;
     let saved = take()?;
+    // Waits for a merge in progress (it holds this lock); `PAUSED` stops the ones after.
     let _lock = crate::mcp::locked()?;
     for f in files() {
         let src = from.join(f);
-        if src.exists() {
-            fs::copy(&src, f).map_err(|e| format!("{f}: {e}"))?;
-        } else if f != crate::merge::LINES {
-            let _ = fs::remove_file(f); // the lock holds lines.jsonl open: emptied below instead
+        let bytes = fs::read(&src).ok();
+        if f == crate::merge::LINES {
+            // in place: the lock holds this file open, and lines are only ever appended
+            fs::write(f, bytes.unwrap_or_default()).map_err(|e| format!("{f}: {e}"))?;
+        } else if let Some(b) = bytes {
+            crate::crdt::write_atomic(f, &b)?;
         } else {
-            fs::write(f, "").map_err(|e| format!("{f}: {e}"))?;
+            let _ = fs::remove_file(f);
         }
     }
     Ok(format!(
-        "restored the synced files from {} ({t}); what was here is saved in {}\nsync is paused: run `ozen sync init` to turn it back on",
+        "restored the synced files as they were at {t} (from {}). What was here, including lines \
+transcribed since then, is saved in {}: running `ozen sync undo` again puts it back.\nsync is \
+paused: run `ozen sync init` to turn it back on",
         from.display(),
         saved.display()
     ))

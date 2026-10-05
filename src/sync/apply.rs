@@ -66,11 +66,9 @@ impl Coalesced {
 }
 
 /// Merges received records here; if any record changed, asks `after` for a relearn and retrain. A big
-/// batch gets a restore point first (restore.rs).
+/// batch gets a restore point first, and nothing merges while sync is paused (restore.rs).
 pub fn received(theirs: &Synced, after: &Coalesced) -> Result<bool, String> {
-    if super::restore::size(theirs) > super::restore::BIG {
-        super::restore::take()?;
-    }
+    super::restore::before(theirs)?;
     let changed = merge::apply(theirs)?.changed;
     if changed {
         after.request();

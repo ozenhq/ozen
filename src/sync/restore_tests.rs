@@ -132,3 +132,35 @@ fn a_restore_point_past_a_week_old_is_pruned_even_with_room_for_it() {
         assert_eq!(left, [day]);
     });
 }
+
+#[test]
+fn a_sync_in_many_big_frames_keeps_one_restore_point_from_before_the_first() {
+    in_folder(|dir| {
+        let before = snapshot(dir);
+        for _ in 0..8 {
+            received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        }
+        assert_eq!(points().len(), 1, "one point for the whole sync");
+        undo().unwrap();
+        assert_eq!(snapshot(dir), before, "back to before the first frame");
+    });
+}
+
+#[test]
+fn nothing_merges_while_undo_has_paused_sync_and_a_second_undo_puts_back_what_the_first_replaced() {
+    in_folder(|dir| {
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        let synced = snapshot(dir);
+        undo().unwrap();
+        let undone = snapshot(dir);
+        let err = received(&batch(200), &Coalesced::new(|| {})).unwrap_err();
+        assert!(err.contains("paused"), "{err}");
+        assert_eq!(
+            snapshot(dir),
+            undone,
+            "a frame during the pause merged nothing"
+        );
+        undo().unwrap();
+        assert_eq!(snapshot(dir), synced, "undoing the undo");
+    });
+}
