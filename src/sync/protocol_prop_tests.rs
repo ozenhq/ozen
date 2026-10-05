@@ -176,8 +176,23 @@ proptest! {
     }
 }
 
-/// The synced files in `dir`, byte for byte.
-fn synced_files(dir: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
+/// The data in `dir`'s synced files: each file parsed (lines.jsonl row by row), so formatting doesn't
+/// count. `ozen merge` rewrites a file in ozen's format even when its data is unchanged, while sync
+/// leaves a file alone when nothing arrives for it; these test folders start compact, which ozen never
+/// writes. Byte-identical files after syncing are pinned by protocol_chain_tests.rs.
+fn synced_files(dir: &std::path::Path) -> Vec<(String, Option<Value>)> {
+    let parse = |f: &str, b: Vec<u8>| -> Value {
+        if f == merge::LINES {
+            let rows = String::from_utf8(b).unwrap();
+            Value::Array(
+                rows.lines()
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .collect(),
+            )
+        } else {
+            serde_json::from_slice(&b).unwrap()
+        }
+    };
     [
         merge::LINES,
         merge::TAGS,
@@ -186,7 +201,12 @@ fn synced_files(dir: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
         crate::places::FILE,
     ]
     .iter()
-    .map(|f| (f.to_string(), std::fs::read(dir.join(f)).ok()))
+    .map(|f| {
+        (
+            f.to_string(),
+            std::fs::read(dir.join(f)).ok().map(|b| parse(f, b)),
+        )
+    })
     .collect()
 }
 
