@@ -59,6 +59,7 @@ fn healthy_within(url: &str, wait: Duration) -> Result<(), String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .tls_config(tls)
         .timeout_global(Some(wait))
+        .max_redirects(0) // as curl did: a URL that redirects elsewhere isn't the relay
         .build()
         .into();
     let fail = |e: String| format!("no sync relay answering at {url}: {e}");

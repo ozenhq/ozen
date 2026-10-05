@@ -136,3 +136,20 @@ fn sync_runs_no_external_program() {
         }
     }
 }
+
+#[test]
+fn a_redirect_to_something_that_answers_ok_is_not_a_relay() {
+    let target = relay("ok");
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://127.0.0.1:{}", l.local_addr().unwrap().port());
+    let to = target.replacen("ws", "http", 1);
+    std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let _ = s.read(&mut [0; 1024]);
+        let _ = write!(
+            s,
+            "HTTP/1.1 301 Moved\r\nlocation: {to}/health\r\ncontent-length: 0\r\n\r\n"
+        );
+    });
+    assert!(healthy(&url).is_err());
+}
