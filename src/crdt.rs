@@ -1,7 +1,7 @@
 //! What ozen keeps that is yours, in a shape two Macs can merge later: state-based CRDTs, so merging is
 //! commutative, associative and idempotent, and every Mac ends up with the same data whatever the order.
 //!
-//! Synced data, merged by `merge_rows` / `merge_maps`:
+//! Synced data (`SYNCED`), merged by `merge_rows` / `merge_maps`:
 //! - lines.jsonl (transcript lines and notes) and places.json: rows keyed by "id".
 //! - tags.json, fixes.json, vocab.json: maps, key -> entry.
 //!
@@ -23,6 +23,18 @@
 //!
 //! Merging is the `crdts` crate's last-writer-wins register. No `crate::` imports: the menu bar app includes
 //! this file too (src/bin/bar/main.rs).
+/// What syncs: each kind as sync messages name it, and its file. The one list (OFE-59): merge.rs reads and
+/// writes these files (`merge::Synced`), sync/protocol.rs sends and merges these kinds, sync/valid.rs
+/// checks them, and a test (sync/protocol_synced_tests.rs) fails if any of them misses one. A kind
+/// missing anywhere would leave Macs different for good, with no server copy to repair them.
+pub const SYNCED: [(&str, &str); 5] = [
+    ("lines", "lines.jsonl"),
+    ("places", "places.json"),
+    ("tags", "tags.json"),
+    ("fixes", "fixes.json"),
+    ("vocab", "vocab.json"),
+];
+
 use crdts::{CvRDT, LWWReg};
 use serde_json::{Map, Value, json};
 use std::fs;

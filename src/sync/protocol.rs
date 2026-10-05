@@ -13,7 +13,7 @@ use super::key::Key;
 use super::parts;
 use super::seal;
 use crate::crdt::{live_ids, v};
-use crate::merge::{self, Synced};
+use crate::merge::{self, Records, Synced};
 use base64::Engine;
 use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
 use serde::{Deserialize, Serialize};
@@ -54,22 +54,27 @@ enum Msg {
     Part(parts::Part),
 }
 
-/// Every synced record in `s`. Rows written before ids get theirs from `live_ids`, as `merge_rows` does.
+/// Every synced record in `s` (every kind in `crdt::SYNCED`). Rows written before ids get theirs from
+/// `live_ids`, as `merge_rows` does.
 fn records(s: &Synced) -> BTreeMap<Id, Value> {
     let mut out = BTreeMap::new();
-    for (kind, m) in [("tags", &s.tags), ("fixes", &s.fixes), ("vocab", &s.vocab)] {
-        for (k, e) in m {
-            out.insert((kind.into(), k.clone()), e.clone());
-        }
-    }
-    for (kind, rows) in [("places", &s.places), ("lines", &s.lines)] {
-        for r in live_ids(rows) {
-            let k = r
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            out.insert((kind.into(), k), Value::Object(r));
+    for (kind, _) in crate::crdt::SYNCED {
+        match s.get(kind).expect("merge::Synced holds every synced kind") {
+            Records::Map(m) => {
+                for (k, e) in m {
+                    out.insert((kind.into(), k.clone()), e.clone());
+                }
+            }
+            Records::Rows(rows) => {
+                for r in live_ids(rows) {
+                    let k = r
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    out.insert((kind.into(), k), Value::Object(r));
+                }
+            }
         }
     }
     out
@@ -92,19 +97,8 @@ pub(super) fn mark(r: &Value) -> Mark {
 /// know (from a newer ozen) is left out.
 fn synced(recs: Vec<(String, String, Value)>) -> Synced {
     let mut s = Synced::default();
-    // two versions of one key in a frame (a buggy or hostile peer) keep the CRDT winner, not the last
-    let put = |m: &mut crate::crdt::Row, k, r| {
-        *m = crate::crdt::merge_maps(m, &[(k, r)].into_iter().collect())
-    };
     for (kind, k, r) in recs {
-        match (kind.as_str(), r) {
-            ("tags", r) => put(&mut s.tags, k, r),
-            ("fixes", r) => put(&mut s.fixes, k, r),
-            ("vocab", r) => put(&mut s.vocab, k, r),
-            ("places", Value::Object(r)) => s.places.push(r),
-            ("lines", Value::Object(r)) => s.lines.push(r),
-            _ => {}
-        }
+        s.insert(&kind, k, r);
     }
     s
 }
@@ -390,6 +384,9 @@ mod prop_tests;
 #[cfg(test)]
 #[path = "protocol_scale_tests.rs"]
 mod scale_tests;
+#[cfg(test)]
+#[path = "protocol_synced_tests.rs"]
+mod synced_tests;
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
