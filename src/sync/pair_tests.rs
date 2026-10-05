@@ -157,7 +157,11 @@ fn the_clipboard_item_is_concealed_and_forgotten_unless_replaced() {
 
 #[test]
 fn a_relay_that_is_down_leaves_the_key_as_it_was() {
-    for (existing, force) in [(None, false), (Some(vec![1; 32]), true)] {
+    for (existing, force) in [
+        (None, false),
+        (Some(vec![1; 32]), true),
+        (Some(K.to_vec()), false),
+    ] {
         let (wrote, saved, r) = run_with(&code(&K, URL), force, existing, false);
         assert!(r.is_err());
         assert_eq!((wrote, saved), (None, None), "nothing replaced");
