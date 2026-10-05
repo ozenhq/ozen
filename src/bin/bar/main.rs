@@ -528,11 +528,16 @@ fn meeting_cell(meetings: &[Vec<String>], col: &str, row: usize) -> String {
         "Lines" => 3,
         _ => 4,
     };
-    meetings
+    let cell = meetings
         .get(row)
         .and_then(|m| m.get(i))
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // a one-line meeting lasts no whole minute: `ozen meetings` says 0, the table says so honestly
+    if i == 2 && cell == "0" {
+        return "<1".into();
+    }
+    cell
 }
 
 /// Ask before a change: `action` or Cancel.
