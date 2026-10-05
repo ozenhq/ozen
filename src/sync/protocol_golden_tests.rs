@@ -68,7 +68,7 @@ fn frame(s: &Session, name: &str, msg: &Msg) -> Vec<u8> {
         // Rewriting in CI would make these tests compare today's code with itself.
         assert!(std::env::var_os("CI").is_none(), "OZEN_GOLDEN=write in CI");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(&p, s.frame(msg).unwrap()).unwrap();
+        std::fs::write(&p, s.frame_in(1, msg).unwrap()).unwrap(); // the v1 fixtures stay v1
     }
     std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }

@@ -90,3 +90,27 @@ fn a_received_line_without_a_speaker_guess_retrains_here() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
+
+#[test]
+fn a_v2_and_a_v1_mac_converge_and_then_stay_quiet() {
+    let mut other = transcribed("Noa", 0.8, 3);
+    other["id"] = json!("2@b");
+    let da = folder(
+        json!([transcribed("Dana", 0.3, 1)]),
+        json!({"1@a": {"v": 1, "val": "Dana"}}),
+    );
+    let db = folder(json!([other]), json!({}));
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    b.s.versions = Versions::new(1);
+    exchange(&mut a, &mut b);
+    assert_eq!(a.synced(), b.synced(), "converged");
+    assert_eq!(a.synced().len(), 3);
+    assert_eq!(
+        (a.s.dropped.clone(), b.s.dropped.clone()),
+        (Dropped::default(), Dropped::default())
+    );
+    // a told b everything in v2 marks before it heard b speaks v1: no resend of every line now
+    assert!(a.changes().is_empty(), "a resent what b already has");
+    assert!(b.changes().is_empty());
+    assert_eq!(exchange(&mut a, &mut b), 0, "in sync: bucket hashes only");
+}
