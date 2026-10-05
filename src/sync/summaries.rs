@@ -11,6 +11,8 @@ pub type Entry = (String, String, u64, String);
 /// Unfinished summaries kept; a summary whose last part never came (a lagging Mac) is forgotten.
 const SUMMARIES: usize = 8;
 pub const PARTS: usize = 4096;
+/// About 150 bytes each in memory, so up to ~300 MB, reachable only by a hostile peer; a heavy user's
+/// first-sync summary (~1,000,000 records) needs about half.
 pub const ENTRIES: usize = 2_000_000;
 
 #[derive(Default)]
