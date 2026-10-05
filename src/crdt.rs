@@ -156,7 +156,7 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
     let raw = edit_map(read_raw(path), live);
     write_atomic(
         path,
-        (serde_json::to_string_pretty(&raw).expect("json") + "\n").as_bytes(),
+        (serde_json::to_string_pretty(&sorted(&Value::from(raw))).expect("json") + "\n").as_bytes(),
     )
 }
 
