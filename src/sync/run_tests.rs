@@ -41,14 +41,12 @@ fn ids(dir: &Path) -> Vec<String> {
 
 /// A Mac running `serve` for `dir` on loopback, as `ozen sync run` does on the network.
 fn mac(dir: &Path, key: &Key) -> Local {
+    mac_on(IfKind::LoopbackV4, dir, key)
+}
+
+fn mac_on(on: IfKind, dir: &Path, key: &Key) -> Local {
     let dir = PathBuf::from(dir);
-    serve(
-        key,
-        IfKind::LoopbackV4,
-        Coalesced::new(|| {}),
-        move |step| at(&dir, step),
-    )
-    .unwrap()
+    serve(key, on, Coalesced::new(|| {}), move |step| at(&dir, step)).unwrap()
 }
 
 fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
@@ -62,14 +60,13 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
     }
 }
 
-#[test]
-fn two_macs_converge_and_a_later_edit_follows_without_reconnecting() {
+fn converge_then_follow_an_edit(on: impl Fn() -> IfKind) {
     let (a, b) = (
         folder(&[line("1@a", "from a")]),
         folder(&[line("2@b", "from b")]),
     );
     let key = [7; 32];
-    let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
+    let (_ma, _mb) = (mac_on(on(), a.path(), &key), mac_on(on(), b.path(), &key));
     wait_for("first exchange", || {
         ids(a.path()).len() == 2 && ids(b.path()).len() == 2
     });
@@ -89,6 +86,21 @@ fn two_macs_converge_and_a_later_edit_follows_without_reconnecting() {
         ids(b.path()).contains(&"3@a".to_string())
     });
     assert_eq!(ids(a.path()), ids(b.path()));
+}
+
+#[test]
+fn two_macs_converge_and_a_later_edit_follows_without_reconnecting() {
+    converge_then_follow_an_edit(|| IfKind::LoopbackV4);
+}
+
+/// Over the Mac's real network interface (multicast on Wi-Fi or Ethernet). Ignored by default: it
+/// needs a network and the Local Network permission. Run by hand:
+/// `OZEN_LAN_IF=en0 cargo nextest run --release --run-ignored only -E 'test(runners_over_the_real_network)'`.
+#[test]
+#[ignore]
+fn two_runners_over_the_real_network_converge_and_follow_an_edit() {
+    let i = std::env::var("OZEN_LAN_IF").unwrap_or_else(|_| "en0".into());
+    converge_then_follow_an_edit(|| IfKind::Name(i.clone()));
 }
 
 #[test]
