@@ -68,13 +68,40 @@ pub fn mint(base: &str) -> String {
     format!("{base}@{}", device())
 }
 
+/// `r` with every object's keys in sorted order, whatever map type serde_json was built with: with its
+/// `preserve_order` feature (which any dependency could switch on through Cargo feature unification)
+/// maps keep insertion order, so two Macs would write and compare the same record as different text
+/// (OFE-70). A no-op with the default, sorted map.
+pub fn sorted(r: &Value) -> Value {
+    match r {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            Value::Object(
+                keys.into_iter()
+                    .map(|k| (k.clone(), sorted(&m[k])))
+                    .collect(),
+            )
+        }
+        Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
+        x => x.clone(),
+    }
+}
+
+/// `r` as compact JSON with keys in sorted order: tie-breaks and sync hashes are taken over this
+/// text, so it is the same on every Mac. Equal to `r.to_string()` with the default map, so existing
+/// markers and hashes don't change.
+pub fn canonical(r: &Value) -> String {
+    sorted(r).to_string()
+}
+
 /// The winner of two versions of one record. The register's marker is ("v", the record's JSON): the JSON
 /// breaks ties between equal versions (old records are all 0) the same way on every Mac, and makes a marker
 /// name exactly one value, as the register requires.
 fn merged(a: &Value, b: &Value) -> Value {
     let reg = |r: &Value| LWWReg {
         val: r.clone(),
-        marker: (v(r), r.to_string()),
+        marker: (v(r), canonical(r)),
     };
     let mut x = reg(a);
     x.merge(reg(b));
@@ -129,7 +156,7 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
     let raw = edit_map(read_raw(path), live);
     write_atomic(
         path,
-        (serde_json::to_string_pretty(&raw).expect("json") + "\n").as_bytes(),
+        (serde_json::to_string_pretty(&sorted(&Value::from(raw))).expect("json") + "\n").as_bytes(),
     )
 }
 

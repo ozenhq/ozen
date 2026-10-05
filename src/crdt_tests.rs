@@ -206,3 +206,48 @@ fn the_next_write_removes_a_crashed_writers_old_temp_file() {
     assert!(young.exists() && other.exists());
     assert_eq!(fs::read_to_string(&path).unwrap(), "new");
 }
+
+/// One record with its keys inserted in the given order (with `preserve_order` that order shows).
+fn built(order: &[&str]) -> Value {
+    let all = json!({"id": "1@a", "v": 3, "t": 1.5, "text": "hi", "who": {"z": 1, "a": [{"y": 2, "b": 3}]}});
+    let mut m = serde_json::Map::new();
+    for k in order {
+        m.insert((*k).into(), all[*k].clone());
+    }
+    Value::Object(m)
+}
+
+#[test]
+fn canonical_json_ignores_key_insertion_order() {
+    // OFE-70: tie-breaks and sync hashes must not change with serde_json's map type
+    let (a, b) = (
+        built(&["id", "v", "t", "text", "who"]),
+        built(&["who", "text", "t", "v", "id"]),
+    );
+    assert_eq!(canonical(&a), canonical(&b));
+    assert_eq!(
+        canonical(&a),
+        r#"{"id":"1@a","t":1.5,"text":"hi","v":3,"who":{"a":[{"b":3,"y":2}],"z":1}}"#
+    );
+    // equal versions tie-break the same whichever way each Mac built its copy
+    let c = built(&["v", "id", "who", "t", "text"]);
+    let mut d = c.clone();
+    d["text"] = json!("ho");
+    assert_eq!(merged(&a, &d), merged(&d, &b));
+}
+
+#[test]
+fn canonical_json_is_serde_jsons_sorted_output() {
+    // with serde_json's default sorted map, existing markers and hashes don't change
+    let r = built(&["who", "text", "t", "v", "id"]);
+    let sorted_map = json!({"b": 1, "a": 2}).to_string().starts_with(r#"{"a""#);
+    if sorted_map {
+        assert_eq!(canonical(&r), r.to_string());
+    }
+    let odd = json!({"q\"uote": "a\nb", "é": [1, 2.5, null, true, {"": {}}], "e": []});
+    assert_eq!(
+        serde_json::from_str::<Value>(&canonical(&odd)).unwrap(),
+        odd,
+        "valid JSON for the same value"
+    );
+}

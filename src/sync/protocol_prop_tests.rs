@@ -122,7 +122,7 @@ fn sandbox((l, t, f, p, w): &Edits) -> (tempfile::TempDir, BTreeMap<Id, Value>) 
 fn expected(all: &[BTreeMap<Id, Value>]) -> BTreeMap<Id, Value> {
     let mut out: BTreeMap<Id, Value> = BTreeMap::new();
     for (id, r) in all.iter().flatten() {
-        let key = |r: &Value| (v(r), r.to_string());
+        let key = |r: &Value| (v(r), crate::crdt::canonical(r));
         if out.get(id).is_none_or(|have| key(r) > key(have)) {
             out.insert(id.clone(), r.clone());
         }

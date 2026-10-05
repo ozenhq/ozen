@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6c7bb99344dbbaa08b6307a01cbaf3f05ea179b4db9429e67c9ffa503ee8e63f # shrinks to macs = [([None, None, None, None, None], [None, None, None, None], [None, None, None], [None, Some((3, None)), None], [None, None, None]), ([None, None, None, None, None], [None, None, None, None], [None, None, None], [None, Some((3, Some(0))), None], [None, None, None])], schedule = []
