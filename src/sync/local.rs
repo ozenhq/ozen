@@ -165,7 +165,8 @@ pub fn handshake(
 /// peer hangs up).
 pub struct Local {
     daemon: ServiceDaemon,
-    fullname: String,
+    /// The name advertised now; a new one each UTC day.
+    fullname: Arc<Mutex<String>>,
     stop: Arc<AtomicBool>,
     addr: SocketAddr,
 }
@@ -182,7 +183,8 @@ impl Drop for Local {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(("127.0.0.1", self.addr.port())); // wakes the accept loop to see `stop`
-        if let Ok(done) = self.daemon.unregister(&self.fullname) {
+        let name = self.fullname.lock().unwrap().clone();
+        if let Ok(done) = self.daemon.unregister(&name) {
             let _ = done.recv_timeout(Duration::from_secs(1)); // the goodbye went out
         }
         let _ = self.daemon.shutdown();
@@ -257,7 +259,7 @@ fn start_at(
     daemon.enable_interface(interfaces).map_err(|e| err(&e))?;
     let mut today = day(clock());
     let me = advert(&lan, &id, addr.port(), today).map_err(|e| err(&e))?;
-    let fullname = me.get_fullname().to_string();
+    let fullname = Arc::new(Mutex::new(me.get_fullname().to_string()));
     daemon.register(me).map_err(|e| err(&e))?;
     let found = daemon.browse(&service_type()).map_err(|e| err(&e))?;
 
@@ -266,16 +268,31 @@ fn start_at(
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
     );
-    // A new UTC day: advertise the new tag under the same name (an update, not a goodbye).
-    let (renew, stopped, mine, port) = (daemon.clone(), stop.clone(), id.clone(), addr.port());
+    // This Mac's instance ids, the current one first: it never dials one of its own.
+    let mine = Arc::new(Mutex::new(vec![id]));
+    // A new UTC day: advertise the new tag under a new random id too, so nothing in the advert links
+    // today's Mac to yesterday's. Connections already open stay open.
+    // ponytail: the listening port stays for the process's life; rebind daily if that ever matters
+    let (renew, stopped, ids, name, port) = (
+        daemon.clone(),
+        stop.clone(),
+        mine.clone(),
+        fullname.clone(),
+        addr.port(),
+    );
     std::thread::spawn(move || {
         while !stopped.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_secs(1));
             let d = day(clock());
             if d != today
-                && let Ok(me) = advert(&lan, &mine, port, d)
+                && let Ok(new) = random().map(|r| hex(&r[..8]))
+                && let Ok(me) = advert(&lan, &new, port, d)
+                && let new_name = me.get_fullname().to_string()
                 && renew.register(me).is_ok()
             {
+                let old = std::mem::replace(&mut *name.lock().unwrap(), new_name);
+                let _ = renew.unregister(&old);
+                ids.lock().unwrap().insert(0, new);
                 today = d;
             }
         }
@@ -324,7 +341,11 @@ fn start_at(
             };
             let theirs = r.get_property_val_str("id").unwrap_or_default().to_string();
             let tag = r.get_property_val_str("tag").unwrap_or_default();
-            if !ours(&lan, tag, clock()) || theirs <= id {
+            let (own, id) = {
+                let m = mine.lock().unwrap();
+                (m.contains(&theirs), m[0].clone())
+            };
+            if !ours(&lan, tag, clock()) || own || theirs <= id {
                 continue; // another vault, ourselves, or theirs to dial
             }
             if !present.lock().unwrap().insert(theirs.clone()) {
