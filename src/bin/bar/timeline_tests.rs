@@ -53,3 +53,10 @@ fn lays_out_lanes_by_talk_time_and_squeezes_long_silences() {
         3.0
     ); // at least 3px wide
 }
+
+#[test]
+fn a_voice_that_spoke_never_reads_zero_percent() {
+    assert_eq!(percent(0.004), "<1%");
+    assert_eq!(percent(0.0), "0%");
+    assert_eq!(percent(0.68), "68%");
+}
