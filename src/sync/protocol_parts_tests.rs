@@ -33,6 +33,6 @@ fn a_garbled_part_is_dropped_and_counted() {
     p.d = "not base64!".into();
     let frame = b.s.frame(&Msg::Part(p)).unwrap();
     assert!(b.receive(&frame).is_empty());
-    assert_eq!(b.s.dropped.bad, 1);
+    assert_eq!(b.s.dropped.refused, 1);
     assert!(b.synced().is_empty());
 }

@@ -192,3 +192,28 @@ fn two_versions_of_one_key_in_a_frame_keep_the_winner_whatever_their_order() {
         assert_eq!(m.synced()[&("tags".into(), "x".into())]["val"], "Noa");
     }
 }
+
+#[test]
+fn a_flood_of_summary_parts_leaves_the_session_working() {
+    // OFE-65: a peer streaming parts of summaries that never complete can't grow memory past
+    // summaries.rs's caps, and a normal exchange afterwards still syncs
+    let da = folder(json!([]), json!({"x": {"v": 1, "val": "Dana"}}));
+    let db = folder(json!([]), json!({}));
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    for i in 0..20_000u32 {
+        let junk = Msg::Summary {
+            id: u64::from(i / 3000),
+            part: i % 3000,
+            parts: super::super::summaries::PARTS as u32,
+            s: vec![("tags".into(), format!("k{i}"), 1, "0123456789abcdef".into())],
+            b: vec![0],
+        };
+        assert!(b.receive(&b.s.frame(&junk).unwrap()).is_empty());
+    }
+    assert!(
+        b.s.dropped.refused > 0,
+        "parts over the cap were dropped and counted"
+    );
+    exchange(&mut a, &mut b);
+    assert!(b.synced().contains_key(&("tags".into(), "x".into())));
+}

@@ -9,6 +9,9 @@ pub struct Dropped {
     pub newer: u64,
     /// Records in frames that opened fine but failed validation (valid.rs): dropped, not merged.
     pub records: u64,
+    /// Summary or record parts that opened fine but were refused: over summaries.rs's or parts.rs's
+    /// bounds, inconsistent, or timed out. The other Mac resends at the next exchange.
+    pub refused: u64,
     pub last_error: Option<String>,
 }
 
