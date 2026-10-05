@@ -228,6 +228,7 @@ with `--real` once you have a few dozen fixes.
 
 In *Always* mode the mic records everything said near the Mac, not only meetings; use *Meetings* mode to limit it.
 This records and transcribes other people. Tell participants, and follow your local recording laws.
+[If ozen recorded you](docs/privacy.md) explains it for them, in plain words; link it in your meeting invites.
 Voiceprints are biometric data: keep the registry private and enroll only people who agreed.
 `places.json` holds where you live and work. It stays on the Mac and is gitignored; don't copy it into shared
 folders. Your location is never sent anywhere, but viewing the Places map fetches tiles for that area from
