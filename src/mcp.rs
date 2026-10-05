@@ -654,6 +654,7 @@ impl Ozen {
             lon: p.lon,
             radius: p.radius,
         };
+        places::check(&new)?;
         match all.iter_mut().find(|x| x.label == p.label) {
             Some(old) => *old = new,
             None => all.push(new),
