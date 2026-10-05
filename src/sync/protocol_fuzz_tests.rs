@@ -2,7 +2,7 @@
 //! check them), so no frame may panic, every frame is either used or dropped and counted, and the
 //! files stay readable. Frames are built at every depth: raw bytes; sealed bytes (version and deflate
 //! layers); sealed, deflated bytes (JSON layer); and sealed, well-formed messages with hostile fields.
-//! 64 cases per test run; a long run: `PROPTEST_CASES=200000 cargo nextest run any_frames`.
+//! Up to 15 frames a case, so more than 8 unfinished summaries force evictions. 64 cases per test run; a long run: `PROPTEST_CASES=200000 cargo nextest run any_frames`.
 use super::tests::{Mac, folder};
 use super::*;
 use proptest::prelude::*;
@@ -167,7 +167,7 @@ fn files_ok(dir: &std::path::Path) -> Result<(), String> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
     #[test]
-    fn any_frames_are_used_or_dropped_never_a_panic(frames in prop::collection::vec(frame(), 1..8)) {
+    fn any_frames_are_used_or_dropped_never_a_panic(frames in prop::collection::vec(frame(), 1..16)) {
         let d = folder(
             json!([{"id": "1@a", "v": 1, "t": 1.0, "text": "hi"}]),
             json!({"1@a": {"v": 1, "val": "Dana"}}),
@@ -177,6 +177,7 @@ proptest! {
             let verdict = m.s.decode(f);
             let before = m.s.dropped.clone();
             let files = snapshot(d.path());
+            let had = m.synced();
             m.receive(f); // a panic here fails the case, and proptest shrinks it
             let after = &m.s.dropped;
             match verdict {
@@ -188,10 +189,13 @@ proptest! {
                 prop_assert_eq!(snapshot(d.path()), files, "a dropped frame changed the files");
             }
             prop_assert_eq!(files_ok(d.path()), Ok(()));
-            // the Mac's own records are never lost: at worst replaced by a newer version or a tombstone
+            // no record is ever lost or goes back to an older version (a newer one or a tombstone may
+            // replace it)
             let have = m.synced();
-            prop_assert!(have.contains_key(&("lines".into(), "1@a".into())));
-            prop_assert!(have.contains_key(&("tags".into(), "1@a".into())));
+            for (id, r) in &had {
+                let now = have.get(id);
+                prop_assert!(now.is_some_and(|n| v(n) >= v(r)), "{:?}: {} became {:?}", id, r, now);
+            }
         }
     }
 }
