@@ -12,6 +12,8 @@ pub mod protocol;
 pub mod seal;
 pub mod summaries;
 pub mod valid;
+pub mod version;
+pub mod wire;
 
 use std::path::Path;
 
