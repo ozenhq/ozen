@@ -173,7 +173,7 @@ fn transcript_corrects_speakers_and_text_and_marks_unsure() {
         ),
         (json!(true), json!("Omer"), json!("?"))
     );
-    assert!(v["lines"][0]["day"].as_str().is_some_and(|d| d.len() == 10)); // "Thu 01 Jan"
+    assert!(v["lines"][0]["day"].as_str().is_some_and(|d| d.len() == 10)); // "Thu 01 Jan", long ago
     let segs: Vec<&str> = v["segments"]
         .as_array()
         .unwrap()
@@ -190,4 +190,13 @@ fn transcript_corrects_speakers_and_text_and_marks_unsure() {
         v["footer"],
         "  accuracy 88% on 8 checks (started at 100%) · 3 tagged · 2 ignored · orange ? = unsure, tag it to teach ozen · click text to fix it"
     );
+}
+
+#[test]
+fn recent_days_are_named() {
+    let d = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+    let today = d("2026-10-05");
+    assert_eq!(day_label(d("2026-10-05"), today), "Today");
+    assert_eq!(day_label(d("2026-10-04"), today), "Yesterday");
+    assert_eq!(day_label(d("2026-09-28"), today), "Mon 28 Sep");
 }

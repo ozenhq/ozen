@@ -245,6 +245,7 @@ fn transcript<'a>(
             (!is_ignored(speaker)).then(|| json!({"id": id, "t": r["t"], "d": d, "speaker": speaker, "text": text, "unsure": unsure}))
         })
         .collect();
+    let today = chrono::Local::now().date_naive();
     let shown: Vec<Value> = lines[lines.len().saturating_sub(SHOWN)..]
         .iter()
         .map(|r| {
@@ -252,7 +253,7 @@ fn transcript<'a>(
             let heard = str_of(r, "text");
             let said = fixes.get(id).and_then(Value::as_str).filter(|t| !t.is_empty()).unwrap_or(heard);
             let at = local(r["t"].as_f64().unwrap_or(0.0));
-            let (time, day) = (at.format("%H:%M:%S").to_string(), at.format("%a %d %b").to_string());
+            let (time, day) = (at.format("%H:%M:%S").to_string(), day_label(at.date_naive(), today));
             json!({"id": id, "time": time, "day": day, "speaker": speaker, "mark": if tagged { "✓" } else if unsure { "?" } else { "" },
                    "src": str_of(r, "src"), "text": said, "heard": heard, "ignored": is_ignored(speaker), "unsure": unsure,
                    "rtl": said.chars().any(|c| ('\u{0590}'..='\u{05FF}').contains(&c))})
@@ -310,6 +311,15 @@ fn speaker_of<'a>(
         speaker,
         tag.is_none() && unsure.contains(id),
     )
+}
+
+/// The transcript's day line: "Today", "Yesterday", else "Mon 05 Oct".
+fn day_label(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+    match (today - day).num_days() {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        _ => day.format("%a %d %b").to_string(),
+    }
 }
 
 fn local(t: f64) -> chrono::DateTime<chrono::Local> {
