@@ -29,8 +29,14 @@ fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Writes `v` with sorted keys (`crdt::sorted`), so every Mac writes the same data as the same text.
+/// Nothing to save is no reason to create a file: each write is a full flush, under the transcriber's lock.
 fn save(path: &str, v: &impl serde::Serialize) -> Result<(), String> {
     let v = crate::crdt::sorted(&serde_json::to_value(v).map_err(|e| e.to_string())?);
+    let empty = v.as_object().is_some_and(serde_json::Map::is_empty)
+        || v.as_array().is_some_and(Vec::is_empty);
+    if empty && !std::path::Path::new(path).exists() {
+        return Ok(());
+    }
     let json = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
     write_new(path, json.as_bytes())
 }
