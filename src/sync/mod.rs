@@ -9,6 +9,7 @@ pub mod local;
 pub mod parts;
 pub mod protocol;
 pub mod seal;
+pub mod summaries;
 pub mod valid;
 
 use std::path::Path;

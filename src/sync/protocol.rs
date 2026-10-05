@@ -27,15 +27,12 @@ pub(super) type Id = (String, String);
 /// What a summary says about a record: its version, and the first 8 bytes of SHA-256 of its canonical
 /// JSON (`crdt::canonical`, hex).
 pub(super) type Mark = (u64, String);
-/// One summary line: (kind, key, v, hash).
-type Entry = (String, String, u64, String);
+use super::summaries::{Entry, Partial};
 /// Raw JSON per frame: deflated, it stays under `seal::MAX` even when nothing compresses.
 const BUDGET: usize = seal::MAX - 256;
 /// Protocol version, the first byte of every frame's plaintext. A newer one from an updated Mac isn't
 /// merged here: its records might not mean what this build thinks (the user is told to update ozen).
 pub const VERSION: u8 = 1;
-/// Unfinished summaries kept; a summary whose last part never came (a lagging Mac) is forgotten.
-const PARTIAL: usize = 8;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
@@ -128,8 +125,8 @@ pub struct Session {
     vault: String,
     /// What the other Macs last heard about each record here, so `changes` sends only what's new.
     told: BTreeMap<Id, Mark>,
-    /// Summaries still arriving: id -> (parts, part -> entries).
-    partial: BTreeMap<u64, (u32, BTreeMap<u32, Vec<Entry>>)>,
+    /// Summaries still arriving, bounded (summaries.rs).
+    partial: Partial,
     /// Records too big for one frame, still arriving in parts.
     parts: parts::Pending,
     /// Relearn and retrain after received records change something.
@@ -148,7 +145,7 @@ impl Session {
             seal_key,
             vault: vault.into(),
             told: BTreeMap::new(),
-            partial: BTreeMap::new(),
+            partial: Partial::default(),
             parts: parts::Pending::default(),
             after,
             dropped: Dropped::default(),
@@ -301,23 +298,18 @@ impl Session {
                 s,
                 b,
             } => {
-                if self.partial.len() >= PARTIAL && !self.partial.contains_key(&id) {
-                    self.partial.pop_first(); // the oldest: ids are send times
-                }
-                let p = self.partial.entry(id).or_insert((parts, BTreeMap::new()));
-                p.1.insert(part, s); // a repeated part replaces itself
-                if (p.1.len() as u32) < p.0 {
-                    return Ok(vec![]);
-                }
-                let theirs: BTreeMap<Id, Mark> = self
-                    .partial
-                    .remove(&id)
-                    .expect("entry")
-                    .1
-                    .into_values()
-                    .flatten()
-                    .map(|(k, key, v, h)| ((k, key), (v, h)))
-                    .collect();
+                let theirs: BTreeMap<Id, Mark> = match self.partial.add(id, part, parts, s) {
+                    Ok(Some(all)) => all
+                        .into_iter()
+                        .map(|(k, key, v, h)| ((k, key), (v, h)))
+                        .collect(),
+                    Ok(None) => return Ok(vec![]),
+                    Err(e) => {
+                        self.dropped.refused += 1;
+                        self.dropped.last_error = Some(e);
+                        return Ok(vec![]);
+                    }
+                };
                 let wanted = buckets::set(&b);
                 let lack = records(&merge::read_synced(""))
                     .into_iter()
@@ -335,7 +327,7 @@ impl Session {
                 let now = std::time::Instant::now();
                 let expired = self.parts.expire(now);
                 if expired > 0 {
-                    self.dropped.bad += expired as u64;
+                    self.dropped.refused += expired as u64;
                     self.dropped.last_error =
                         Some(format!("{expired} record(s) in parts timed out"));
                 }
@@ -343,7 +335,7 @@ impl Session {
                     Ok(Some(rec)) => self.merge(vec![rec]),
                     Ok(None) => Ok(vec![]),
                     Err(e) => {
-                        self.dropped.bad += 1;
+                        self.dropped.refused += 1;
                         self.dropped.last_error = Some(e);
                         Ok(vec![])
                     }
