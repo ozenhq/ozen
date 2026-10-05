@@ -277,7 +277,7 @@ fn transcript<'a>(
         stats.get("accuracy").and_then(Value::as_f64),
     ) && first != now
     {
-        acc += &format!(" (was {})", pct(first));
+        acc += &format!(" (started at {})", pct(first)); // the first retrain's, not the last one's
     }
     let tagged = stats.get("tagged").and_then(Value::as_i64).unwrap_or(0);
     let ignored = match stats.get("ignored").and_then(Value::as_i64) {
