@@ -19,7 +19,7 @@
 //! Local, never merged (each Mac rebuilds them): labels.json, stats.json, ignore.json and voices/ (retrain,
 //! from tags; voices/ has its own git sync), learned.json (`ozen fix` relearns from fixes), junk.json,
 //! transcript.txt, context/, pace.jsonl, here.json*, chunk audio (chunks/, recent/, fixes/), start.log,
-//! the record mode and switches (app defaults, dot files). After a merge, relearn and retrain.
+//! restore points (.sync-restore/), the record mode and switches (app defaults, dot files). After a merge, relearn and retrain.
 //!
 //! Merging is the `crdts` crate's last-writer-wins register. No `crate::` imports: the menu bar app includes
 //! this file too (src/bin/bar/main.rs).
