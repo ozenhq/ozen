@@ -5,7 +5,7 @@
 //! summary, and both merge what they get through `ozen merge`'s path (apply.rs, which also retrains). A local edit goes
 //! out as soon as `changes` is called. Messages are JSON, deflated, then sealed (seal.rs) into frames;
 //! carrying the frames is the connection's job. The protocol is specified, for other clients and for
-//! agreeing on changes, in ozenhq/sync's docs/protocol.md.
+//! agreeing on changes, in https://github.com/ozenhq/sync/blob/main/docs/protocol.md.
 #![allow(dead_code)] // ponytail: driven by the connection (OFE-7)
 use super::apply::{self, Coalesced};
 use super::buckets;
