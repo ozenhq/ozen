@@ -157,8 +157,12 @@ fn folder(lines: &[Value], tags: Value) -> tempfile::TempDir {
 /// A Mac syncing `dir` with its vault's other Macs on loopback only; counts its connections. Its first
 /// connection is hung up at once, as a dropped Wi-Fi would.
 fn mac(dir: &Path, vault: &str, key: Key, peers: Arc<AtomicUsize>) -> Local {
+    mac_on(IfKind::LoopbackV4, dir, vault, key, peers)
+}
+
+fn mac_on(on: IfKind, dir: &Path, vault: &str, key: Key, peers: Arc<AtomicUsize>) -> Local {
     let (dir, v) = (PathBuf::from(dir), vault.to_string());
-    start(key, IfKind::LoopbackV4, move |s| {
+    start(key, on, move |s| {
         if peers.fetch_add(1, Ordering::SeqCst) == 0 {
             return;
         }
@@ -220,4 +224,31 @@ fn two_macs_on_one_network_find_each_other_and_converge_with_no_relay() {
     assert_eq!((seen(0), seen(1)), (2, 2), "one connection per pair");
     assert_eq!(seen(2), 0, "another vault is never connected");
     assert_eq!(data(other.path()).0.len(), 1);
+}
+
+/// Over the Mac's real network interface (multicast on Wi-Fi or Ethernet, not loopback). Ignored by
+/// default: it needs a connected network and the Local Network permission. Run by hand:
+/// `OZEN_LAN_IF=en0 cargo nextest run --release --run-ignored only over_the_real_network`.
+#[test]
+#[ignore]
+fn two_macs_converge_over_the_real_network() {
+    let on = IfKind::Name(std::env::var("OZEN_LAN_IF").unwrap_or_else(|_| "en0".into()));
+    let line = |id: &str, text: &str| json!({"id": id, "t": 1.0, "text": text, "v": 1});
+    let a = folder(
+        &[line("1@a", "from a")],
+        json!({"1@a": {"v": 1, "val": "Dana"}}),
+    );
+    let b = folder(&[line("2@b", "from b")], json!({}));
+    let (vault, key) = ("w".repeat(64), [8; 32]);
+    let n = || Arc::new(AtomicUsize::new(1)); // no forced first hang-up here
+    let _ma = mac_on(on.clone(), a.path(), &vault, key, n());
+    let _mb = mac_on(on, b.path(), &vault, key, n());
+    let started = Instant::now();
+    while data(a.path()) != data(b.path()) || data(a.path()).0.len() < 2 {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no convergence over the network"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
