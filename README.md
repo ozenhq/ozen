@@ -159,6 +159,9 @@ Settings > Privacy & Security and press **Open Anyway**. On launch it unpacks it
 (a git checkout there is left alone). It still needs `ffmpeg`. The same release as a tarball, for scripts:
 `curl -L <tarball link> | tar xz -C ~` unpacks `~/ozen`.
 
+Working on ozen? Run `git config core.hooksPath .githooks` once in the clone: a push that touches sync then
+runs the sync tests first ([.githooks/pre-push](.githooks/pre-push)), since CI only runs once a day.
+
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
 On another Mac, run the same three commands; voices tagged on either one reach the other within a few minutes.

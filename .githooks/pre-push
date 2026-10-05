@@ -1,0 +1,30 @@
+#!/bin/sh
+# Before pushing commits that touch sync (src/sync/, src/crdt.rs, src/merge.rs), run the sync tests the
+# daily CI runs: the CRDT, merge and sync suites, then again with serde_json's preserve_order (OFE-70).
+# CI doesn't run on pull requests (ozen#132), so this is what keeps a convergence bug off main between
+# daily runs (OFE-67). Turn it on once per clone: `git config core.hooksPath .githooks`.
+# Other pushes skip it; `OZEN_SKIP_SYNC_TESTS=1 git push` skips it on purpose.
+zero=0000000000000000000000000000000000000000
+touched=
+while read -r _ local_sha _ remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue # a branch deletion pushes nothing
+    if [ "$remote_sha" = "$zero" ]; then
+        base=$(git merge-base "$local_sha" origin/main 2>/dev/null) # a new branch: what it adds to main
+    else
+        base=$remote_sha
+    fi
+    # can't tell what changed (no origin/main, or a remote commit not fetched here): run them anyway
+    if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+        touched=1
+    elif git diff --name-only "$base" "$local_sha" -- src/sync src/crdt.rs src/merge.rs | grep -q .; then
+        touched=1
+    fi
+done
+[ -z "$touched" ] && exit 0
+[ -n "$OZEN_SKIP_SYNC_TESTS" ] && { echo "pre-push: sync tests skipped (OZEN_SKIP_SYNC_TESTS)"; exit 0; }
+echo "pre-push: this push touches sync; running the sync tests"
+sync_tests='test(/^(crdt|merge|sync)::/) | test(/^merging_two_macs/)'
+cargo nextest run --release -E "$sync_tests" || exit 1
+# its own target dir: flipping a feature would otherwise rebuild everything on every push
+CARGO_TARGET_DIR=target/preserve-order cargo nextest run --release --features serde_json/preserve_order \
+    -E "(test(/^(crdt|merge|sync)::/) - test(/golden/)) | test(/^merging_two_macs/)" || exit 1
