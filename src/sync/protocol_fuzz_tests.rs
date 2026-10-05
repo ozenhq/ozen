@@ -134,6 +134,7 @@ fn snapshot(dir: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.is_file())
+        .filter(|p| !p.ends_with(crate::sync::dropped::FILE)) // the counts of what was dropped, not data
         .map(|p| {
             (
                 p.file_name().unwrap().to_string_lossy().into(),
