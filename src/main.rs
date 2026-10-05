@@ -656,6 +656,13 @@ fn main() {
                 let _ = fs::remove_file(".stopping");
                 "stopped"
             };
+            if sync::run::wanted() {
+                spawn_detached(
+                    Command::new(std::env::current_exe().expect("own path")).args(["sync", "run"]),
+                    log().into(),
+                    log().into(),
+                );
+            }
             println!("{state}");
         }
         "health" => {

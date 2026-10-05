@@ -43,14 +43,12 @@ pub fn short(vault_id: &str) -> &str {
 }
 
 /// The key ops are sealed with; never sent anywhere.
-#[allow(dead_code)] // ponytail: used by encrypting ops (OFE-12)
 pub fn seal_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync seal")
 }
 
 /// The key two Macs on one network prove they share before syncing directly (local.rs). The relay
 /// knows the token, so the LAN proof must not be derivable from it; this is a separate HKDF output.
-#[allow(dead_code)] // ponytail: started with the background connection (OFE-7)
 pub fn lan_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync lan")
 }
@@ -73,16 +71,29 @@ pub fn load_or_create(
     Ok(k)
 }
 
+fn read() -> Result<Option<Vec<u8>>, String> {
+    match get_generic_password(SERVICE, ACCOUNT) {
+        Ok(k) => Ok(Some(k)),
+        Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
+        Err(e) => Err(format!("Keychain: {e}")),
+    }
+}
+
+/// The key in the login Keychain if `ozen sync init` made one; never makes one.
+pub fn stored() -> Result<Option<Key>, String> {
+    read()?
+        .map(|k| {
+            k.try_into()
+                .map_err(|_| "vault key in the Keychain is not 32 bytes".into())
+        })
+        .transpose()
+}
+
 /// The key in the login Keychain, made on first use.
 pub fn keychain() -> Result<Key, String> {
-    load_or_create(
-        || match get_generic_password(SERVICE, ACCOUNT) {
-            Ok(k) => Ok(Some(k)),
-            Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
-            Err(e) => Err(format!("Keychain: {e}")),
-        },
-        |k| set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}")),
-    )
+    load_or_create(read, |k| {
+        set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
+    })
 }
 
 #[cfg(test)]

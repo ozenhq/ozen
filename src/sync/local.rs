@@ -3,8 +3,9 @@
 //! `_ozen-sync._tcp` over Bonjour with a tag derived from the LAN key; a Mac that finds a peer with its
 //! tag connects over TCP, both prove they hold the vault key (`handshake`), and the summary protocol
 //! (protocol.rs) runs over the connection with the same sealed frames the relay would carry.
-#![allow(dead_code)] // ponytail: started with the background connection (OFE-7)
 use super::key::Key;
+#[cfg(test)]
+use super::talk::{Input, MAX_FRAME, read_frame, talk, write_frame};
 use hmac::{Hmac, KeyInit, Mac};
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use security_framework::random::SecRandom;
@@ -14,15 +15,13 @@ use std::collections::HashSet;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The Bonjour service type, as declared in Ozen.app's Info.plist (app_plist.rs).
 pub fn service_type() -> String {
     format!("{}.local.", crate::app_plist::BONJOUR)
 }
-/// The relay's frame cap too: a sealed frame is at most 60 KiB (seal.rs).
-const MAX_FRAME: usize = 64 << 10;
 /// The whole handshake must finish in this long, however slowly the peer trickles bytes.
 const HANDSHAKE: Duration = Duration::from_secs(10);
 /// Connections (handshaking or syncing) one Mac accepts at once; more are closed straight away.
@@ -121,75 +120,6 @@ pub fn handshake(
     SockRef::from(&*s).set_tcp_keepalive(&ka).map_err(err)
 }
 
-fn write_frame(s: &mut TcpStream, f: &[u8]) -> Result<(), String> {
-    if f.len() > MAX_FRAME {
-        return Err(format!("frame of {} bytes is over {MAX_FRAME}", f.len()));
-    }
-    s.write_all(&(f.len() as u32).to_be_bytes())
-        .and_then(|()| s.write_all(f))
-        .map_err(|e| e.to_string())
-}
-
-/// The next frame, or None when the peer hung up.
-fn read_frame(s: &mut TcpStream) -> Result<Option<Vec<u8>>, String> {
-    let mut n = [0; 4];
-    match s.read_exact(&mut n) {
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
-        r => r.map_err(|e| e.to_string())?,
-    }
-    let n = u32::from_be_bytes(n) as usize;
-    if n > MAX_FRAME {
-        return Err(format!("frame of {n} bytes is over {MAX_FRAME}"));
-    }
-    let mut f = vec![0; n];
-    s.read_exact(&mut f).map_err(|e| e.to_string())?;
-    Ok(Some(f))
-}
-
-/// Runs the summary protocol with one authenticated peer until it hangs up. `step(None)` makes our
-/// hello, `step(Some(frame))` handles one of theirs (protocol::Session); each returns frames to send.
-/// Frames are written from their own thread, so two Macs sending big hellos at once never wait on each
-/// other's reads.
-pub fn talk(
-    s: TcpStream,
-    mut step: impl FnMut(Option<&[u8]>) -> Result<Vec<Vec<u8>>, String>,
-) -> Result<(), String> {
-    let mut w = s.try_clone().map_err(|e| e.to_string())?;
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-    let writer = std::thread::spawn(move || {
-        for f in rx {
-            if let Err(e) = write_frame(&mut w, &f) {
-                let _ = w.shutdown(std::net::Shutdown::Both); // unblocks the reader too
-                return Err(e);
-            }
-        }
-        Ok::<(), String>(())
-    });
-    let mut r = s;
-    let send = |fs: Vec<Vec<u8>>| fs.into_iter().all(|f| tx.send(f).is_ok());
-    let mut out = Ok(());
-    if send(step(None)?) {
-        out = loop {
-            match read_frame(&mut r) {
-                Ok(Some(f)) => match step(Some(&f)) {
-                    Ok(fs) => {
-                        if !send(fs) {
-                            break Ok(()); // the writer stopped: its error is below
-                        }
-                    }
-                    Err(e) => break Err(e),
-                },
-                Ok(None) => break Ok(()),
-                Err(e) => break Err(e),
-            }
-        };
-    }
-    let _ = r.shutdown(std::net::Shutdown::Both); // ends the writer if it's blocked
-    drop(tx);
-    let wrote = writer.join().unwrap_or(Err("writer panicked".into()));
-    out.and(wrote)
-}
-
 /// Advertising, browsing and accepting; dropping it stops all three (open connections run until the
 /// peer hangs up).
 pub struct Local {
@@ -201,6 +131,7 @@ pub struct Local {
 
 impl Local {
     /// The TCP port peers connect to.
+    #[cfg(test)]
     pub fn port(&self) -> u16 {
         self.addr.port()
     }

@@ -167,10 +167,11 @@ fn mac_on(on: IfKind, dir: &Path, vault: &str, key: Key, peers: Arc<AtomicUsize>
             return;
         }
         let mut session = Session::new([9; 32], &v);
-        let _ = talk(s, |f| {
-            at(&dir, || match f {
-                None => session.hello(),
-                Some(f) => session.receive(f),
+        let _ = talk(s, Duration::from_secs(1), |i| {
+            at(&dir, || match i {
+                Input::Hello => session.hello(),
+                Input::Frame(f) => session.receive(f),
+                Input::Tick => session.tick(),
             })
         });
     })
