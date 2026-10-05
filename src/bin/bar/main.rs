@@ -520,6 +520,20 @@ fn represented(item: &NSMenuItem) -> Option<Value> {
     serde_json::from_str(&o.downcast::<NSString>().ok()?.to_string()).ok()
 }
 
+/// The status line while not recording: what ozen is doing instead, and the place it's at.
+fn idle_status(state: &str, queued: i64, meetings_only: bool, place: &str) -> String {
+    match state {
+        "paused" => "Paused".into(),
+        "stopping" => "Finishing transcription…".into(),
+        "processing" => format!(
+            "Transcribing {queued} chunk{}…",
+            if queued == 1 { "" } else { "s" }
+        ),
+        _ if meetings_only => format!("Waiting for a meeting{place}"),
+        _ => format!("Not recording{place}"),
+    }
+}
+
 /// The Meetings table's cell in column `col` of `row`: When, Min, Lines, else the first words.
 fn meeting_cell(meetings: &[Vec<String>], col: &str, row: usize) -> String {
     let i = match col {
@@ -1276,20 +1290,7 @@ impl App {
                 }
             )
         } else {
-            let what = match s {
-                "paused" => "paused".to_string(),
-                "stopping" => "finishing transcription…".to_string(),
-                "processing" => format!("processing {queued} chunks…"),
-                _ => format!(
-                    "{}{place_suffix}",
-                    if meetings_only {
-                        "waiting for a meeting"
-                    } else {
-                        "stopped"
-                    }
-                ),
-            };
-            format!("Not recording · {what}")
+            idle_status(s, queued, meetings_only, &place_suffix)
         };
         let status = iv.status.get().unwrap();
         status.setStringValue(&NSString::from_str(&line));

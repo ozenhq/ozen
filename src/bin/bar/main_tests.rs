@@ -1,4 +1,4 @@
-use super::{meeting_cell, transcribe_switched};
+use super::{idle_status, meeting_cell, transcribe_switched};
 
 #[test]
 fn transcribe_switch_stops_or_catches_up() {
@@ -30,4 +30,22 @@ fn a_meeting_under_a_minute_says_so() {
     assert_eq!(meeting_cell(&m("0"), "Min", 0), "<1");
     assert_eq!(meeting_cell(&m("3"), "Min", 0), "3");
     assert_eq!(meeting_cell(&m("0"), "Lines", 0), "1");
+}
+
+#[test]
+fn idle_status_says_what_ozen_is_doing_once() {
+    assert_eq!(idle_status("stopped", 0, false, ""), "Not recording");
+    assert_eq!(
+        idle_status("stopped", 0, true, " · Work"),
+        "Waiting for a meeting · Work"
+    );
+    assert_eq!(idle_status("paused", 0, false, " · Work"), "Paused");
+    assert_eq!(
+        idle_status("processing", 1, false, ""),
+        "Transcribing 1 chunk…"
+    );
+    assert_eq!(
+        idle_status("processing", 3, false, ""),
+        "Transcribing 3 chunks…"
+    );
 }
