@@ -61,3 +61,4 @@ here.json.*
 .sync-dropped.json
 .sync-restore/
 .sync-paused
+.sync-merge.lock

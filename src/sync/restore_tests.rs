@@ -111,7 +111,7 @@ fn restore_points_past_five_or_a_week_old_are_pruned() {
             std::fs::create_dir_all(Path::new(DIR).join((now - a).to_string())).unwrap();
         }
         prune(now);
-        let left: Vec<u64> = points().iter().map(|(t, _)| now - t).collect();
+        let left: Vec<u64> = points().iter().map(|(t, _, _)| now - t).collect();
         assert_eq!(
             left,
             [5 * day, 4 * day, 3 * day, 2 * day, day],
@@ -128,7 +128,7 @@ fn a_restore_point_past_a_week_old_is_pruned_even_with_room_for_it() {
             std::fs::create_dir_all(Path::new(DIR).join((now - a).to_string())).unwrap();
         }
         prune(now);
-        let left: Vec<u64> = points().iter().map(|(t, _)| now - t).collect();
+        let left: Vec<u64> = points().iter().map(|(t, _, _)| now - t).collect();
         assert_eq!(left, [day]);
     });
 }
@@ -162,5 +162,37 @@ fn nothing_merges_while_undo_has_paused_sync_and_a_second_undo_puts_back_what_th
         );
         undo().unwrap();
         assert_eq!(snapshot(dir), synced, "undoing the undo");
+    });
+}
+
+#[test]
+fn after_an_undo_and_init_a_resent_bad_batch_gets_its_own_restore_point() {
+    in_folder(|dir| {
+        let clean = snapshot(dir);
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        undo().unwrap();
+        std::fs::remove_file(PAUSED).unwrap(); // what `ozen sync init` does
+        received(&batch(500), &Coalesced::new(|| {})).unwrap(); // the bad batch again, minutes later
+        undo().unwrap();
+        assert_eq!(
+            snapshot(dir),
+            clean,
+            "undo goes back to before the batch, not to what undo saved"
+        );
+    });
+}
+
+#[test]
+fn undo_waits_for_a_batch_being_merged() {
+    in_folder(|dir| {
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        let synced = snapshot(dir);
+        let held = merging().unwrap(); // a batch is mid-merge
+        let undoing = std::thread::spawn(undo); // same working directory, under the test's CWD lock
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(snapshot(dir), synced, "undo didn't restore under a merge");
+        drop(held);
+        undoing.join().unwrap().unwrap();
+        assert_ne!(snapshot(dir), synced);
     });
 }
