@@ -41,9 +41,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
-      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --release
+      - run: cargo nextest run
   linecheck:
     # Per-file line limits from linecheck.yml; Linux, billed 1x, needs no macOS toolchain.
     needs: changed
