@@ -1,8 +1,9 @@
 //! Sync with the vault's other Macs on this network, no relay: nothing leaves the network, not even
 //! sealed frames, and sync keeps working with the relay or the internet down. Each Mac advertises
-//! `_ozen-sync._tcp` over Bonjour with a tag derived from the LAN key; a Mac that finds a peer with its
-//! tag connects over TCP, both prove they hold the vault key (`handshake`), and the summary protocol
-//! (protocol.rs) runs over the connection with the same sealed frames the relay would carry.
+//! `_ozen-sync._tcp` over Bonjour with a tag derived from the LAN key and the UTC day (`tag`); a Mac
+//! that finds a peer with its tag connects over TCP, both prove they hold the vault key (`handshake`),
+//! and the summary protocol (protocol.rs) runs over the connection with the same sealed frames the
+//! relay would carry.
 use super::key::Key;
 #[cfg(test)]
 use super::talk::{Input, MAX_FRAME, read_frame, talk, write_frame};
@@ -53,10 +54,50 @@ fn hmac(lan: &Key, parts: &[&[u8]]) -> Hmac<Sha256> {
     m
 }
 
+/// Seconds since the Unix epoch: the clock `start` advertises by.
+pub fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The UTC day `secs` falls in.
+fn day(secs: u64) -> u64 {
+    secs / 86_400
+}
+
 /// Advertised so Macs of one vault find each other. Keyed with the LAN key, so neither the relay
-/// (which knows the vault id and token) nor anyone else can compute it or link it to a vault.
-pub fn tag(lan: &Key) -> String {
-    hex(&hmac(lan, &[b"ozen-sync lan tag"]).finalize().into_bytes()[..8])
+/// (which knows the vault id and token) nor anyone else can compute it or link it to a vault, and new
+/// each UTC day, so whoever records Bonjour on one network can't recognize the same Macs on another
+/// network on another day (OFE-83).
+pub fn tag(lan: &Key, day: u64) -> String {
+    hex(&hmac(lan, &[b"ozen-sync lan tag", &day.to_be_bytes()])
+        .finalize()
+        .into_bytes()[..8])
+}
+
+/// Whether `theirs` is this vault's tag at `secs`: yesterday's, today's or tomorrow's, so two Macs on
+/// either side of midnight, or with clocks up to a day apart, still find each other.
+fn ours(lan: &Key, theirs: &str, secs: u64) -> bool {
+    let d = day(secs);
+    [d.saturating_sub(1), d, d + 1]
+        .iter()
+        .any(|&x| tag(lan, x) == theirs)
+}
+
+/// What this Mac advertises on `day`: its tag then and its instance id.
+fn advert(lan: &Key, id: &str, port: u16, day: u64) -> Result<ServiceInfo, mdns_sd::Error> {
+    let tag = tag(lan, day);
+    let props = [("tag", tag.as_str()), ("id", id)];
+    Ok(ServiceInfo::new(
+        &service_type(),
+        id,
+        &format!("{id}.local."),
+        "",
+        port,
+        &props[..],
+    )?
+    .enable_addr_auto())
 }
 
 /// `read_exact` that gives up at `deadline`, not per read: a peer trickling a byte at a time can't
@@ -124,7 +165,8 @@ pub fn handshake(
 /// peer hangs up).
 pub struct Local {
     daemon: ServiceDaemon,
-    fullname: String,
+    /// The name advertised now; a new one each UTC day.
+    fullname: Arc<Mutex<String>>,
     stop: Arc<AtomicBool>,
     addr: SocketAddr,
 }
@@ -141,7 +183,8 @@ impl Drop for Local {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(("127.0.0.1", self.addr.port())); // wakes the accept loop to see `stop`
-        if let Ok(done) = self.daemon.unregister(&self.fullname) {
+        let name = self.fullname.lock().unwrap().clone();
+        if let Ok(done) = self.daemon.unregister(&name) {
             let _ = done.recv_timeout(Duration::from_secs(1)); // the goodbye went out
         }
         let _ = self.daemon.shutdown();
@@ -191,6 +234,16 @@ pub fn start(
     interfaces: IfKind,
     on_peer: impl Fn(TcpStream) + Send + Sync + 'static,
 ) -> Result<Local, String> {
+    start_at(lan, interfaces, now, on_peer)
+}
+
+/// `start` with `clock` (seconds since the epoch) choosing the day's tag.
+fn start_at(
+    lan: Key,
+    interfaces: IfKind,
+    clock: fn() -> u64,
+    on_peer: impl Fn(TcpStream) + Send + Sync + 'static,
+) -> Result<Local, String> {
     let err = |e: &dyn std::fmt::Display| format!("local sync: {e}");
     // loopback only (tests) listens on loopback only; otherwise every interface, filtered by source
     let any = if matches!(interfaces, IfKind::LoopbackV4) {
@@ -201,16 +254,12 @@ pub fn start(
     let listener = TcpListener::bind((any, 0)).map_err(|e| err(&e))?;
     let addr = listener.local_addr().map_err(|e| err(&e))?;
     let id = hex(&random()?[..8]);
-    let tag = tag(&lan);
     let daemon = ServiceDaemon::new().map_err(|e| err(&e))?;
     daemon.disable_interface(IfKind::All).map_err(|e| err(&e))?;
     daemon.enable_interface(interfaces).map_err(|e| err(&e))?;
-    let props = [("tag", tag.as_str()), ("id", id.as_str())];
-    let host = format!("{id}.local.");
-    let me = ServiceInfo::new(&service_type(), &id, &host, "", addr.port(), &props[..])
-        .map_err(|e| err(&e))?
-        .enable_addr_auto();
-    let fullname = me.get_fullname().to_string();
+    let mut today = day(clock());
+    let me = advert(&lan, &id, addr.port(), today).map_err(|e| err(&e))?;
+    let fullname = Arc::new(Mutex::new(me.get_fullname().to_string()));
     daemon.register(me).map_err(|e| err(&e))?;
     let found = daemon.browse(&service_type()).map_err(|e| err(&e))?;
 
@@ -219,6 +268,35 @@ pub fn start(
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
     );
+    // This Mac's instance ids, the current one first: it never dials one of its own.
+    let mine = Arc::new(Mutex::new(vec![id]));
+    // A new UTC day: advertise the new tag under a new random id too, so nothing in the advert links
+    // today's Mac to yesterday's. Connections already open stay open.
+    // ponytail: the listening port stays for the process's life; rebind daily if that ever matters
+    let (renew, stopped, ids, name, port) = (
+        daemon.clone(),
+        stop.clone(),
+        mine.clone(),
+        fullname.clone(),
+        addr.port(),
+    );
+    std::thread::spawn(move || {
+        while !stopped.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_secs(1));
+            let d = day(clock());
+            if d != today
+                && let Ok(new) = random().map(|r| hex(&r[..8]))
+                && let Ok(me) = advert(&lan, &new, port, d)
+                && let new_name = me.get_fullname().to_string()
+                && renew.register(me).is_ok()
+            {
+                let old = std::mem::replace(&mut *name.lock().unwrap(), new_name);
+                let _ = renew.unregister(&old);
+                ids.lock().unwrap().insert(0, new);
+                today = d;
+            }
+        }
+    });
     let (on_accept, stopped, accept_slots) = (on_peer.clone(), stop.clone(), slots.clone());
     std::thread::spawn(move || {
         while !stopped.load(Ordering::SeqCst) {
@@ -262,7 +340,12 @@ pub fn start(
                 _ => continue,
             };
             let theirs = r.get_property_val_str("id").unwrap_or_default().to_string();
-            if r.get_property_val_str("tag") != Some(tag.as_str()) || theirs <= id {
+            let tag = r.get_property_val_str("tag").unwrap_or_default();
+            let (own, id) = {
+                let m = mine.lock().unwrap();
+                (m.contains(&theirs), m[0].clone())
+            };
+            if !ours(&lan, tag, clock()) || own || theirs <= id {
                 continue; // another vault, ourselves, or theirs to dial
             }
             if !present.lock().unwrap().insert(theirs.clone()) {
