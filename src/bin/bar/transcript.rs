@@ -280,3 +280,7 @@ pub fn dump_runs(text: &NSTextView) -> Vec<String> {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "transcript_tests.rs"]
+mod tests;
