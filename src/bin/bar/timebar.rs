@@ -222,7 +222,14 @@ pub fn stats(d: &Data, a: f64, b: f64, clock: &dyn Clock) -> Vec<[String; 3]> {
             } else {
                 "–".into()
             },
-            "faster than real time".into(),
+            if took == 0.0 {
+                "nothing timed in view"
+            } else if audio >= took {
+                "faster than real time"
+            } else {
+                "slower than real time"
+            }
+            .into(),
         ),
         row(
             "pace",
