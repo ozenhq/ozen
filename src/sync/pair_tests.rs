@@ -1,7 +1,16 @@
 use super::*;
 use std::cell::RefCell;
 
-const K: Key = [42; 32];
+/// Every byte different, so an order or offset bug shows.
+const K: Key = {
+    let mut k = [0; 32];
+    let mut i = 0;
+    while i < 32 {
+        k[i] = (i as u8).wrapping_mul(37).wrapping_add(11);
+        i += 1;
+    }
+    k
+};
 const URL: &str = "wss://relay.example/ozen";
 
 #[test]
@@ -13,28 +22,51 @@ fn a_code_round_trips_ignoring_dashes_spaces_and_case() {
 }
 
 #[test]
-fn a_mistyped_code_fails_the_checksum() {
+fn every_single_character_typo_is_refused() {
     let c = code(&K, URL);
-    let i = c.len() / 2;
-    let other = if &c[i..=i] == "A" { "B" } else { "A" };
-    let typo = format!("{}{}{}", &c[..i], other, &c[i + 1..]);
-    let e = parse(&typo).unwrap_err();
+    for (i, ch) in c.char_indices().filter(|(_, ch)| *ch != '-') {
+        let other = if ch == 'A' { 'B' } else { 'A' };
+        let typo = format!("{}{other}{}", &c[..i], &c[i + 1..]);
+        // a typo in the last group's spare bits can make the code undecodable: refused as well
+        let e = parse(&typo).unwrap_err();
+        assert!(
+            e.contains("typo") || e.contains("not a pairing code"),
+            "{i}: {e}"
+        );
+    }
+    let typo = format!("{}{}", if c.starts_with('A') { "B" } else { "A" }, &c[1..]);
     assert!(
-        e.contains("typo") || e.contains("not a pairing code"),
-        "{e}"
+        parse(&typo).unwrap_err().contains("typo"),
+        "a typo is named as one"
     );
+}
+
+#[test]
+fn garbage_and_unsafe_relays_are_refused_and_rich_text_dashes_are_fine() {
     assert!(parse("hello").is_err());
     assert!(
         parse(&code(&K, "http://evil.example")).is_err(),
         "only wss relays"
     );
+    let pasted = code(&K, URL).replace('-', "\u{2013}"); // en dashes from a rich-text paste
+    assert_eq!(parse(&pasted), Ok((K, URL.into())));
 }
 
-/// `join` with `existing` already stored: what it wrote and saved, and its result.
+/// `join` with `existing` already stored and a relay that answers: what it wrote and saved, and its result.
 fn run(
     c: &str,
     force: bool,
     existing: Option<Key>,
+) -> (Option<Key>, Option<String>, Result<String, String>) {
+    run_with(c, force, existing, true)
+}
+
+/// `run`, with a relay that answers or not.
+fn run_with(
+    c: &str,
+    force: bool,
+    existing: Option<Vec<u8>>,
+    relay_up: bool,
 ) -> (Option<Key>, Option<String>, Result<String, String>) {
     let (wrote, saved) = (RefCell::new(None), RefCell::new(None));
     let r = join(
@@ -46,6 +78,9 @@ fn run(
             Ok(())
         },
         |u| {
+            if !relay_up {
+                return Err(format!("no sync relay answering at {u}"));
+            }
             *saved.borrow_mut() = Some(u.to_string());
             Ok(u.to_string())
         },
@@ -89,7 +124,7 @@ fn nothing_key_derived_is_printed() {
 fn the_clipboard_item_is_concealed_and_forgotten_unless_replaced() {
     // a private pasteboard: the user's clipboard is never touched
     let pb = NSPasteboard::pasteboardWithUniqueName();
-    let n = put(&pb, "CODE-1234");
+    let n = put(&pb, "CODE-1234").unwrap();
     let types: Vec<String> = pb.types().unwrap().iter().map(|t| t.to_string()).collect();
     assert!(types.contains(&CONCEALED.to_string()), "{types:?}");
     assert_eq!(
@@ -105,7 +140,7 @@ fn the_clipboard_item_is_concealed_and_forgotten_unless_replaced() {
     );
 
     // the user copied something else since: leave it
-    let n = put(&pb, "CODE-1234");
+    let n = put(&pb, "CODE-1234").unwrap();
     pb.clearContents();
     pb.setString_forType(&NSString::from_str("mine"), unsafe {
         NSPasteboardTypeString
@@ -118,4 +153,29 @@ fn the_clipboard_item_is_concealed_and_forgotten_unless_replaced() {
     // not in objc2-app-kit's bindings: free the private pasteboard on the pasteboard server
     let _: () = unsafe { objc2::msg_send![&*pb, releaseGlobally] };
     assert_eq!(CLEAR_AFTER, Duration::from_secs(120));
+}
+
+#[test]
+fn a_relay_that_is_down_leaves_the_key_as_it_was() {
+    for (existing, force) in [(None, false), (Some(vec![1; 32]), true)] {
+        let (wrote, saved, r) = run_with(&code(&K, URL), force, existing, false);
+        assert!(r.is_err());
+        assert_eq!((wrote, saved), (None, None), "nothing replaced");
+    }
+}
+
+#[test]
+fn errors_print_nothing_key_derived_either() {
+    let c = code(&K, URL);
+    let hex: String = K.iter().map(|b| format!("{b:02x}")).collect();
+    let errors = [
+        run(&c, false, Some(vec![1; 32])).2.unwrap_err(),
+        run_with(&c, false, None, false).2.unwrap_err(),
+        parse(&c[..c.len() - 3]).unwrap_err(),
+    ];
+    for e in errors {
+        for secret in [c.clone(), hex.clone(), key::token(&K), key::vault_id(&K)] {
+            assert!(!e.contains(&secret), "{e}");
+        }
+    }
 }

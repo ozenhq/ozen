@@ -10,7 +10,8 @@ use data_encoding::BASE32_NOPAD;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_foundation::{NSData, NSString};
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::os::unix::process::CommandExt;
+use std::time::{Duration, SystemTime};
 
 const VERSION: u8 = 1;
 /// The marker clipboard managers honor to leave an item out of their history (nspasteboard.org).
@@ -40,11 +41,12 @@ pub fn code(k: &Key, url: &str) -> String {
 /// The key and relay URL in a pairing code; dashes, spaces and case don't matter.
 pub fn parse(code: &str) -> Result<(Key, String), String> {
     let bad = "not a pairing code: copy it again with `ozen sync pair` on your other Mac";
+    // only base32's letters and digits count: dashes of any kind, spaces and line breaks are layout
     let c: String = code
         .chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
-        .to_uppercase();
+        .to_ascii_uppercase();
     let p = BASE32_NOPAD.decode(c.as_bytes()).map_err(|_| bad)?;
     if p.len() < 1 + 32 + 4 {
         return Err(bad.into());
@@ -61,8 +63,9 @@ pub fn parse(code: &str) -> Result<(Key, String), String> {
     Ok((k, config::check(url)?))
 }
 
-/// Joins the vault in `code`: stores its key through `write` (unless `existing` already is that key)
-/// and saves its relay through `save_url`. A different key already here is kept unless `force`.
+/// Joins the vault in `code`: saves its relay through `save_url` (which checks it answers), then stores
+/// its key through `write` (unless `existing` already is that key). The key goes last, so a relay that
+/// is down leaves this Mac's key as it was. A different key already here is kept unless `force`.
 /// Returns what to print, which holds nothing derived from the key.
 pub fn join(
     code: &str,
@@ -72,29 +75,33 @@ pub fn join(
     save_url: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let (k, url) = parse(code)?;
-    match existing {
-        Some(e) if e == k => {}
-        Some(_) if !force => {
-            return Err(
-                "this Mac already has a different vault key; `ozen sync join --force` \
-                        replaces it, and this Mac then leaves its old vault"
-                    .into(),
-            );
-        }
-        _ => write(&k)?,
+    let same = existing.as_deref() == Some(&k[..]);
+    if existing.is_some() && !same && !force {
+        return Err(
+            "this Mac already has a different vault key; `ozen sync join --force` \
+                    replaces it, and this Mac then leaves its old vault"
+                .into(),
+        );
     }
-    let url = save_url(&url)?;
+    let url = save_url(&url)?; // checks the relay answers: before anything replaces the key
+    if !same {
+        write(&k)?;
+    }
     Ok(format!(
         "joined: this Mac now syncs with your other Macs through {url}"
     ))
 }
 
 /// Puts `code` on `pb`, marked concealed; returns the pasteboard's change count after.
-pub fn put(pb: &NSPasteboard, code: &str) -> isize {
+pub fn put(pb: &NSPasteboard, code: &str) -> Result<isize, String> {
     pb.clearContents();
-    pb.setString_forType(&NSString::from_str(code), unsafe { NSPasteboardTypeString });
-    pb.setData_forType(Some(&NSData::new()), &NSString::from_str(CONCEALED));
-    pb.changeCount()
+    let ok = pb.setString_forType(&NSString::from_str(code), unsafe { NSPasteboardTypeString })
+        && pb.setData_forType(Some(&NSData::new()), &NSString::from_str(CONCEALED));
+    if !ok {
+        pb.clearContents();
+        return Err("couldn't copy the pairing code to the clipboard".into());
+    }
+    Ok(pb.changeCount())
 }
 
 /// Clears `pb` if nothing was copied since `count` (so a later copy of the user's own stays).
@@ -109,11 +116,15 @@ pub fn forget(pb: &NSPasteboard, count: isize) -> bool {
 /// `ozen sync pair`: the code on the clipboard, cleared by a detached `ozen sync forget-code`.
 pub fn pair() -> Result<String, String> {
     let url = config::server()?.ok_or("no relay yet: run `ozen sync init --server URL` first")?;
-    let k = key::keychain()?;
-    let count = put(&NSPasteboard::generalPasteboard(), &code(&k, &url));
+    let k: Key = key::stored()?
+        .ok_or("no vault key yet: run `ozen sync init --server URL` first")?
+        .try_into()
+        .map_err(|_| "vault key in the Keychain is not 32 bytes")?;
+    let count = put(&NSPasteboard::generalPasteboard(), &code(&k, &url))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     std::process::Command::new(exe)
         .args(["sync", "forget-code", &count.to_string()])
+        .process_group(0) // outlives a killed terminal or tool's process group
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -128,7 +139,11 @@ pub fn pair() -> Result<String, String> {
 
 /// `ozen sync forget-code COUNT`: after `CLEAR_AFTER`, clears the clipboard if it still holds the code.
 pub fn forget_later(count: isize) {
-    std::thread::sleep(CLEAR_AFTER);
+    // wall-clock deadline: a Mac that sleeps meanwhile doesn't stretch the two minutes
+    let deadline = SystemTime::now() + CLEAR_AFTER;
+    while SystemTime::now() < deadline {
+        std::thread::sleep(Duration::from_secs(5));
+    }
     forget(&NSPasteboard::generalPasteboard(), count);
 }
 
