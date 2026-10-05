@@ -252,3 +252,31 @@ fn two_macs_converge_over_the_real_network() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+#[test]
+fn only_this_networks_addresses_reach_the_handshake() {
+    let ok = |a: &str| local_source(a.parse().unwrap());
+    for a in [
+        "127.0.0.1",
+        "192.168.1.20",
+        "10.0.0.4",
+        "172.16.5.5",
+        "169.254.3.3",
+        "::1",
+        "fe80::1",
+        "fd12:3456::1",
+        "::ffff:192.168.1.20",
+    ] {
+        assert!(ok(a), "{a} is local");
+    }
+    for a in [
+        "8.8.8.8",
+        "100.64.0.1",
+        "172.32.0.1",
+        "2001:4860::8888",
+        "::ffff:8.8.8.8",
+        "0.0.0.0",
+    ] {
+        assert!(!ok(a), "{a} is not local");
+    }
+}

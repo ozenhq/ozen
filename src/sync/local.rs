@@ -217,6 +217,20 @@ impl Drop for Local {
     }
 }
 
+/// Whether a connection from `ip` may reach the handshake: only this network (loopback, private and
+/// link-local IPv4, link-local and unique-local IPv6). A Mac with a public or VPN address would otherwise
+/// let anyone on the internet probe the port and tie up handshake slots (OFE-86).
+pub fn local_source(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr::{V4, V6};
+    match ip {
+        V4(a) => a.is_loopback() || a.is_private() || a.is_link_local(),
+        V6(a) => match a.to_ipv4_mapped() {
+            Some(v4) => local_source(V4(v4)),
+            None => a.is_loopback() || a.is_unicast_link_local() || a.is_unique_local(),
+        },
+    }
+}
+
 /// Counts a live connection; frees its slot when dropped.
 struct Slot(Arc<AtomicUsize>);
 
@@ -247,7 +261,13 @@ pub fn start(
     on_peer: impl Fn(TcpStream) + Send + Sync + 'static,
 ) -> Result<Local, String> {
     let err = |e: &dyn std::fmt::Display| format!("local sync: {e}");
-    let listener = TcpListener::bind(("0.0.0.0", 0)).map_err(|e| err(&e))?;
+    // loopback only (tests) listens on loopback only; otherwise every interface, filtered by source
+    let any = if matches!(interfaces, IfKind::LoopbackV4) {
+        "127.0.0.1"
+    } else {
+        "0.0.0.0"
+    };
+    let listener = TcpListener::bind((any, 0)).map_err(|e| err(&e))?;
     let addr = listener.local_addr().map_err(|e| err(&e))?;
     let id = hex(&random()?[..8]);
     let tag = tag(&lan);
@@ -272,7 +292,8 @@ pub fn start(
     std::thread::spawn(move || {
         while !stopped.load(Ordering::SeqCst) {
             let mut s = match listener.accept() {
-                Ok((s, _)) => s,
+                Ok((s, from)) if local_source(from.ip()) => s,
+                Ok(_) => continue, // from outside this network: closed before a byte is read
                 // out of file descriptors or similar: back off instead of spinning
                 Err(_) => {
                     std::thread::sleep(Duration::from_millis(100));
