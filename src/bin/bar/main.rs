@@ -520,6 +520,11 @@ fn represented(item: &NSMenuItem) -> Option<Value> {
     serde_json::from_str(&o.downcast::<NSString>().ok()?.to_string()).ok()
 }
 
+/// The right-click menu's first line: the panel's status line, or the raw state before the first refresh.
+fn menu_header<'a>(status: &'a str, state: &'a str) -> &'a str {
+    if status.is_empty() { state } else { status }
+}
+
 /// The status line while not recording: what ozen is doing instead, and the place it's at.
 fn idle_status(state: &str, queued: i64, meetings_only: bool, place: &str) -> String {
     match state {
@@ -1060,8 +1065,7 @@ impl App {
         };
         // the panel's own status line ("● Recording · Work"), not the raw state
         let status = self.ivars().status.get().unwrap().stringValue().to_string();
-        let state = self.ivars().state.borrow().clone();
-        add(if status.is_empty() { &state } else { &status }, None, "");
+        add(menu_header(&status, &self.ivars().state.borrow()), None, "");
         for p in self.ivars().problems.borrow().iter() {
             add(&format!("⚠︎ {p}"), None, "");
         }
