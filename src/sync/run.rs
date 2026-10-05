@@ -9,7 +9,9 @@ use super::protocol::Session;
 use super::talk::{Input, talk};
 use mdns_sd::IfKind;
 use std::fs::{self, File};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// Written by `ozen sync init`: this folder syncs. Without it `status` starts nothing.
@@ -72,6 +74,25 @@ pub fn wanted() -> bool {
         let _ = File::create(STARTED);
     }
     free && paced
+}
+
+/// From each `ozen status` poll: starts `ozen sync run` in its own process group when `wanted`, its
+/// output going to `log()` (start.log).
+pub fn keep(log: impl Fn() -> File) {
+    if !wanted() {
+        return;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| "ozen".into());
+    let spawned = Command::new(exe)
+        .args(["sync", "run"])
+        .stdin(Stdio::null())
+        .stdout(log())
+        .stderr(log())
+        .process_group(0)
+        .spawn();
+    if let Err(e) = spawned {
+        eprintln!("sync: can't start ozen sync run: {e}");
+    }
 }
 
 /// `ozen sync run`: same-network sync until nobody asks for a minute or sync is turned off.
