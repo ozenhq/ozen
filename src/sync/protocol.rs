@@ -139,6 +139,8 @@ pub struct Dropped {
     pub bad: u64,
     /// Frames from a newer protocol version: not merged until this Mac updates ozen.
     pub newer: u64,
+    /// Records in frames that opened fine but failed validation (valid.rs): dropped, not merged.
+    pub records: u64,
     pub last_error: Option<String>,
 }
 
@@ -351,6 +353,11 @@ impl Session {
                 Ok(self.records_frames(lack)?.0)
             }
             Msg::Records { r } => {
+                let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
+                if let Some(e) = errors.last() {
+                    self.dropped.records += errors.len() as u64;
+                    self.dropped.last_error = Some(e.clone());
+                }
                 let got: Vec<(Id, Mark)> = r
                     .iter()
                     .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))

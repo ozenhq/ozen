@@ -3,7 +3,7 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 /// Runs `f` with `dir` as the working directory, as ozen runs from its folder.
-fn at<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+pub(super) fn at<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
     let _cwd = crate::CWD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

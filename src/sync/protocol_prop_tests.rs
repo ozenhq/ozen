@@ -54,6 +54,15 @@ fn entry(v: u64, x: Option<u8>) -> Value {
     }
 }
 
+/// A vocab entry: a word is there (true) or deleted.
+fn word(v: u64, live: bool) -> Value {
+    if live {
+        json!({"v": v, "val": true})
+    } else {
+        json!({"v": v})
+    }
+}
+
 /// A Mac's folder, and every record it starts with as (kind, key) -> record.
 fn sandbox((l, t, f, p, w): &Edits) -> (tempfile::TempDir, BTreeMap<Id, Value>) {
     let mut has = BTreeMap::new();
@@ -72,8 +81,14 @@ fn sandbox((l, t, f, p, w): &Edits) -> (tempfile::TempDir, BTreeMap<Id, Value>) 
         let mut m = serde_json::Map::new();
         for (k, e) in keys.iter().zip(es) {
             if let Some((v, x)) = e {
-                m.insert(k.to_string(), entry(*v, *x));
-                has.insert((kind.into(), k.to_string()), entry(*v, *x));
+                // a vocab entry's value is always true (valid.rs rejects anything else)
+                let r = if kind == "vocab" {
+                    word(*v, x.is_some())
+                } else {
+                    entry(*v, *x)
+                };
+                m.insert(k.to_string(), r.clone());
+                has.insert((kind.into(), k.to_string()), r);
             }
         }
         Value::Object(m)

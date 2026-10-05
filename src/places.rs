@@ -39,6 +39,14 @@ pub fn load(path: &str) -> Vec<Place> {
 }
 
 /// Save `places` as the live list: places.json keeps versions and tombstones (src/crdt.rs).
+/// Refuses a place every other Mac would drop on receipt (sync/valid.rs: lat, lon and radius in range),
+/// which would otherwise be sent again at every exchange.
+pub fn check(p: &Place) -> Result<(), String> {
+    let mut row = serde_json::to_value(p).map_err(|e| e.to_string())?;
+    row["id"] = "new".into();
+    crate::sync::valid::record("places", "new", &row)
+}
+
 pub fn save(path: &str, places: &[Place]) -> Result<(), String> {
     let live: Vec<Row> = places
         .iter()
@@ -86,6 +94,14 @@ pub fn set_location(path: &str, i: usize, lat: f64, lon: f64) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_place_other_macs_would_drop_is_refused() {
+        assert!(check(&place("Home", Some(32.1), Some(34.8), Some(150.0))).is_ok());
+        assert!(check(&place("Home", None, None, None)).is_ok());
+        assert!(check(&place("Home", Some(200.0), Some(34.8), None)).is_err());
+        assert!(check(&place("Home", Some(32.1), Some(34.8), Some(0.0))).is_err());
+    }
 
     fn place(label: &str, lat: Option<f64>, lon: Option<f64>, radius: Option<f64>) -> Place {
         Place {
