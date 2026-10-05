@@ -3,7 +3,7 @@ source: src/sync/preview_tests.rs
 expression: out
 ---
 Turning on sync shares these with this vault's other Macs, and only them:
-- 3 transcript lines, 2026-01-01 to 2026-03-31 (UTC), each with its full text, speaker name and timing. 1 is a note you wrote; 2 carry a voiceprint (numbers describing the speaker's voice)
+- 3 transcript lines, 2026-01-01 to 2026-03-31 (UTC), each with its full text and timing (not this Mac's guess at the speaker). 1 is a note you wrote, with the speaker you gave; 2 carry a voiceprint (numbers describing the speaker's voice)
 - 1 speaker name set on a line
 - 1 correction of line text
 - 2 vocabulary words

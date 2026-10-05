@@ -74,9 +74,15 @@ fn frame(s: &Session, name: &str, msg: &Msg) -> Vec<u8> {
 }
 
 #[test]
-fn golden_these_fixtures_are_protocol_v1() {
-    // Bumping VERSION means new golden frames; the v1 ones below stop being what this build sends.
-    assert_eq!(VERSION, 1);
+fn golden_these_fixtures_are_protocol_v1_which_this_build_still_reads() {
+    // v2 (OFE-56) changed which line fields a records message carries, not the messages: these v1
+    // frames are what a Mac on the previous ozen sends, and this build must keep opening them.
+    // A VERSION past 2 drops v1 (a build reads its own and the one before): write new frames then.
+    assert_eq!(VERSION, 2);
+    assert_eq!(
+        Versions::default().read(1),
+        super::super::version::Read::Yes
+    );
 }
 
 #[test]

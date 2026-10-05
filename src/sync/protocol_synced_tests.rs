@@ -45,10 +45,13 @@ fn every_synced_kind_is_read_from_its_file_sent_and_received() {
             Records::Map(_) => json!({"k1": r}).to_string(),
         };
         std::fs::write(d.path().join(file), text).unwrap();
-        let read = at(d.path(), || records(&merge::read_synced("")));
+        let read = at(d.path(), || records(&merge::read_synced(""), VERSION));
         let id = (kind.to_string(), "k1".to_string());
         assert_eq!(read.get(&id), Some(&r), "{kind} read from {file}");
-        let got = records(&synced(vec![(kind.into(), "k1".into(), r.clone())]));
+        let got = records(
+            &synced(vec![(kind.into(), "k1".into(), r.clone())]),
+            VERSION,
+        );
         assert_eq!(got.get(&id), Some(&r), "{kind} received");
         assert!(
             super::super::valid::record(kind, "k1", &r).is_ok(),
@@ -61,5 +64,11 @@ fn every_synced_kind_is_read_from_its_file_sent_and_received() {
     }
     // a kind no build knows passes valid.rs and is left out, so the checks above aren't vacuous
     assert!(super::super::valid::record("future", "k1", &json!(42)).is_ok());
-    assert!(records(&synced(vec![("future".into(), "k1".into(), json!(42))])).is_empty());
+    assert!(
+        records(
+            &synced(vec![("future".into(), "k1".into(), json!(42))]),
+            VERSION
+        )
+        .is_empty()
+    );
 }

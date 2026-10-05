@@ -100,6 +100,24 @@ pub fn sorted(r: &Value) -> Value {
     }
 }
 
+/// Line fields the transcribing Mac derives for itself (OFE-56): its first guess at the speaker from
+/// its own voiceprints (`spk`), how unsure that guess is (`doubt`) and its transcriber run (`run`).
+/// Another Mac guesses for itself when it retrains (labels.json) and numbers its own runs, so sync
+/// (protocol v2 on) neither sends nor hashes them. A line with no voiceprint keeps `spk`: a note's
+/// speaker is what the user typed, and no retrain could recompute it.
+pub const LOCAL_LINE_FIELDS: [&str; 3] = ["spk", "doubt", "run"];
+
+/// Line `r` as sync carries it: without `LOCAL_LINE_FIELDS`.
+pub fn synced_line(mut r: Row) -> Row {
+    let voiced = r.get("e").is_some_and(|e| !e.is_null());
+    for f in LOCAL_LINE_FIELDS {
+        if f != "spk" || voiced {
+            r.remove(f);
+        }
+    }
+    r
+}
+
 /// `r` as compact JSON with keys in sorted order: tie-breaks and sync hashes are taken over this
 /// text, so it is the same on every Mac. Equal to `r.to_string()` with the default map, so existing
 /// markers and hashes don't change.

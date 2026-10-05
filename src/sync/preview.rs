@@ -81,8 +81,8 @@ pub fn render(s: &Synced) -> String {
     let mut out = vec![
         "Turning on sync shares these with this vault's other Macs, and only them:".to_string(),
         format!(
-            "- {}{range}, each with its full text, speaker name and timing. {} you wrote; {} a \
-voiceprint (numbers describing the speaker's voice)",
+            "- {}{range}, each with its full text and timing (not this Mac's guess at the speaker). \
+{} you wrote, with the speaker you gave; {} a voiceprint (numbers describing the speaker's voice)",
             n(lines.len(), "transcript line", "transcript lines"),
             n(notes, "is a note", "are notes"),
             n(voiced, "carries", "carry"),

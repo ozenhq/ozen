@@ -37,9 +37,10 @@ use {
     std::io::Read,
 };
 
-/// Every synced record in `s` (every kind in `crdt::SYNCED`). Rows written before ids get theirs from
-/// `live_ids`, as `merge_rows` does.
-fn records(s: &Synced) -> BTreeMap<Id, Value> {
+/// Every synced record in `s` (every kind in `crdt::SYNCED`) as protocol `version` carries it: from v2,
+/// lines without the fields only this Mac means (`crdt::synced_line`). Rows written before ids get
+/// theirs from `live_ids`, as `merge_rows` does.
+fn records(s: &Synced, version: u8) -> BTreeMap<Id, Value> {
     let mut out = BTreeMap::new();
     for (kind, _) in crate::crdt::SYNCED {
         match s.get(kind).expect("merge::Synced holds every synced kind") {
@@ -50,6 +51,10 @@ fn records(s: &Synced) -> BTreeMap<Id, Value> {
             }
             Records::Rows(rows) => {
                 for r in live_ids(rows) {
+                    let r = match kind {
+                        "lines" if version >= 2 => crate::crdt::synced_line(r),
+                        _ => r,
+                    };
                     let k = r
                         .get("id")
                         .and_then(Value::as_str)
@@ -170,8 +175,8 @@ impl Session {
 
     /// The marks and bucket hashes of the records here, read from the files only when they changed.
     fn ours(&mut self) -> (&BTreeMap<Id, Mark>, &[u8]) {
-        self.marks.current(|| {
-            let all = records(&merge::read_synced(""));
+        self.marks.current(self.versions.speak(), || {
+            let all = records(&merge::read_synced(""), self.versions.speak());
             all.iter().map(|(id, r)| (id.clone(), mark(r))).collect()
         })
     }
@@ -206,7 +211,7 @@ impl Session {
 
     /// Frames with every record that changed here since the other Macs last heard about it.
     pub fn changes(&mut self) -> Result<Vec<Vec<u8>>, String> {
-        let ours = records(&merge::read_synced(""));
+        let ours = records(&merge::read_synced(""), self.versions.speak());
         let changed: Vec<(Id, Value)> = ours
             .iter()
             .filter(|(id, r)| self.told.get(*id) != Some(&mark(r)))
@@ -299,7 +304,7 @@ impl Session {
                     }
                 };
                 let wanted = buckets::set(&b);
-                let lack = records(&merge::read_synced(""))
+                let lack = records(&merge::read_synced(""), self.versions.speak())
                     .into_iter()
                     .filter(|((k, key), _)| wanted[buckets::of(k, key) as usize])
                     .filter(|(id, r)| {
@@ -347,7 +352,7 @@ impl Session {
         apply::received(&synced(r), &self.after)?;
         // A record that merged to exactly what the sender has is known to them: not a change to
         // send back. One where ours won stays unmarked, so `changes` sends it.
-        let ours = records(&merge::read_synced(""));
+        let ours = records(&merge::read_synced(""), self.versions.speak());
         for (id, m) in got {
             if ours.get(&id).map(mark).as_ref() == Some(&m) {
                 self.told.insert(id, m);

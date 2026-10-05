@@ -93,7 +93,7 @@ fn a_frame_from_a_newer_protocol_is_held_back_with_update_ozen() {
             .last_error
             .as_deref()
             .unwrap()
-            .contains("protocol 2")
+            .contains(&format!("protocol {}", VERSION + 1))
     );
     assert_eq!(Dropped::default().advice(), None);
 }
