@@ -142,5 +142,8 @@ pub fn cli(cwd: &std::path::Path, usage: &str) {
 }
 
 #[cfg(test)]
+#[path = "merge_prop_tests.rs"]
+mod prop_tests;
+#[cfg(test)]
 #[path = "merge_tests.rs"]
 mod tests;
