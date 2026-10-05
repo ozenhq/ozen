@@ -1,0 +1,7 @@
+# `cargo deny check advisories`, run by CI daily and before a release (OFE-62): any security
+# advisory against a crate in the build fails it. An unmaintained crate fails only when it is a
+# direct dependency; a deep one (e.g. paste, a compile-time macro under candle) is the upstream's.
+# To accept an advisory, add its RUSTSEC id to `ignore` with a comment saying why.
+[advisories]
+unmaintained = "workspace"
+ignore = []

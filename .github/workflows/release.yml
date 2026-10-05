@@ -17,6 +17,9 @@ jobs:
         with:
           xcode-version: latest-stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-deny
+      - name: No open security advisory
+        run: cargo deny check advisories
       - run: cargo build --release
       - name: Package
         # ozen/ holds the tagged sources plus target/release/{ozen,rec}: unpacked in ~ it is the ~/ozen checkout.

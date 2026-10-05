@@ -25,6 +25,15 @@ jobs:
           else
             echo run=false >> "$GITHUB_OUTPUT"
           fi
+  advisories:
+    # Security advisories against any crate in the build (deny.toml); Linux, seconds. Not gated on `changed`:
+    # advisories come out while main stands still.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
   check:
     needs: changed
     if: needs.changed.outputs.run == 'true'
