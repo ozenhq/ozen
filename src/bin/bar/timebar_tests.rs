@@ -93,6 +93,25 @@ fn stats_and_charts() {
     assert_eq!(v, ["5", "2", "2", "1", "15s", "15.0×", "0.2/min", "10m"]);
     assert_eq!(s[2][2], "30s audio");
     assert_eq!(s[7][2], "oldest 00:58");
+    assert_eq!(s[5][2], "faster than real time");
+    let slow = Data {
+        now,
+        chunks: vec![chunk(3_000.0, "call", "done", Some(3_100.0), Some(30.0))],
+    };
+    let s = stats(&slow, a, b, &Utc);
+    assert_eq!(
+        (s[5][1].as_str(), s[5][2].as_str()),
+        ("0.5×", "slower than real time")
+    );
+    let none = Data {
+        now,
+        chunks: vec![],
+    };
+    let s = stats(&none, a, b, &Utc);
+    assert_eq!(
+        (s[5][1].as_str(), s[5][2].as_str()),
+        ("–", "nothing timed in view")
+    );
     assert_eq!(
         range_label(&Nav::default(), now, &Utc),
         "Thu 00:30 – 01:00 · live"
