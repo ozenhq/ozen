@@ -170,3 +170,36 @@ proptest! {
         prop_assert_eq!(first, want);
     }
 }
+
+/// The synced files in `dir`, byte for byte.
+fn synced_files(dir: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
+    [
+        merge::LINES,
+        merge::TAGS,
+        merge::FIXES,
+        crate::mcp::VOCAB,
+        crate::places::FILE,
+    ]
+    .iter()
+    .map(|f| (f.to_string(), std::fs::read(dir.join(f)).ok()))
+    .collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    /// `ozen merge DIR` and sync both end in `merge::apply`, but through different readers (a folder vs.
+    /// received records): from the same two folders they must leave identical files, or a user who merged
+    /// a backup by hand and then synced would see Macs diverge (OFE-87).
+    #[test]
+    fn ozen_merge_and_sync_leave_the_same_files(a in mac(), b in mac()) {
+        let (by_merge, _) = sandbox(&a);
+        let (by_sync, _) = sandbox(&a);
+        let (theirs, _) = sandbox(&b);
+        let (theirs_too, _) = sandbox(&b);
+        super::tests::at(by_merge.path(), || merge::merge_files(&theirs.path().to_string_lossy()))
+            .unwrap();
+        let (mut ma, mut mb) = (Mac::new(by_sync.path()), Mac::new(theirs_too.path()));
+        exchange(&mut ma, &mut mb);
+        prop_assert_eq!(synced_files(by_merge.path()), synced_files(by_sync.path()));
+    }
+}
