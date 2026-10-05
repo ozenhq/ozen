@@ -1136,7 +1136,8 @@ impl App {
             })
             .collect::<Vec<_>>()
             .join("|")
-            + &self.pending_json();
+            + &self.pending_json()
+            + &chrono::Local::now().date_naive().to_string(); // past midnight, "Today" becomes "Yesterday"
         if *iv.signature.borrow() == sig {
             return;
         }
