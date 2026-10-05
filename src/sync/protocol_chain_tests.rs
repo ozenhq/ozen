@@ -94,6 +94,11 @@ fn five_macs_meeting_only_in_pairs_along_a_chain_end_byte_identical() {
         true,
         "the delete won (higher v)"
     );
+    // equal v: crdt.rs picks the larger canonical JSON, here Mac 4's value
+    assert_eq!(
+        got[&("tags".into(), "conflict".into())]["val"],
+        "Mac 4's name"
+    );
     // a further round changes nothing anywhere
     for i in 0..MACS - 1 {
         let (left, right) = ms.split_at_mut(i + 1);
