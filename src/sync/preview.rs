@@ -20,10 +20,22 @@ fn date(t: f64) -> String {
     chrono::DateTime::from_timestamp(t as i64, 0).map_or("?".into(), |d| d.date_naive().to_string())
 }
 
-fn map_line(name: &str, m: &Map<String, Value>, gone_n: &mut usize) -> String {
+/// A line saying how many live entries `m` has, adding its deleted ones to `gone_n`.
+fn map_line(one: &str, many: &str, m: &Map<String, Value>, gone_n: &mut usize) -> String {
     let deleted = m.values().filter(|v| entry_gone(v)).count();
     *gone_n += deleted;
-    format!("  {name:<7}{}", m.len() - deleted)
+    let k = m.len() - deleted;
+    format!("- {k} {}", if k == 1 { one } else { many })
+}
+
+/// What a place does there, in words (places.rs `action`).
+fn action(a: Option<&str>) -> &'static str {
+    match a {
+        Some("record") => "records everything",
+        Some("meetings") => "records meetings",
+        Some("off") => "doesn't record",
+        _ => "no setting",
+    }
 }
 
 /// The preview of `s`, as `ozen sync preview` prints it.
@@ -56,42 +68,63 @@ pub fn render(s: &Synced) -> String {
                 .get("label")
                 .and_then(Value::as_str)
                 .unwrap_or("(no name)");
+            let does = action(p.get("action").and_then(Value::as_str));
             if p.get("lat").is_some_and(|l| !l.is_null()) {
-                format!("{label} (with its map location)")
+                format!("{label} ({does}; with its map area)")
             } else {
-                label.to_string()
+                format!("{label} ({does})")
             }
         })
         .collect();
     deleted += s.places.len() - places.len();
+    let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
     let mut out = vec![
         "Turning on sync shares these with this vault's other Macs, and only them:".to_string(),
         format!(
-            "  lines  {}{range}: {notes} note{}; {voiced} carry the voice embedding of who spoke",
-            lines.len(),
-            if notes == 1 { "" } else { "s" }
+            "- {}{range}, each with its full text, speaker name and timing. {} you wrote; {} a \
+voiceprint (numbers describing the speaker's voice)",
+            n(lines.len(), "transcript line", "transcript lines"),
+            n(notes, "is a note", "are notes"),
+            n(voiced, "carries", "carry"),
         ),
-        map_line("tags", &s.tags, &mut deleted),
-        map_line("fixes", &s.fixes, &mut deleted),
-        map_line("vocab", &s.vocab, &mut deleted),
-        format!(
-            "  places {}{}",
-            places.len(),
-            if places.is_empty() {
-                String::new()
-            } else {
-                format!(": {}", places.join(", "))
-            }
+        map_line(
+            "speaker name set on a line",
+            "speaker names set on lines",
+            &s.tags,
+            &mut deleted,
         ),
+        map_line(
+            "correction of line text",
+            "corrections of line text",
+            &s.fixes,
+            &mut deleted,
+        ),
+        map_line(
+            "vocabulary word",
+            "vocabulary words",
+            &s.vocab,
+            &mut deleted,
+        ),
+        if places.is_empty() {
+            "- 0 places".into()
+        } else {
+            format!(
+                "- {}: {}",
+                n(places.len(), "place", "places"),
+                places.join(", ")
+            )
+        },
     ];
     if deleted > 0 {
         out.push(format!(
-            "  and {deleted} deleted records, as markers with no content"
+            "- {}, sent without their text (a deleted place keeps its name)",
+            n(deleted, "deleted record", "deleted records")
         ));
     }
     out.push(
         "Never shared: audio (chunks/, recent/, fixes/), the voiceprint registry (voices/), where this Mac \
-is now (here.json), transcript.txt, context/ copies, labels and stats."
+is now (here.json), voices you ignore (ignore.json), what the transcriber learned (learned.json), \
+transcript.txt, context/ copies, labels, stats, and logs."
             .into(),
     );
     out.push("This preview only read files here; nothing was sent.".into());

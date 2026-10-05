@@ -60,6 +60,25 @@ fn preview_counts_what_would_sync_and_connects_nowhere() {
 fn an_empty_folder_previews_zeroes() {
     let d = tempfile::tempdir().unwrap();
     let out = preview_of(&d);
-    assert!(out.contains("  lines  0: 0 notes"), "{out}");
+    assert!(out.contains("- 0 transcript lines,"), "{out}");
     assert!(!out.contains("deleted"), "{out}");
+}
+
+/// The preview reads files and nothing else: no socket, relay config or key in its code.
+#[test]
+fn the_preview_has_no_way_to_reach_the_network() {
+    let src = include_str!("preview.rs");
+    let code = &src[..src.find("#[cfg(test)]").unwrap()];
+    for no in [
+        "TcpStream",
+        "UdpSocket",
+        "std::net",
+        "config::",
+        "key::",
+        "local::",
+        "talk::",
+        "Command::",
+    ] {
+        assert!(!code.contains(no), "preview.rs uses {no}");
+    }
 }
