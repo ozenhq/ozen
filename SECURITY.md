@@ -12,7 +12,7 @@ You'll hear back within 3 working days. We'll agree on a fix and a disclosure da
 
 ## Scope
 
-- The sync client: [`src/sync/`](src/sync/), including frame sealing and parsing, the vault key and the Keychain, pairing, and same-network sync.
+- The sync client: [`src/sync/`](src/sync/), including frame sealing and parsing, the vault key and the Keychain, and same-network sync.
 - Anything that sends data off this Mac, or lets another Mac or the relay change what's stored here.
 - The protocol is specified in ozenhq/sync's [docs/protocol.md](https://github.com/ozenhq/sync/blob/main/docs/protocol.md).
 
