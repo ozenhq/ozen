@@ -40,7 +40,7 @@ impl Mac {
             s: Session::with([7; 32], "vault", Coalesced::new(|| {})),
         }
     }
-    fn hello(&mut self) -> Vec<Vec<u8>> {
+    pub(super) fn hello(&mut self) -> Vec<Vec<u8>> {
         at(&self.dir, || self.s.hello()).unwrap()
     }
     pub(super) fn changes(&mut self) -> Vec<Vec<u8>> {
@@ -80,7 +80,7 @@ pub(super) fn exchange(a: &mut Mac, b: &mut Mac) -> usize {
 }
 
 #[test]
-fn disjoint_edits_converge_in_one_exchange_and_a_second_sends_only_summaries() {
+fn disjoint_edits_converge_in_one_exchange_and_a_second_sends_only_bucket_hashes() {
     let da = folder(
         json!([{"id": "1@a", "v": 1, "t": 1.0, "text": "hi"}]),
         json!({"1@a": {"v": 1, "val": "Dana"}}),
@@ -90,11 +90,15 @@ fn disjoint_edits_converge_in_one_exchange_and_a_second_sends_only_summaries() {
         json!({"2@b": {"v": 2, "val": "Noa"}}),
     );
     let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
-    assert_eq!(exchange(&mut a, &mut b), 2, "one records frame each way");
+    assert_eq!(
+        exchange(&mut a, &mut b),
+        4,
+        "each way: one summary of the differing buckets, then one records frame"
+    );
     let synced = a.synced();
     assert_eq!(synced, b.synced());
     assert_eq!(synced.len(), 4);
-    assert_eq!(exchange(&mut a, &mut b), 0, "in sync: summaries only");
+    assert_eq!(exchange(&mut a, &mut b), 0, "in sync: bucket hashes only");
 }
 
 #[test]
@@ -306,13 +310,14 @@ fn a_summary_in_many_parts_arriving_twice_and_out_of_order_still_answers_once() 
     let db = folder(json!([]), json!({"only-b": {"v": 1, "val": "Noa"}}));
     let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
     let hb = b.hello();
-    let mut ha = a.hello();
-    assert!(ha.len() > 1, "{} part(s)", ha.len());
-    ha.reverse();
-    let dup = ha[1..].to_vec(); // every part but the last-sent arrives twice, before completion
-    ha.splice(1..1, dup);
+    assert_eq!(hb.len(), 1, "bucket hashes: one frame");
+    let mut sa = a.receive(&hb[0]); // A's summary of the buckets that differ: all of its 4000 tags
+    assert!(sa.len() > 1, "{} part(s)", sa.len());
+    sa.reverse();
+    let dup = sa[1..].to_vec(); // every part but the last-sent arrives twice, before completion
+    sa.splice(1..1, dup);
     let mut replies = vec![];
-    for f in &ha {
+    for f in &sa {
         replies.extend(b.receive(f));
     }
     assert_eq!(
@@ -320,8 +325,8 @@ fn a_summary_in_many_parts_arriving_twice_and_out_of_order_still_answers_once() 
         1,
         "B answers the summary once, with the record A lacks"
     );
-    replies.extend(hb);
-    pipe(&mut a, &mut b, vec![], replies); // B's answer and B's own summary, to A
+    let ha = a.hello();
+    pipe(&mut a, &mut b, ha, replies); // A's hashes to B, B's answer to A
     assert_eq!(b.synced().len(), 4001);
     assert_eq!(a.synced(), b.synced());
 }
