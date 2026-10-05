@@ -83,6 +83,14 @@ impl Synced {
 /// The synced data in folder `d` ("" for this one, otherwise ending in '/'). A folder from before
 /// vocab.json has its words in vocab.txt.
 pub fn read_synced(d: &str) -> Synced {
+    Synced {
+        lines: parse_jsonl(&fs::read_to_string(format!("{d}{LINES}")).unwrap_or_default()),
+        ..read_small(d)
+    }
+}
+
+/// `read_synced` without lines.jsonl: the small files, quick to read under the transcriber's lock.
+fn read_small(d: &str) -> Synced {
     let map = |f: &str| -> Row {
         serde_json::from_slice(&fs::read(format!("{d}{f}")).unwrap_or_default()).unwrap_or_default()
     };
@@ -105,7 +113,7 @@ pub fn read_synced(d: &str) -> Synced {
             &fs::read(format!("{d}{}", places::FILE)).unwrap_or_default(),
         )
         .unwrap_or_default(),
-        lines: parse_jsonl(&fs::read_to_string(format!("{d}{LINES}")).unwrap_or_default()),
+        lines: vec![],
     }
 }
 
@@ -133,7 +141,7 @@ pub struct Applied {
 /// the same isn't rewritten.
 pub fn apply(theirs: &Synced) -> Result<Applied, String> {
     let lock = locked()?;
-    let ours = read_synced("");
+    let ours = read_small(""); // lines.jsonl is merged after, mostly without the lock
     let mut changed = false;
     for (f, mine, other) in [
         (TAGS, &ours.tags, &theirs.tags),
