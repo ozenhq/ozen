@@ -6,7 +6,7 @@ rules:
   # 50 so they can't keep growing. Lower a cap (or delete the entry) as the file gets split.
   - pattern: "src/bin/bar/main.rs"
     warn: 200
-    error: 2050
+    error: 2000
   - pattern: "src/bin/bar/timebar.rs"
     warn: 200
     error: 1200
