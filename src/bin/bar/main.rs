@@ -979,6 +979,9 @@ impl App {
                 later(3.0, move |app| {
                     out += &app.dump_meetings();
                     out += &app.dump_pending();
+                    for mi in app.right_menu().itemArray() {
+                        out += &format!("\nMENU {}", mi.title());
+                    }
                     app.show_voices();
                     later(3.0, move |app| {
                         out += &app.dump_window(
@@ -1055,7 +1058,10 @@ impl App {
             menu.addItem(&mi);
             mi
         };
-        add(&format!("ozen: {}", self.ivars().state.borrow()), None, "");
+        // the panel's own status line ("● Recording · Work"), not the raw state
+        let status = self.ivars().status.get().unwrap().stringValue().to_string();
+        let state = self.ivars().state.borrow().clone();
+        add(if status.is_empty() { &state } else { &status }, None, "");
         for p in self.ivars().problems.borrow().iter() {
             add(&format!("⚠︎ {p}"), None, "");
         }
