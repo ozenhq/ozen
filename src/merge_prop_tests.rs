@@ -50,9 +50,9 @@ fn base(recs: &[Rec]) -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     let s = batch(recs);
     let mut tags = s.tags.clone();
-    tags.insert("k9".into(), json!("Legacy"));
+    tags.insert("k3".into(), json!("Legacy"));
     let mut lines: Vec<Value> = s.lines.into_iter().map(Value::Object).collect();
-    lines.push(json!({"id": "k9", "t": 2.0, "text": "from before versions"}));
+    lines.push(json!({"id": "k3", "t": 2.0, "text": "from before versions"}));
     let rows: String = lines.iter().map(|r| r.to_string() + "\n").collect();
     fs::write(d.path().join(LINES), rows).unwrap();
     fs::write(d.path().join(TAGS), Value::Object(tags).to_string()).unwrap();
