@@ -47,6 +47,7 @@ fn messages() -> [(&'static str, Msg); 4] {
                 k: "lines".into(),
                 key: "1@a".into(),
                 v: 2,
+                h: "0123456789abcdef".into(),
                 i: 0,
                 n: 2,
                 d: base64::engine::general_purpose::STANDARD.encode(br#"{"id":"1@a","#),

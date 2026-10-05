@@ -97,3 +97,24 @@ fn a_record_that_does_not_match_its_parts_is_refused() {
     }
     assert!(assemble(parts).is_err());
 }
+
+#[test]
+fn two_macs_records_at_the_same_version_never_mix() {
+    // an equal-version conflict: both arrive in parts, interleaved; each reassembles to itself
+    let mut other = note(150);
+    other["text"] = json!("z".repeat(150 * 1024));
+    let (a, b) = (
+        split("lines", "n1@a", &note(150), BUDGET).unwrap(),
+        split("lines", "n1@a", &other, BUDGET).unwrap(),
+    );
+    assert_eq!(a.len(), b.len());
+    let (mut p, now) = (Pending::default(), Instant::now());
+    let mut done = vec![];
+    for (x, y) in a.into_iter().zip(b) {
+        done.extend(p.add(x, BUDGET, now).unwrap());
+        done.extend(p.add(y, BUDGET, now).unwrap());
+    }
+    let got: Vec<Value> = done.into_iter().map(|(_, _, r)| r).collect();
+    assert_eq!(got.len(), 2);
+    assert!(got.contains(&note(150)) && got.contains(&other));
+}

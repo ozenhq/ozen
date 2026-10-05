@@ -22,12 +22,15 @@ fn chunk(budget: usize) -> usize {
     (budget - 1024) / 4 * 3
 }
 
-/// Part `i` (of `n`) of record (`k`, `key`) at version `v`: a slice of its JSON, base64.
+/// Part `i` (of `n`) of record (`k`, `key`) at version `v` whose content hash is `h` (as in summaries):
+/// a slice of its JSON, base64. Two Macs may send different records at the same `v` (an equal-version
+/// conflict); `h` keeps their parts apart.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Part {
     pub k: String,
     pub key: String,
     pub v: u64,
+    pub h: String,
     pub i: u32,
     pub n: u32,
     pub d: String,
@@ -62,13 +65,15 @@ pub fn split(k: &str, key: &str, r: &Value, budget: usize) -> Result<Vec<Part>, 
     }
     let pieces: Vec<&[u8]> = json.chunks(chunk(budget)).collect();
     let n = pieces.len() as u32;
+    let (v, h) = super::protocol::mark(r);
     Ok(pieces
         .into_iter()
         .enumerate()
         .map(|(i, d)| Part {
             k: k.into(),
             key: key.into(),
-            v: crate::crdt::v(r),
+            v,
+            h: h.clone(),
             i: i as u32,
             n,
             d: base64::engine::general_purpose::STANDARD.encode(d),
@@ -83,9 +88,9 @@ struct Assembly {
     started: Instant,
 }
 
-/// Records arriving in parts, by (kind, key, v).
+/// Records arriving in parts, by (kind, key, v, hash).
 #[derive(Default)]
-pub struct Pending(BTreeMap<(String, String, u64), Assembly>);
+pub struct Pending(BTreeMap<(String, String, u64, String), Assembly>);
 
 impl Pending {
     /// Drops records whose parts didn't all arrive within `TIMEOUT` of the first; returns how many.
@@ -114,7 +119,7 @@ impl Pending {
         if d.len() > chunk(budget) {
             return Err(format!("{what}: part too long"));
         }
-        let id = (p.k, p.key, p.v);
+        let id = (p.k, p.key, p.v, p.h);
         if !self.0.contains_key(&id) && self.0.len() >= PENDING {
             return Err(format!(
                 "{what}: {PENDING} records already arriving in parts"
@@ -143,11 +148,10 @@ impl Pending {
         let a = self.0.remove(&id).expect("entry");
         let json: Vec<u8> = a.got.into_values().flatten().collect();
         let r: Value = serde_json::from_slice(&json).map_err(|e| format!("{what}: {e}"))?;
-        let (k, key, v) = id;
-        if crate::crdt::v(&r) != v {
+        let (k, key, v, h) = id;
+        if super::protocol::mark(&r) != (v, h) {
             return Err(format!(
-                "{k} {key}: parts said v {v}, record has {}",
-                crate::crdt::v(&r)
+                "{k} {key}: the record doesn't match its parts' version and hash"
             ));
         }
         Ok(Some((k, key, r)))

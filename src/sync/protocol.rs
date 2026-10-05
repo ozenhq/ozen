@@ -86,7 +86,7 @@ fn hashes(m: &BTreeMap<Id, Mark>) -> Vec<u8> {
     )
 }
 
-fn mark(r: &Value) -> Mark {
+pub(super) fn mark(r: &Value) -> Mark {
     let h = Sha256::digest(crate::crdt::canonical(r).as_bytes());
     (v(r), h[..8].iter().map(|b| format!("{b:02x}")).collect())
 }
@@ -329,7 +329,12 @@ impl Session {
             }
             Msg::Part(p) => {
                 let now = std::time::Instant::now();
-                self.dropped.bad += self.parts.expire(now) as u64;
+                let expired = self.parts.expire(now);
+                if expired > 0 {
+                    self.dropped.bad += expired as u64;
+                    self.dropped.last_error =
+                        Some(format!("{expired} record(s) in parts timed out"));
+                }
                 match self.parts.add(p, BUDGET, now) {
                     Ok(Some(rec)) => self.merge(vec![rec]),
                     Ok(None) => Ok(vec![]),
