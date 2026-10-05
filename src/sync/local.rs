@@ -1,19 +1,21 @@
 //! Sync with the vault's other Macs on this network, no relay: nothing leaves the network, not even
 //! sealed frames, and sync keeps working with the relay or the internet down. Each Mac advertises
-//! `_ozen-sync._tcp` over Bonjour with a tag derived from the vault id; a Mac that finds a peer with
-//! its tag connects over TCP, both prove they hold the vault key (`handshake`), and the summary protocol
+//! `_ozen-sync._tcp` over Bonjour with a tag derived from the LAN key; a Mac that finds a peer with its
+//! tag connects over TCP, both prove they hold the vault key (`handshake`), and the summary protocol
 //! (protocol.rs) runs over the connection with the same sealed frames the relay would carry.
 #![allow(dead_code)] // ponytail: started with the background connection (OFE-7)
 use super::key::Key;
 use hmac::{Hmac, KeyInit, Mac};
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use security_framework::random::SecRandom;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
+use socket2::{SockRef, TcpKeepalive};
 use std::collections::HashSet;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
-use std::time::Duration;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 /// The Bonjour service type, as declared in Ozen.app's Info.plist (app_plist.rs).
 pub fn service_type() -> String {
@@ -21,8 +23,16 @@ pub fn service_type() -> String {
 }
 /// The relay's frame cap too: a sealed frame is at most 60 KiB (seal.rs).
 const MAX_FRAME: usize = 64 << 10;
-/// A peer that doesn't finish the handshake in this long is dropped.
+/// The whole handshake must finish in this long, however slowly the peer trickles bytes.
 const HANDSHAKE: Duration = Duration::from_secs(10);
+/// Connections (handshaking or syncing) one Mac accepts at once; more are closed straight away.
+/// A user has a few Macs; this only bounds what a stranger on the network can make it hold.
+const MAX_PEERS: usize = 16;
+/// A peer that stops reading for this long is dropped (and a dead one by TCP keepalive).
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Redial a vanished connection after this, doubling up to `REDIAL_MAX`, while the peer advertises.
+const REDIAL: Duration = Duration::from_secs(1);
+const REDIAL_MAX: Duration = Duration::from_secs(60);
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -36,30 +46,54 @@ fn random() -> Result<[u8; 32], String> {
     Ok(b)
 }
 
-/// Advertised instead of the vault id: Macs of one vault match on it, and it can't be turned back into
-/// the vault id or linked to the vault on the relay.
-pub fn tag(vault: &str) -> String {
-    hex(&Sha256::digest(format!("ozen-sync lan tag {vault}").as_bytes())[..8])
+fn hmac(lan: &Key, parts: &[&[u8]]) -> Hmac<Sha256> {
+    let mut m = Hmac::<Sha256>::new_from_slice(lan).expect("any key size");
+    for p in parts {
+        m.update(p);
+    }
+    m
 }
 
-fn proof(lan: &Key, role: &str, dialer: &[u8; 32], listener: &[u8; 32]) -> Hmac<Sha256> {
-    let mut m = Hmac::<Sha256>::new_from_slice(lan).expect("any key size");
-    m.update(role.as_bytes());
-    m.update(dialer);
-    m.update(listener);
-    m
+/// Advertised so Macs of one vault find each other. Keyed with the LAN key, so neither the relay
+/// (which knows the vault id and token) nor anyone else can compute it or link it to a vault.
+pub fn tag(lan: &Key) -> String {
+    hex(&hmac(lan, &[b"ozen-sync lan tag"]).finalize().into_bytes()[..8])
+}
+
+/// `read_exact` that gives up at `deadline`, not per read: a peer trickling a byte at a time can't
+/// stretch it.
+fn read_by(s: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> std::io::Result<()> {
+    let mut got = 0;
+    while got < buf.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        s.set_read_timeout(Some(left))?;
+        match s.read(&mut buf[got..])? {
+            0 => return Err(ErrorKind::UnexpectedEof.into()),
+            n => got += n,
+        }
+    }
+    Ok(())
 }
 
 /// Both sides prove they hold the LAN key (key::lan_key) without sending it: each sends a fresh random
 /// nonce, then an HMAC over both nonces labelled with its role, so a proof can't be replayed or
-/// reflected back. Fails on a wrong key, a non-ozen peer, or no answer within `HANDSHAKE`.
-pub fn handshake(s: &mut TcpStream, lan: &Key, dialer: bool) -> Result<(), String> {
+/// reflected back. Fails on a wrong key, a non-ozen peer, or not finishing within `within`.
+pub fn handshake(
+    s: &mut TcpStream,
+    lan: &Key,
+    dialer: bool,
+    within: Duration,
+) -> Result<(), String> {
     let err = |e: std::io::Error| format!("handshake: {e}");
-    s.set_read_timeout(Some(HANDSHAKE)).map_err(err)?;
+    let deadline = Instant::now() + within;
+    s.set_write_timeout(Some(within)).map_err(err)?;
     let mine = random()?;
     s.write_all(&mine).map_err(err)?;
     let mut theirs = [0; 32];
-    s.read_exact(&mut theirs).map_err(err)?;
+    read_by(s, &mut theirs, deadline).map_err(err)?;
     let (d, l) = if dialer {
         (&mine, &theirs)
     } else {
@@ -70,19 +104,28 @@ pub fn handshake(s: &mut TcpStream, lan: &Key, dialer: bool) -> Result<(), Strin
     } else {
         ("listener", "dialer")
     };
-    s.write_all(&proof(lan, me, d, l).finalize().into_bytes())
+    let proof = |role: &str| hmac(lan, &[role.as_bytes(), d, l]);
+    s.write_all(&proof(me).finalize().into_bytes())
         .map_err(err)?;
     let mut answer = [0; 32];
-    s.read_exact(&mut answer).map_err(err)?;
-    proof(lan, them, d, l)
+    read_by(s, &mut answer, deadline).map_err(err)?;
+    proof(them)
         .verify_slice(&answer) // constant time
         .map_err(|_| "handshake: the peer doesn't hold this vault's key".to_string())?;
-    s.set_read_timeout(None).map_err(err)
+    s.set_read_timeout(None).map_err(err)?;
+    s.set_write_timeout(Some(WRITE_TIMEOUT)).map_err(err)?;
+    // a peer that vanishes (sleep, Wi-Fi off) is noticed within a few minutes
+    let ka = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(10));
+    SockRef::from(&*s).set_tcp_keepalive(&ka).map_err(err)
 }
 
 fn write_frame(s: &mut TcpStream, f: &[u8]) -> Result<(), String> {
-    let n = u32::try_from(f.len()).map_err(|e| e.to_string())?;
-    s.write_all(&n.to_be_bytes())
+    if f.len() > MAX_FRAME {
+        return Err(format!("frame of {} bytes is over {MAX_FRAME}", f.len()));
+    }
+    s.write_all(&(f.len() as u32).to_be_bytes())
         .and_then(|()| s.write_all(f))
         .map_err(|e| e.to_string())
 }
@@ -105,107 +148,210 @@ fn read_frame(s: &mut TcpStream) -> Result<Option<Vec<u8>>, String> {
 
 /// Runs the summary protocol with one authenticated peer until it hangs up. `step(None)` makes our
 /// hello, `step(Some(frame))` handles one of theirs (protocol::Session); each returns frames to send.
+/// Frames are written from their own thread, so two Macs sending big hellos at once never wait on each
+/// other's reads.
 pub fn talk(
-    mut s: TcpStream,
+    s: TcpStream,
     mut step: impl FnMut(Option<&[u8]>) -> Result<Vec<Vec<u8>>, String>,
 ) -> Result<(), String> {
-    for f in step(None)? {
-        write_frame(&mut s, &f)?;
-    }
-    while let Some(f) = read_frame(&mut s)? {
-        for r in step(Some(&f))? {
-            write_frame(&mut s, &r)?;
+    let mut w = s.try_clone().map_err(|e| e.to_string())?;
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let writer = std::thread::spawn(move || {
+        for f in rx {
+            write_frame(&mut w, &f)?;
         }
+        Ok::<(), String>(())
+    });
+    let mut r = s;
+    let send = |fs: Vec<Vec<u8>>| fs.into_iter().all(|f| tx.send(f).is_ok());
+    let mut out = Ok(());
+    if send(step(None)?) {
+        out = loop {
+            match read_frame(&mut r) {
+                Ok(Some(f)) => match step(Some(&f)) {
+                    Ok(fs) => {
+                        if !send(fs) {
+                            break Ok(()); // the writer stopped: its error is below
+                        }
+                    }
+                    Err(e) => break Err(e),
+                },
+                Ok(None) => break Ok(()),
+                Err(e) => break Err(e),
+            }
+        };
     }
-    Ok(())
+    let _ = r.shutdown(std::net::Shutdown::Both); // ends the writer if it's blocked
+    drop(tx);
+    let wrote = writer.join().unwrap_or(Err("writer panicked".into()));
+    out.and(wrote)
 }
 
-/// Advertising and browsing; dropping it stops both (open connections run until the peer hangs up).
+/// Advertising, browsing and accepting; dropping it stops all three (open connections run until the
+/// peer hangs up).
 pub struct Local {
     daemon: ServiceDaemon,
+    fullname: String,
+    stop: Arc<AtomicBool>,
+    addr: SocketAddr,
+}
+
+impl Local {
+    /// The TCP port peers connect to.
+    pub fn port(&self) -> u16 {
+        self.addr.port()
+    }
 }
 
 impl Drop for Local {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(("127.0.0.1", self.addr.port())); // wakes the accept loop to see `stop`
+        if let Ok(done) = self.daemon.unregister(&self.fullname) {
+            let _ = done.recv_timeout(Duration::from_secs(1)); // the goodbye went out
+        }
         let _ = self.daemon.shutdown();
+    }
+}
+
+/// Counts a live connection; frees its slot when dropped.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(n: &Arc<AtomicUsize>) -> Option<Slot> {
+        (n.fetch_add(1, Ordering::SeqCst) < MAX_PEERS)
+            .then(|| Slot(n.clone()))
+            .or_else(|| {
+                n.fetch_sub(1, Ordering::SeqCst);
+                None
+            })
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 /// Advertises this Mac on `interfaces` and connects to the vault's other Macs found there. Each
 /// authenticated connection, either way, runs `on_peer` on its own thread. Of two Macs that find each
-/// other, only the one with the smaller instance id dials, so a pair opens one connection.
+/// other, only the one with the smaller instance id dials, and it redials with backoff whenever the
+/// connection ends, for as long as the other Mac advertises.
 pub fn start(
-    vault: &str,
     lan: Key,
     interfaces: IfKind,
     on_peer: impl Fn(TcpStream) + Send + Sync + 'static,
 ) -> Result<Local, String> {
     let err = |e: &dyn std::fmt::Display| format!("local sync: {e}");
     let listener = TcpListener::bind(("0.0.0.0", 0)).map_err(|e| err(&e))?;
-    let port = listener.local_addr().map_err(|e| err(&e))?.port();
+    let addr = listener.local_addr().map_err(|e| err(&e))?;
     let id = hex(&random()?[..8]);
-    let tag = tag(vault);
+    let tag = tag(&lan);
     let daemon = ServiceDaemon::new().map_err(|e| err(&e))?;
     daemon.disable_interface(IfKind::All).map_err(|e| err(&e))?;
     daemon.enable_interface(interfaces).map_err(|e| err(&e))?;
     let props = [("tag", tag.as_str()), ("id", id.as_str())];
-    let me = ServiceInfo::new(
-        &service_type(),
-        &id,
-        &format!("{id}.local."),
-        "",
-        port,
-        &props[..],
-    )
-    .map_err(|e| err(&e))?
-    .enable_addr_auto();
+    let host = format!("{id}.local.");
+    let me = ServiceInfo::new(&service_type(), &id, &host, "", addr.port(), &props[..])
+        .map_err(|e| err(&e))?
+        .enable_addr_auto();
+    let fullname = me.get_fullname().to_string();
     daemon.register(me).map_err(|e| err(&e))?;
     let found = daemon.browse(&service_type()).map_err(|e| err(&e))?;
 
-    let on_peer = Arc::new(on_peer);
-    let (accept, peer) = (on_peer.clone(), on_peer);
+    let (on_peer, stop, slots) = (
+        Arc::new(on_peer),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let (on_accept, stopped, accept_slots) = (on_peer.clone(), stop.clone(), slots.clone());
     std::thread::spawn(move || {
-        for s in listener.incoming().flatten() {
-            let on_peer = accept.clone();
+        while !stopped.load(Ordering::SeqCst) {
+            let mut s = match listener.accept() {
+                Ok((s, _)) => s,
+                // out of file descriptors or similar: back off instead of spinning
+                Err(_) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            };
+            let Some(slot) = Slot::take(&accept_slots) else {
+                continue; // dropping `s` closes it
+            };
+            let on_peer = on_accept.clone();
             std::thread::spawn(move || {
-                let mut s = s;
-                if handshake(&mut s, &lan, false).is_ok() {
+                let _slot = slot;
+                if handshake(&mut s, &lan, false, HANDSHAKE).is_ok() {
                     on_peer(s);
                 }
             });
         }
     });
+
+    // Instance ids advertising now; a dial loop runs while its peer's id is in here.
+    let present = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let stopped = stop.clone();
     std::thread::spawn(move || {
-        let mut dialed = HashSet::new();
         while let Ok(ev) = found.recv() {
-            let ServiceEvent::ServiceResolved(r) = ev else {
-                continue;
+            if stopped.load(Ordering::SeqCst) {
+                return;
+            }
+            let r = match ev {
+                ServiceEvent::ServiceResolved(r) => r,
+                ServiceEvent::ServiceRemoved(_, name) => {
+                    let gone = name.split('.').next().unwrap_or_default().to_string();
+                    present.lock().unwrap().remove(&gone);
+                    continue;
+                }
+                _ => continue,
             };
             let theirs = r.get_property_val_str("id").unwrap_or_default().to_string();
             if r.get_property_val_str("tag") != Some(tag.as_str()) || theirs <= id {
                 continue; // another vault, ourselves, or theirs to dial
             }
-            if !dialed.insert(theirs) {
-                continue;
+            if !present.lock().unwrap().insert(theirs.clone()) {
+                continue; // already dialing it
             }
             let port = r.get_port();
-            let addrs: Vec<_> = r
+            let addrs: Vec<SocketAddr> = r
                 .get_addresses()
                 .iter()
-                .map(|a| (a.to_ip_addr(), port))
+                .map(|a| (a.to_ip_addr(), port).into())
                 .collect();
-            let on_peer = peer.clone();
+            let (on_peer, present, stopped, slots) = (
+                on_peer.clone(),
+                present.clone(),
+                stopped.clone(),
+                slots.clone(),
+            );
             std::thread::spawn(move || {
-                let Some(mut s) = addrs.iter().find_map(|a| TcpStream::connect(a).ok()) else {
-                    return;
-                };
-                if handshake(&mut s, &lan, true).is_ok() {
-                    on_peer(s);
+                let mut wait = REDIAL;
+                let here =
+                    || present.lock().unwrap().contains(&theirs) && !stopped.load(Ordering::SeqCst);
+                while here() {
+                    let s = addrs
+                        .iter()
+                        .find_map(|a| TcpStream::connect_timeout(a, HANDSHAKE).ok());
+                    if let (Some(mut s), Some(slot)) = (s, Slot::take(&slots)) {
+                        if handshake(&mut s, &lan, true, HANDSHAKE).is_ok() {
+                            on_peer(s);
+                            wait = REDIAL; // it worked; a later drop retries quickly
+                        }
+                        drop(slot);
+                    }
+                    std::thread::sleep(wait);
+                    wait = (wait * 2).min(REDIAL_MAX);
                 }
             });
         }
     });
-    Ok(Local { daemon })
+    Ok(Local {
+        daemon,
+        fullname,
+        stop,
+        addr,
+    })
 }
 
 #[cfg(test)]

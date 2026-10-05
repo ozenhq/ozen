@@ -39,8 +39,8 @@ pub fn seal_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync seal")
 }
 
-/// The key two Macs on one network prove they share before syncing directly (local.rs). Unlike the
-/// token, the relay never sees anything derived from it.
+/// The key two Macs on one network prove they share before syncing directly (local.rs). The relay
+/// knows the token, so the LAN proof must not be derivable from it; this is a separate HKDF output.
 #[allow(dead_code)] // ponytail: started with the background connection (OFE-7)
 pub fn lan_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync lan")

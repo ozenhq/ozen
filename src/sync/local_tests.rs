@@ -1,25 +1,25 @@
 use super::*;
 use crate::sync::protocol::Session;
 use serde_json::{Value, json};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 #[test]
-fn the_tag_is_stable_per_vault_and_is_not_the_vault_id() {
-    let v = "a".repeat(64);
-    assert_eq!(tag(&v), tag(&v));
-    assert_eq!(tag(&v).len(), 16);
-    assert!(!v.contains(&tag(&v)));
-    assert_ne!(tag(&v), tag(&"b".repeat(64)));
+fn the_tag_is_stable_per_key_and_only_the_key_makes_it() {
+    assert_eq!(tag(&[5; 32]), tag(&[5; 32]));
+    assert_eq!(tag(&[5; 32]).len(), 16);
+    assert_ne!(tag(&[5; 32]), tag(&[6; 32]));
 }
 
 /// Handshakes a dialer holding `a` with a listener holding `b`; returns (dialer, listener) results.
 fn shake(a: Key, b: Key) -> (Result<(), String>, Result<(), String>) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    let listener = std::thread::spawn(move || handshake(&mut l.accept().unwrap().0, &b, false));
-    let dialer = handshake(&mut TcpStream::connect(addr).unwrap(), &a, true);
+    let listener =
+        std::thread::spawn(move || handshake(&mut l.accept().unwrap().0, &b, false, HANDSHAKE));
+    let dialer = handshake(&mut TcpStream::connect(addr).unwrap(), &a, true, HANDSHAKE);
     (dialer, listener.join().unwrap())
 }
 
@@ -31,16 +31,107 @@ fn only_macs_holding_the_vault_key_get_past_the_handshake() {
     assert!(l.is_err());
 }
 
-#[test]
-fn a_peer_that_is_not_ozen_fails_the_handshake() {
+/// A peer at `addr` that runs `act` on its end of one connection.
+fn peer(act: impl FnOnce(TcpStream) + Send + 'static) -> SocketAddr {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    std::thread::spawn(move || {
-        let (mut s, _) = l.accept().unwrap();
+    std::thread::spawn(move || act(l.accept().unwrap().0));
+    addr
+}
+
+#[test]
+fn a_peer_that_is_not_ozen_fails_the_handshake() {
+    let addr = peer(|mut s| {
         let _ = s.write_all(&[0xAB; 64]); // a nonce and a made-up proof
         std::thread::sleep(Duration::from_secs(1));
     });
-    assert!(handshake(&mut TcpStream::connect(addr).unwrap(), &[1; 32], true).is_err());
+    let r = handshake(
+        &mut TcpStream::connect(addr).unwrap(),
+        &[1; 32],
+        true,
+        HANDSHAKE,
+    );
+    assert!(r.is_err());
+}
+
+#[test]
+fn a_reflected_proof_fails() {
+    // the peer echoes our nonce and then our own proof back, hoping it passes for theirs
+    let addr = peer(|mut s| {
+        let mut b = [0; 32];
+        s.read_exact(&mut b).unwrap();
+        s.write_all(&b).unwrap();
+        s.read_exact(&mut b).unwrap();
+        s.write_all(&b).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+    });
+    let r = handshake(
+        &mut TcpStream::connect(addr).unwrap(),
+        &[1; 32],
+        true,
+        HANDSHAKE,
+    );
+    assert!(r.unwrap_err().contains("doesn't hold"));
+}
+
+#[test]
+fn a_peer_trickling_bytes_cannot_stretch_the_handshake() {
+    let addr = peer(|mut s| {
+        for _ in 0..64 {
+            if s.write_all(&[0]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let started = Instant::now();
+    let r = handshake(
+        &mut TcpStream::connect(addr).unwrap(),
+        &[1; 32],
+        true,
+        Duration::from_millis(400),
+    );
+    assert!(r.is_err());
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn frames_over_64_kib_are_refused_both_ways() {
+    let addr = peer(|mut s| {
+        let _ = s.write_all(&((MAX_FRAME as u32 + 1).to_be_bytes()));
+        std::thread::sleep(Duration::from_secs(1));
+    });
+    let mut s = TcpStream::connect(addr).unwrap();
+    assert!(read_frame(&mut s).unwrap_err().contains("over"));
+    assert!(write_frame(&mut s, &vec![0; MAX_FRAME + 1]).is_err());
+}
+
+#[test]
+fn connections_past_the_cap_are_closed_and_drop_stops_listening() {
+    let local = start([3; 32], IfKind::LoopbackV4, |_| {}).unwrap();
+    let addr = ("127.0.0.1", local.port());
+    // each of these sits in its handshake, holding a slot
+    let held: Vec<_> = (0..MAX_PEERS)
+        .map(|_| TcpStream::connect(addr).unwrap())
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    let mut extra = TcpStream::connect(addr).unwrap();
+    extra
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    assert_eq!(
+        extra.read(&mut [0; 64]).unwrap_or(0),
+        0,
+        "closed with nothing sent"
+    );
+    drop(held);
+    drop(local);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(TcpStream::connect(addr).is_err(), "no longer listening");
 }
 
 /// Runs `f` with `dir` as the working directory, as ozen runs from its folder.
@@ -63,11 +154,14 @@ fn folder(lines: &[Value], tags: Value) -> tempfile::TempDir {
     d
 }
 
-/// A Mac syncing `dir` with its vault's other Macs on loopback only; counts its connections.
+/// A Mac syncing `dir` with its vault's other Macs on loopback only; counts its connections. Its first
+/// connection is hung up at once, as a dropped Wi-Fi would.
 fn mac(dir: &Path, vault: &str, key: Key, peers: Arc<AtomicUsize>) -> Local {
     let (dir, v) = (PathBuf::from(dir), vault.to_string());
-    start(vault, key, IfKind::LoopbackV4, move |s| {
-        peers.fetch_add(1, Ordering::SeqCst);
+    start(key, IfKind::LoopbackV4, move |s| {
+        if peers.fetch_add(1, Ordering::SeqCst) == 0 {
+            return;
+        }
         let mut session = Session::new([9; 32], &v);
         let _ = talk(s, |f| {
             at(&dir, || match f {
@@ -119,16 +213,11 @@ fn two_macs_on_one_network_find_each_other_and_converge_with_no_relay() {
     let (lines, tags) = data(b.path());
     assert_eq!(lines.len(), 2);
     assert_eq!(tags["1@a"]["val"], "Dana");
-    assert_eq!(
-        counts[0].load(Ordering::SeqCst),
-        1,
-        "one connection per pair"
-    );
-    assert_eq!(counts[1].load(Ordering::SeqCst), 1);
-    assert_eq!(
-        counts[2].load(Ordering::SeqCst),
-        0,
-        "another vault is never connected"
-    );
+    // the first connection was dropped, then redialed: two each, and no duplicates turn up later
+    let seen = |i: usize| counts[i].load(Ordering::SeqCst);
+    assert_eq!((seen(0), seen(1)), (2, 2));
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!((seen(0), seen(1)), (2, 2), "one connection per pair");
+    assert_eq!(seen(2), 0, "another vault is never connected");
     assert_eq!(data(other.path()).0.len(), 1);
 }
