@@ -95,11 +95,15 @@ pub(super) fn mark(r: &Value) -> Mark {
 /// know (from a newer ozen) is left out.
 fn synced(recs: Vec<(String, String, Value)>) -> Synced {
     let mut s = Synced::default();
+    // two versions of one key in a frame (a buggy or hostile peer) keep the CRDT winner, not the last
+    let put = |m: &mut crate::crdt::Row, k, r| {
+        *m = crate::crdt::merge_maps(m, &[(k, r)].into_iter().collect())
+    };
     for (kind, k, r) in recs {
         match (kind.as_str(), r) {
-            ("tags", r) => drop(s.tags.insert(k, r)),
-            ("fixes", r) => drop(s.fixes.insert(k, r)),
-            ("vocab", r) => drop(s.vocab.insert(k, r)),
+            ("tags", r) => put(&mut s.tags, k, r),
+            ("fixes", r) => put(&mut s.fixes, k, r),
+            ("vocab", r) => put(&mut s.vocab, k, r),
             ("places", Value::Object(r)) => s.places.push(r),
             ("lines", Value::Object(r)) => s.lines.push(r),
             _ => {}
