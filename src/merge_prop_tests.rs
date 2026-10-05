@@ -44,9 +44,36 @@ fn batch(recs: &[Rec]) -> Synced {
     s
 }
 
-/// Applies `batches` in turn to a fresh folder; returns its synced files, byte for byte.
-fn applied(batches: &[Vec<Rec>]) -> Vec<(String, Option<Vec<u8>>)> {
+/// A folder this Mac already has: `recs` written straight to its files, plus legacy forms (a bare tag
+/// value, a line without a version) as older ozen wrote them.
+fn base(recs: &[Rec]) -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
+    let s = batch(recs);
+    let mut tags = s.tags.clone();
+    tags.insert("k9".into(), json!("Legacy"));
+    let mut lines: Vec<Value> = s.lines.into_iter().map(Value::Object).collect();
+    lines.push(json!({"id": "k9", "t": 2.0, "text": "from before versions"}));
+    let rows: String = lines.iter().map(|r| r.to_string() + "\n").collect();
+    fs::write(d.path().join(LINES), rows).unwrap();
+    fs::write(d.path().join(TAGS), Value::Object(tags).to_string()).unwrap();
+    fs::write(d.path().join(FIXES), Value::Object(s.fixes).to_string()).unwrap();
+    fs::write(
+        d.path().join(crate::mcp::VOCAB),
+        Value::Object(s.vocab).to_string(),
+    )
+    .unwrap();
+    let places: Vec<Value> = s.places.into_iter().map(Value::Object).collect();
+    fs::write(
+        d.path().join(places::FILE),
+        Value::Array(places).to_string(),
+    )
+    .unwrap();
+    d
+}
+
+/// Applies `batches` in turn to a copy of the folder `mine`; returns its synced files, byte for byte.
+fn applied(mine: &[Rec], batches: &[Vec<Rec>]) -> Vec<(String, Option<Vec<u8>>)> {
+    let d = base(mine);
     let _cwd = crate::CWD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -95,13 +122,14 @@ proptest! {
     #[test]
     fn any_order_batching_or_repeat_of_records_leaves_the_same_files(
         (recs, shuffled) in recs_and_shuffled(),
+        mine in prop::collection::vec((0usize..5, 0usize..4, 1u64..4, prop::option::of(0u8..3)), 0..12),
         again in prop::collection::vec(0usize..24, 0..8),
         cuts in prop::collection::vec(0usize..32, 0..6),
     ) {
-        let once = applied(std::slice::from_ref(&recs));
+        let once = applied(&mine, std::slice::from_ref(&recs));
         let order: Vec<usize> = (0..shuffled.len()).collect();
-        prop_assert_eq!(&applied(&rearranged(&shuffled, &order, &again, &cuts)), &once);
+        prop_assert_eq!(&applied(&mine, &rearranged(&shuffled, &order, &again, &cuts)), &once);
         // and applying everything again changes nothing
-        prop_assert_eq!(applied(&[recs.clone(), recs]), once);
+        prop_assert_eq!(applied(&mine, &[recs.clone(), recs]), once);
     }
 }
