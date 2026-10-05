@@ -91,7 +91,7 @@ pub fn render(
         NSFont::systemFontOfSize(11.0),
         NSFont::systemFontOfSize(13.0),
     );
-    let mut prev = (String::new(), String::new()); // the line above's header and source
+    let mut prev = None; // the line above's header and source
     for l in &lines {
         let s = |k: &str| l[k].as_str().unwrap_or("").to_string();
         let (id, said, heard) = (s("id"), s("text"), s("heard"));
@@ -121,8 +121,9 @@ pub fn render(
         let tag_url =
             NSURL::URLWithString(&NSString::from_str(&format!("ozen://tag/{id}"))).unwrap();
         // the same voice talking on: its name dimmed and no source, so speaker changes stand out
-        let same = prev == (header.clone(), s("src"));
-        prev = (header.clone(), s("src"));
+        let this = Some((header.clone(), s("src")));
+        let same = prev == this;
+        prev = this;
         // unsure lines are what the loop wants tagged next
         let header_color = if l["unsure"].as_bool().unwrap_or(false) {
             &orange
