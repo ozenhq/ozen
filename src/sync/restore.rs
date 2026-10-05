@@ -15,6 +15,7 @@ const KEEP: usize = 5;
 /// A sync that brings a big history comes in many frames: one restore point, before the first, covers
 /// them all. A big batch within this long of the newest point takes none, unless an undo came since.
 /// ponytail: a sync longer than this gets a second point mid-way, and an undo reverts only past it.
+/// ponytail: `KEEP` counts undo's points too, and `ozen merge DIR` doesn't honour the pause.
 const BURST: Duration = Duration::from_secs(10 * 60);
 const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// While this exists, sync stays off here (run.rs); `ozen sync init` removes it.
@@ -99,6 +100,11 @@ fn merging() -> Result<File, String> {
 /// isn't caught half way.
 fn take(suffix: &str) -> Result<PathBuf, String> {
     let _lock = crate::mcp::locked()?;
+    copy(suffix)
+}
+
+/// `take`, for a caller already holding the lines lock.
+fn copy(suffix: &str) -> Result<PathBuf, String> {
     let mut at = now();
     let name = |at: u64| Path::new(DIR).join(format!("{at}{suffix}"));
     while name(at).exists() {
@@ -133,9 +139,11 @@ pub fn undo() -> Result<String, String> {
             "no restore point here: one is taken before each big batch from another Mac".into(),
         );
     };
-    fs::write(PAUSED, "").map_err(|e| format!("{PAUSED}: {e}"))?;
-    let saved = take(BY_UNDO)?;
+    // one lines lock for saving and restoring: a line written in between would be in neither
     let _lock = crate::mcp::locked()?;
+    let saved = copy(BY_UNDO)?;
+    // paused only once there's something to resume to
+    fs::write(PAUSED, "").map_err(|e| format!("{PAUSED}: {e}"))?;
     for f in files() {
         let src = from.join(f);
         let bytes = fs::read(&src).ok();
