@@ -7,10 +7,33 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 #[test]
-fn the_tag_is_stable_per_key_and_only_the_key_makes_it() {
-    assert_eq!(tag(&[5; 32]), tag(&[5; 32]));
-    assert_eq!(tag(&[5; 32]).len(), 16);
-    assert_ne!(tag(&[5; 32]), tag(&[6; 32]));
+fn the_tag_matches_between_a_vaults_macs_on_a_day_and_changes_every_day() {
+    let d = 20_000;
+    assert_eq!(tag(&[5; 32], d), tag(&[5; 32], d), "paired Macs, same day");
+    assert_eq!(tag(&[5; 32], d).len(), 16);
+    assert_ne!(tag(&[5; 32], d), tag(&[6; 32], d), "another vault");
+    let week: HashSet<String> = (d..d + 7).map(|x| tag(&[5; 32], x)).collect();
+    assert_eq!(week.len(), 7, "a new tag each day");
+}
+
+#[test]
+fn a_tag_from_just_before_midnight_is_still_ours_just_after() {
+    let midnight = 20_000 * 86_400;
+    let advertised = tag(&[5; 32], day(midnight - 10)); // 23:59:50
+    assert!(ours(&[5; 32], &advertised, midnight + 30)); // 00:00:30
+    assert!(ours(
+        &[5; 32],
+        &tag(&[5; 32], day(midnight + 30)),
+        midnight - 10
+    )); // its clock is ahead
+    assert!(
+        !ours(&[5; 32], &advertised, midnight + 86_400 + 30),
+        "two days on, it's gone"
+    );
+    assert!(
+        !ours(&[6; 32], &advertised, midnight + 30),
+        "another vault's"
+    );
 }
 
 /// Handshakes a dialer holding `a` with a listener holding `b`; returns (dialer, listener) results.
@@ -161,8 +184,20 @@ fn mac(dir: &Path, vault: &str, key: Key, peers: Arc<AtomicUsize>) -> Local {
 }
 
 fn mac_on(on: IfKind, dir: &Path, vault: &str, key: Key, peers: Arc<AtomicUsize>) -> Local {
+    mac_at(now, on, dir, vault, key, peers)
+}
+
+/// `mac_on` whose clock reads `clock`.
+fn mac_at(
+    clock: fn() -> u64,
+    on: IfKind,
+    dir: &Path,
+    vault: &str,
+    key: Key,
+    peers: Arc<AtomicUsize>,
+) -> Local {
     let (dir, v) = (PathBuf::from(dir), vault.to_string());
-    start(key, on, move |s| {
+    start_at(key, on, clock, move |s| {
         if peers.fetch_add(1, Ordering::SeqCst) == 0 {
             return;
         }
@@ -279,5 +314,78 @@ fn only_this_networks_addresses_reach_the_handshake() {
         "0.0.0.0",
     ] {
         assert!(!ok(a), "{a} is not local");
+    }
+}
+
+#[test]
+fn macs_on_either_side_of_midnight_still_find_each_other() {
+    let line = |id: &str| json!({"id": id, "t": 1.0, "text": "x", "v": 1});
+    let a = folder(&[line("1@a")], json!({}));
+    let b = folder(&[line("2@b")], json!({}));
+    let (vault, key) = ("v".repeat(64), [5; 32]);
+    let peers = Arc::new(AtomicUsize::new(0));
+    // one Mac advertised at 23:59:50, the other looks at 00:00:30 the next day
+    let _ma = mac_at(
+        || 20_000 * 86_400 - 10,
+        IfKind::LoopbackV4,
+        a.path(),
+        &vault,
+        key,
+        peers.clone(),
+    );
+    let _mb = mac_at(
+        || 20_000 * 86_400 + 30,
+        IfKind::LoopbackV4,
+        b.path(),
+        &vault,
+        key,
+        peers.clone(),
+    );
+    let started = Instant::now();
+    while data(a.path()).0.len() < 2 || data(b.path()).0.len() < 2 {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "they never met"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(20_000 * 86_400);
+
+#[test]
+fn a_running_mac_advertises_the_new_tag_when_its_day_changes() {
+    let line = |id: &str| json!({"id": id, "t": 1.0, "text": "x", "v": 1});
+    let a = folder(&[line("1@a")], json!({}));
+    let b = folder(&[line("2@b")], json!({}));
+    let (vault, key) = ("v".repeat(64), [5; 32]);
+    let peers = Arc::new(AtomicUsize::new(0));
+    let _ma = mac_at(
+        || CLOCK.load(Ordering::SeqCst),
+        IfKind::LoopbackV4,
+        a.path(),
+        &vault,
+        key,
+        peers.clone(),
+    );
+    // two days ahead: a's first tag is too old for it
+    let _mb = mac_at(
+        || 20_002 * 86_400,
+        IfKind::LoopbackV4,
+        b.path(),
+        &vault,
+        key,
+        peers.clone(),
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(data(b.path()).0.len(), 1, "two days apart, they don't meet");
+    CLOCK.store(20_002 * 86_400, Ordering::SeqCst); // a's clock reaches b's day
+    let started = Instant::now();
+    while data(a.path()).0.len() < 2 || data(b.path()).0.len() < 2 {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "a never re-advertised"
+        );
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
