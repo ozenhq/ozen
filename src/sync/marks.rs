@@ -32,6 +32,8 @@ pub struct Marks {
     stamp: Option<Stamp>,
     /// When `stamp` was taken.
     at: SystemTime,
+    /// The protocol version the marks were taken in: it decides which fields a record carries.
+    version: u8,
     marks: BTreeMap<Id, Mark>,
     hashes: Vec<u8>,
     /// How many times the files were read and hashed (for tests).
@@ -43,6 +45,7 @@ impl Default for Marks {
         Marks {
             stamp: None,
             at: UNIX_EPOCH,
+            version: 0,
             marks: BTreeMap::new(),
             hashes: vec![],
             reads: 0,
@@ -60,15 +63,17 @@ fn settled(stamp: &Stamp, at: SystemTime) -> bool {
 }
 
 impl Marks {
-    /// The marks and bucket hashes of the records in this folder: `compute` runs again only
-    /// when a synced file changed since the last call. The files are stat-ed before `compute` reads
+    /// The marks and bucket hashes of the records in this folder in protocol `version`: `compute` runs
+    /// again only when a synced file or the version changed since the last call. The files are stat-ed before `compute` reads
     /// them, so a write in between shows as a change next time rather than being missed.
     pub fn current(
         &mut self,
+        version: u8,
         compute: impl FnOnce() -> BTreeMap<Id, Mark>,
     ) -> (&BTreeMap<Id, Mark>, &[u8]) {
         let now = stamp();
-        if self.stamp.as_ref() != Some(&now) || !settled(&now, self.at) {
+        if self.stamp.as_ref() != Some(&now) || !settled(&now, self.at) || self.version != version {
+            self.version = version;
             self.at = SystemTime::now();
             self.marks = compute();
             self.hashes = super::buckets::hashes(

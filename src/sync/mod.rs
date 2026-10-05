@@ -11,6 +11,7 @@ pub mod marks;
 pub mod parts;
 pub mod preview;
 pub mod protocol;
+pub mod records;
 pub mod run;
 pub mod seal;
 pub mod summaries;

@@ -12,13 +12,13 @@ pub use super::dropped::Dropped;
 use super::key::Key;
 use super::marks::Marks;
 use super::parts;
+pub(super) use super::records::mark;
+use super::records::records;
 #[cfg(test)]
 use super::seal;
-use crate::crdt::{live_ids, v};
-use crate::merge::{self, Records, Synced};
+use crate::merge::{self, Synced};
 use base64::Engine;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 /// A synced record: (kind, key). The kinds are the synced files: tags, fixes, vocab, places, lines.
@@ -33,40 +33,11 @@ use super::wire::{self, BUDGET, Msg, frame_version};
 #[cfg(test)]
 use {
     super::version::VERSION,
+    crate::crdt::v,
+    crate::merge::Records,
     flate2::{Compression, write::DeflateEncoder},
     std::io::Read,
 };
-
-/// Every synced record in `s` (every kind in `crdt::SYNCED`). Rows written before ids get theirs from
-/// `live_ids`, as `merge_rows` does.
-fn records(s: &Synced) -> BTreeMap<Id, Value> {
-    let mut out = BTreeMap::new();
-    for (kind, _) in crate::crdt::SYNCED {
-        match s.get(kind).expect("merge::Synced holds every synced kind") {
-            Records::Map(m) => {
-                for (k, e) in m {
-                    out.insert((kind.into(), k.clone()), e.clone());
-                }
-            }
-            Records::Rows(rows) => {
-                for r in live_ids(rows) {
-                    let k = r
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    out.insert((kind.into(), k), Value::Object(r));
-                }
-            }
-        }
-    }
-    out
-}
-
-pub(super) fn mark(r: &Value) -> Mark {
-    let h = Sha256::digest(crate::crdt::canonical(r).as_bytes());
-    (v(r), h[..8].iter().map(|b| format!("{b:02x}")).collect())
-}
 
 /// Received records as a folder's worth of synced data, for `merge::apply`. A kind this build doesn't
 /// know (from a newer ozen) is left out.
@@ -84,8 +55,10 @@ fn synced(recs: Vec<(String, String, Value)>) -> Synced {
 pub struct Session {
     seal_key: Key,
     vault: String,
-    /// What the other Macs last heard about each record here, so `changes` sends only what's new.
+    /// What the other Macs last heard about each record here, so `changes` sends only what's new; marks
+    /// in protocol version `told_in`.
     told: BTreeMap<Id, Mark>,
+    told_in: u8,
     /// Summaries still arriving, bounded (summaries.rs).
     partial: Partial,
     /// Records too big for one frame, still arriving in parts.
@@ -113,6 +86,7 @@ impl Session {
             seal_key,
             vault: vault.into(),
             told: BTreeMap::new(),
+            told_in: super::version::VERSION,
             partial: Partial::default(),
             parts: parts::Pending::default(),
             after,
@@ -161,6 +135,7 @@ impl Session {
         let (ours, hashes) = self.ours();
         let h = base64::engine::general_purpose::STANDARD.encode(hashes);
         self.told = ours.clone();
+        self.told_in = self.versions.speak();
         let max = self.versions.own();
         Ok(vec![self.frame_in(
             self.versions.oldest(),
@@ -170,8 +145,8 @@ impl Session {
 
     /// The marks and bucket hashes of the records here, read from the files only when they changed.
     fn ours(&mut self) -> (&BTreeMap<Id, Mark>, &[u8]) {
-        self.marks.current(|| {
-            let all = records(&merge::read_synced(""));
+        self.marks.current(self.versions.speak(), || {
+            let all = records(&merge::read_synced(""), self.versions.speak());
             all.iter().map(|(id, r)| (id.clone(), mark(r))).collect()
         })
     }
@@ -206,7 +181,8 @@ impl Session {
 
     /// Frames with every record that changed here since the other Macs last heard about it.
     pub fn changes(&mut self) -> Result<Vec<Vec<u8>>, String> {
-        let ours = records(&merge::read_synced(""));
+        self.retell();
+        let ours = records(&merge::read_synced(""), self.versions.speak());
         let changed: Vec<(Id, Value)> = ours
             .iter()
             .filter(|(id, r)| self.told.get(*id) != Some(&mark(r)))
@@ -299,7 +275,7 @@ impl Session {
                     }
                 };
                 let wanted = buckets::set(&b);
-                let lack = records(&merge::read_synced(""))
+                let lack = records(&merge::read_synced(""), self.versions.speak())
                     .into_iter()
                     .filter(|((k, key), _)| wanted[buckets::of(k, key) as usize])
                     .filter(|(id, r)| {
@@ -333,6 +309,25 @@ impl Session {
         }
     }
 
+    /// After this Mac starts speaking another version (it heard an older Mac), what it told the others
+    /// still holds: a record whose mark in the old version is what they heard gets its mark in the new
+    /// one, so `changes` doesn't resend every line in its other form.
+    fn retell(&mut self) {
+        let now = self.versions.speak();
+        if self.told_in == now {
+            return;
+        }
+        let s = merge::read_synced("");
+        let (old, new) = (records(&s, self.told_in), records(&s, now));
+        let told = std::mem::take(&mut self.told);
+        self.told = told
+            .into_iter()
+            .filter(|(id, m)| old.get(id).map(mark).as_ref() == Some(m))
+            .filter_map(|(id, _)| Some((id.clone(), mark(new.get(&id)?))))
+            .collect();
+        self.told_in = now;
+    }
+
     /// Merges received records (kind, key, record) into the files here.
     fn merge(&mut self, r: Vec<(String, String, Value)>) -> Result<Vec<Vec<u8>>, String> {
         let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
@@ -344,10 +339,11 @@ impl Session {
             .iter()
             .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
             .collect();
+        self.retell();
         apply::received(&synced(r), &self.after)?;
         // A record that merged to exactly what the sender has is known to them: not a change to
         // send back. One where ours won stays unmarked, so `changes` sends it.
-        let ours = records(&merge::read_synced(""));
+        let ours = records(&merge::read_synced(""), self.versions.speak());
         for (id, m) in got {
             if ours.get(&id).map(mark).as_ref() == Some(&m) {
                 self.told.insert(id, m);

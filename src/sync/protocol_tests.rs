@@ -50,7 +50,7 @@ impl Mac {
         at(&self.dir, || self.s.receive(f)).unwrap()
     }
     pub(super) fn synced(&self) -> BTreeMap<Id, Value> {
-        at(&self.dir, || records(&merge::read_synced("")))
+        at(&self.dir, || records(&merge::read_synced(""), VERSION))
     }
 }
 
@@ -367,3 +367,6 @@ fn received_records_that_change_something_retrain_once() {
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 }
+
+#[path = "protocol_local_fields_tests.rs"]
+mod local_fields;
