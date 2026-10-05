@@ -5,7 +5,7 @@
 //! transcriber reads live to drop that voice, and labels earlier untagged lines that sound like it.
 //! Ignored prints are matched one by one, not averaged: a video has many voices.
 //! Each ignore starts its own voice (IGNORE, "Ignored 2", "Ignored 3"...) so you can stop ignoring one alone.
-use crate::fixes::{lines, read, write};
+use crate::fixes::{prints, read, write};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -51,11 +51,17 @@ pub fn tag(ids: &[String], name: &str) {
 }
 
 fn unit(v: &Value) -> Option<Vec<f32>> {
-    let v: Vec<f32> = v
+    let v: Vec<f64> = v
         .as_array()?
         .iter()
-        .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+        .map(|x| x.as_f64().unwrap_or(0.0))
         .collect();
+    unit_of(&v)
+}
+
+/// `v` scaled to unit length, as f32; None for all zeros.
+fn unit_of(v: &[f64]) -> Option<Vec<f32>> {
+    let v: Vec<f32> = v.iter().map(|x| *x as f32).collect();
     let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     (n > 0.0).then(|| v.iter().map(|x| x / n).collect())
 }
@@ -114,9 +120,9 @@ fn registry() -> (Vec<Vec<f32>>, f32) {
 pub fn apply() {
     let tags = crate::crdt::read_map(TAGS);
     // Keyed by id like src/train.rs: a line written twice (two transcribers on one chunk) counts once.
-    let lines: Vec<(String, Vec<f32>)> = lines()
-        .into_iter()
-        .filter_map(|r| Some((r.get("id")?.as_str()?.to_string(), unit(r.get("e")?)?)))
+    let lines: Vec<(String, Vec<f32>)> = prints()
+        .iter()
+        .filter_map(|r| Some((r.id.clone(), unit_of(&r.e)?)))
         .collect::<BTreeMap<_, _>>()
         .into_iter()
         .collect();

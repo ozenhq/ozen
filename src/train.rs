@@ -14,7 +14,7 @@
 //!
 //! Registry files are written exactly as the Python version of this wrote them (json.dumps), so a Mac on
 //! either version doesn't rewrite every file on the other's next retrain.
-use crate::fixes::lines;
+use crate::fixes::prints;
 use crate::ignore::is_ignored;
 use indexmap::IndexMap;
 use regex::Regex;
@@ -272,6 +272,18 @@ fn git(args: &[&str]) -> bool {
     }
 }
 
+/// The registry's upstream commit as last fetched, if it has one.
+fn head_of_upstream() -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", REPO, "rev-parse", "-q", "--verify", "@{u}"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 fn now() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
@@ -285,20 +297,16 @@ pub fn retrain(retry: bool) {
         eprintln!("registry fetch failed; training on the local copy");
     }
     // By id, the last copy of a line winning (two transcribers on one chunk).
-    let rows = lines();
-    let short: Vec<String> = rows
+    let rows = prints();
+    let short: std::collections::HashSet<&str> = rows
         .iter()
-        .filter(|r| {
-            r.get("d")
-                .and_then(Value::as_f64)
-                .is_some_and(|d| d < MIN_EMBED_SEC)
-        })
-        .filter_map(|r| Some(r.get("id")?.as_str()?.to_string()))
+        .filter(|r| r.d.is_some_and(|d| d < MIN_EMBED_SEC))
+        .map(|r| r.id.as_str())
         .collect();
-    let lines: IndexMap<String, Value> = rows
-        .into_iter()
-        .filter_map(|mut r| Some((r.get("id")?.as_str()?.to_string(), r.remove("e")?)))
-        .filter(|(_, e)| e.as_array().is_some_and(|a| !a.is_empty()))
+    let lines: IndexMap<&str, &[f64]> = rows
+        .iter()
+        .filter(|r| !r.e.is_empty())
+        .map(|r| (r.id.as_str(), r.e.as_slice()))
         .collect();
     let tags: IndexMap<String, Value> = crate::crdt::read_map(TAGS).into_iter().collect();
     let voices = Path::new(REPO).join("voices");
@@ -357,8 +365,8 @@ pub fn retrain(retry: bool) {
         let Some(name) = name.as_str().filter(|n| !n.is_empty() && !is_ignored(n)) else {
             continue;
         };
-        if let Some(e) = lines.get(sid) {
-            let x = [("w".to_string(), json!(1)), ("e".to_string(), e.clone())];
+        if let Some(e) = lines.get(sid.as_str()) {
+            let x = [("w".to_string(), json!(1)), ("e".to_string(), json!(e))];
             samples
                 .entry(name.to_string())
                 .or_default()
@@ -439,20 +447,19 @@ pub fn retrain(retry: bool) {
 
     let mut labels: IndexMap<String, IndexMap<String, Value>> = IndexMap::new();
     for (sid, e) in &lines {
-        if tags.contains_key(sid) || prints.is_empty() {
+        if tags.contains_key(*sid) || prints.is_empty() {
             continue;
         }
-        let e = vec(e);
-        let mut ranked: Vec<(f64, &str)> = prints.iter().map(|(k, p)| (dot(p, &e), *k)).collect();
+        let mut ranked: Vec<(f64, &str)> = prints.iter().map(|(k, p)| (dot(p, e), *k)).collect();
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(a.1)));
         let (best, name) = ranked[0];
         let margin = best - ranked.get(1).map_or(threshold, |r| r.0);
         // Unsure = near the threshold or nearly tied between two people: tagging these teaches the most.
         let doubt = (best - threshold).abs().min(margin);
         let label = json!({"spk": (best >= threshold).then_some(name), "sim": round(best, 3),
-                           "margin": round(margin, 3), "unsure": doubt < UNSURE && !short.contains(sid)});
+                           "margin": round(margin, 3), "unsure": doubt < UNSURE && !short.contains(*sid)});
         labels.insert(
-            sid.clone(),
+            sid.to_string(),
             ordered(label, &["spk", "sim", "margin", "unsure"]),
         );
     }
@@ -525,9 +532,11 @@ pub fn retrain(retry: bool) {
         );
         git(&["commit", "-m", &msg]);
     }
+    let upstream = head_of_upstream();
     if !git(&["push", "-q"]) {
-        if retry {
-            // another machine pushed since the fetch: rebuild on top of it, once
+        // Another machine pushed since the fetch: rebuild on top of it, once. Offline or with no remote,
+        // nothing moved, and rebuilding would only repeat this whole retrain.
+        if retry && git(&["fetch", "-q"]) && head_of_upstream() != upstream {
             return retrain(false);
         }
         eprintln!(

@@ -51,6 +51,51 @@ pub(crate) fn lines() -> Vec<Map<String, Value>> {
         .collect()
 }
 
+/// A transcript line's voiceprint, as retraining reads it (src/train.rs, src/ignore.rs).
+#[derive(serde::Deserialize)]
+pub(crate) struct Print {
+    pub id: String,
+    /// Seconds of speech; None when missing or not a number.
+    #[serde(default, deserialize_with = "number_or_none")]
+    pub d: Option<f64>,
+    pub e: Vec<f64>,
+}
+
+fn number_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    Ok(<Value as serde::Deserialize>::deserialize(d)?.as_f64())
+}
+
+/// Every line with a voiceprint, in file order. lines.jsonl is MBs of mostly prints: parsing it typed,
+/// not as JSON maps (a 192-float print as `Value`s is an allocation per float), is several times faster,
+/// and it's parsed once per process while the file is unchanged, since one `ozen retrain` trains and then
+/// matches ignored voices on the same lines. A line without an id or print (or not a number list) is skipped.
+pub(crate) fn prints() -> std::sync::Arc<Vec<Print>> {
+    use std::os::unix::fs::MetadataExt;
+    type Stamp = Option<(u64, i64, i64, u64)>;
+    static LAST: std::sync::Mutex<Option<(Stamp, std::sync::Arc<Vec<Print>>)>> =
+        std::sync::Mutex::new(None);
+    let stamp: Stamp = fs::metadata(LINES)
+        .ok()
+        .map(|m| (m.len(), m.mtime(), m.mtime_nsec(), m.ino()));
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((s, p)) = last.as_ref()
+        && *s == stamp
+    {
+        return p.clone();
+    }
+    let p = std::sync::Arc::new(
+        fs::read_to_string(LINES)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Print>(l).ok())
+            .collect::<Vec<_>>(),
+    );
+    *last = Some((stamp, p.clone()));
+    p
+}
+
 /// Whisper's own text, before automatic corrections (the transcriber keeps it as "heard" when they changed it).
 fn heard(r: &Map<String, Value>) -> &str {
     r.get("heard")
