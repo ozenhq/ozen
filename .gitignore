@@ -62,3 +62,7 @@ here.json.*
 .sync-restore/
 .sync-paused
 .sync-merge.lock
+
+# voiceprint cache for retraining (src/prints.rs); derived, local only
+.prints.cache
+.prints.cache.*.tmp
