@@ -12,16 +12,14 @@ pub use super::dropped::Dropped;
 use super::key::Key;
 use super::marks::Marks;
 use super::parts;
+#[cfg(test)]
 use super::seal;
 use crate::crdt::{live_ids, v};
 use crate::merge::{self, Records, Synced};
 use base64::Engine;
-use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::io::Read;
 
 /// A synced record: (kind, key). The kinds are the synced files: tags, fixes, vocab, places, lines.
 pub(super) type Id = (String, String);
@@ -29,31 +27,15 @@ pub(super) type Id = (String, String);
 /// JSON (`crdt::canonical`, hex).
 pub(super) type Mark = (u64, String);
 use super::summaries::{Entry, Partial};
-/// Raw JSON per frame: deflated, it stays under `seal::MAX` even when nothing compresses.
-const BUDGET: usize = seal::MAX - 256;
-/// Protocol version, the first byte of every frame's plaintext. A newer one from an updated Mac isn't
-/// merged here: its records might not mean what this build thinks (the user is told to update ozen).
-pub const VERSION: u8 = 1;
-
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "t", rename_all = "lowercase")]
-enum Msg {
-    /// The sender's 256 bucket hashes, 16 bytes each, base64.
-    Buckets { h: String },
-    /// Part `part` (of `parts`) of summary `id`: (kind, key, v, hash) for the sender's records in buckets
-    /// `b`.
-    Summary {
-        id: u64,
-        part: u32,
-        parts: u32,
-        s: Vec<Entry>,
-        b: Vec<u8>,
-    },
-    /// Records for the receiver to merge: (kind, key, record).
-    Records { r: Vec<(String, String, Value)> },
-    /// One part of a record too big for one frame (parts.rs).
-    Part(parts::Part),
-}
+// what the tests in this module's files build frames with
+use super::version::Versions;
+use super::wire::{self, BUDGET, Msg, frame_version};
+#[cfg(test)]
+use {
+    super::version::VERSION,
+    flate2::{Compression, write::DeflateEncoder},
+    std::io::Read,
+};
 
 /// Every synced record in `s` (every kind in `crdt::SYNCED`). Rows written before ids get theirs from
 /// `live_ids`, as `merge_rows` does.
@@ -96,14 +78,6 @@ fn synced(recs: Vec<(String, String, Value)>) -> Synced {
     s
 }
 
-/// The version byte of a frame that opens (for messages; 0 if it doesn't).
-fn frame_version(key: &Key, vault: &str, frame: &[u8]) -> u8 {
-    seal::open(key, vault, frame)
-        .ok()
-        .and_then(|p| p.first().copied())
-        .unwrap_or(0)
-}
-
 /// One Mac's side of the conversation with the vault's other Macs, over one connection. Records only
 /// flow in answer to a summary or as local changes, so every Mac says `hello` when it connects and when
 /// the online count rises (relay presence frames, OFE-31).
@@ -120,6 +94,8 @@ pub struct Session {
     after: Coalesced,
     /// Marks and bucket hashes of the records here, kept while the files don't change.
     marks: Marks,
+    /// The protocol versions this Mac and the others speak (version.rs).
+    versions: Versions,
     pub dropped: Dropped,
 }
 
@@ -138,15 +114,17 @@ impl Session {
             parts: parts::Pending::default(),
             after,
             dropped: Dropped::default(),
+            versions: Versions::default(),
             marks: Marks::default(),
         }
     }
 
     fn frame(&self, m: &Msg) -> Result<Vec<u8>, String> {
-        let mut z = DeflateEncoder::new(vec![VERSION], Compression::default());
-        serde_json::to_writer(&mut z, m).map_err(|e| e.to_string())?;
-        let plain = z.finish().map_err(|e| e.to_string())?;
-        seal::seal(&self.seal_key, &self.vault, &plain)
+        self.frame_in(self.versions.speak(), m)
+    }
+
+    fn frame_in(&self, version: u8, m: &Msg) -> Result<Vec<u8>, String> {
+        wire::encode(&self.seal_key, &self.vault, version, m)
     }
 
     /// Frames carrying `recs`, and the ids that went out. A record too big for one frame goes in parts;
@@ -179,7 +157,11 @@ impl Session {
         let (ours, hashes) = self.ours();
         let h = base64::engine::general_purpose::STANDARD.encode(hashes);
         self.told = ours.clone();
-        Ok(vec![self.frame(&Msg::Buckets { h })?])
+        let max = self.versions.own();
+        Ok(vec![self.frame_in(
+            self.versions.oldest(),
+            &Msg::Buckets { h, max },
+        )?])
     }
 
     /// The marks and bucket hashes of the records here, read from the files only when they changed.
@@ -235,21 +217,7 @@ impl Session {
 
     /// The message in `frame`: Err for one that doesn't open or parse, Ok(None) for a newer version's.
     fn decode(&self, frame: &[u8]) -> Result<Option<Msg>, String> {
-        let plain = seal::open(&self.seal_key, &self.vault, frame)?;
-        match plain.first() {
-            Some(&VERSION) => {}
-            Some(&v) if v > VERSION => return Ok(None),
-            v => return Err(format!("frame with protocol version {v:?}")),
-        }
-        // A sender's JSON is at most BUDGET per frame; anything inflating past that is no frame of ours.
-        let mut json = vec![];
-        DeflateDecoder::new(&plain[1..])
-            .take(BUDGET as u64 + 1024)
-            .read_to_end(&mut json)
-            .map_err(|e| format!("frame does not inflate: {e}"))?;
-        serde_json::from_slice(&json)
-            .map(Some)
-            .map_err(|e| format!("frame is not a message: {e}"))
+        wire::decode(&self.seal_key, &self.vault, &self.versions, frame)
     }
 
     /// Handles one frame from another Mac; returns the frames to send back. A summary is answered (once
@@ -263,8 +231,9 @@ impl Session {
             Ok(None) => {
                 self.dropped.newer += 1;
                 self.dropped.last_error = Some(format!(
-                    "frame from a newer ozen (protocol {}, this one speaks {VERSION})",
-                    frame_version(&self.seal_key, &self.vault, frame)
+                    "frame from a newer ozen (protocol {}, this one speaks {})",
+                    frame_version(&self.seal_key, &self.vault, frame),
+                    self.versions.own()
                 ));
                 return Ok(vec![]);
             }
@@ -275,7 +244,8 @@ impl Session {
             }
         };
         match msg {
-            Msg::Buckets { h } => {
+            Msg::Buckets { h, max } => {
+                self.versions.heard(max);
                 let theirs = base64::engine::general_purpose::STANDARD
                     .decode(h)
                     .unwrap_or_default();
@@ -395,3 +365,6 @@ mod synced_tests;
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "protocol_version_tests.rs"]
+mod version_tests;

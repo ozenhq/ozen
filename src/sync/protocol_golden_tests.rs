@@ -16,6 +16,7 @@ fn messages() -> [(&'static str, Msg); 4] {
             "buckets",
             Msg::Buckets {
                 h: base64::engine::general_purpose::STANDARD.encode([0xab; 16 * 2]),
+                max: 1,
             },
         ),
         (
