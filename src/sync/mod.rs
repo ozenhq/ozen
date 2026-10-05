@@ -20,6 +20,13 @@ pub mod wire;
 
 use std::path::Path;
 
+/// `ozen health`'s sync lines: dropped frames from other Macs, and a runner that should run but doesn't.
+pub fn health() -> Vec<String> {
+    let mut lines = dropped::health();
+    lines.extend(run::health());
+    lines
+}
+
 const USAGE: &str = "\
 ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
   init [--server URL]

@@ -179,3 +179,91 @@ fn a_folder_that_ran_init_before_sync_on_existed_counts_as_on() {
         assert!(wanted());
     });
 }
+
+/// Backdates `f`'s modified time by `ago`.
+fn backdate(f: &str, ago: Duration) {
+    let t = std::time::SystemTime::now() - ago;
+    File::options()
+        .write(true)
+        .open(f)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
+#[test]
+fn restarts_back_off_from_30s_doubling_to_10_minutes() {
+    let secs: Vec<u64> = (0..8).map(|n| retry_after(n).as_secs()).collect();
+    assert_eq!(secs, [30, 60, 120, 240, 480, 600, 600, 600]);
+    let d = tempfile::tempdir().unwrap();
+    at(d.path(), || {
+        fs::write(ON, "").unwrap();
+        assert!(wanted(), "first start");
+        // it died at once, three times in a row: each restart waits twice as long
+        for (n, wait) in [(1u64, 30), (2, 60), (3, 120)] {
+            assert_eq!(failed_starts(), n as u32);
+            backdate(STARTED, Duration::from_secs(wait - 1));
+            assert!(!wanted(), "start {n}: too early at {}s", wait - 1);
+            backdate(STARTED, Duration::from_secs(wait));
+            assert!(wanted(), "start {n}: due at {wait}s");
+        }
+    });
+}
+
+#[test]
+fn a_runner_that_stayed_up_and_was_killed_comes_back_at_the_next_poll() {
+    let d = tempfile::tempdir().unwrap();
+    at(d.path(), || {
+        fs::write(ON, "").unwrap();
+        assert!(wanted());
+        fs::write(ERROR, "an old error").unwrap();
+        stayed_up(); // a minute in
+        assert_eq!(failed_starts(), 0);
+        assert!(!Path::new(ERROR).exists());
+        // killed seconds later: the lock is free and nothing waits
+        assert!(wanted());
+    });
+}
+
+#[test]
+fn health_speaks_only_when_the_app_wants_sync_and_none_runs() {
+    let d = tempfile::tempdir().unwrap();
+    at(d.path(), || {
+        File::create(ASKED).unwrap();
+        assert_eq!(health(), None, "sync isn't configured");
+        fs::write(ON, "").unwrap();
+        assert!(wanted()); // the app's poll started one; it died with an error
+        fs::write(ERROR, "no vault key here: run `ozen sync init` first").unwrap();
+        let line = health().expect("configured, wanted, not running");
+        assert!(line.contains("isn't running (no vault key here"), "{line}");
+        assert!(line.contains("every 30s"), "{line}");
+        let runner = File::create(LOCK).unwrap();
+        runner.lock().unwrap();
+        assert_eq!(health(), None, "it runs");
+        drop(runner);
+        backdate(ASKED, IDLE + Duration::from_secs(1));
+        assert_eq!(health(), None, "the app quit: not wanted, not an error");
+    });
+}
+
+#[test]
+fn a_denied_local_network_permission_is_named_other_send_errors_are_not() {
+    let denied = local_network(Err(std::io::Error::from_raw_os_error(65))).unwrap_err();
+    assert!(
+        denied.contains("Privacy & Security > Local Network"),
+        "{denied}"
+    );
+    let offline = std::io::Error::from_raw_os_error(51); // ENETUNREACH: no network
+    assert_eq!(local_network(Err(offline)), Ok(()));
+    assert_eq!(local_network(Ok(12)), Ok(()));
+}
+
+/// The real probe, on a Mac whose Local Network access is known. Ignored by default: CI's macOS runner
+/// denies it (there the probe gets EHOSTUNREACH, which is how this check was confirmed). Run by hand:
+/// `OZEN_LOCAL_NETWORK=allowed|denied cargo nextest run --release --run-ignored only -E 'test(real_probe)'`.
+#[test]
+#[ignore]
+fn the_real_probe_matches_this_macs_local_network_setting() {
+    let allowed = std::env::var("OZEN_LOCAL_NETWORK").as_deref() != Ok("denied");
+    assert_eq!(local_network(probe()).is_ok(), allowed);
+}
