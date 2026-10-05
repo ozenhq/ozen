@@ -16,9 +16,9 @@ Sources: [what ozen does](../README.md#what-it-does), [`src/ecapa.rs`](../src/ec
 
 - **On the user's own Mac.** There's no ozen account, and no ozen server keeps recordings or transcripts.
 - **Sound is mostly deleted.** Sound is recorded in 15-second pieces, and each piece is deleted once it's written down. ozen keeps:
-  - the newest pieces, about the last 10 minutes, so the user can check the transcription;
+  - the newest 20 pieces of call and microphone sound (at most the last 5 minutes) and of the Mac's other sound, so the user can check the transcription;
   - the piece behind any line the user corrected, to teach the transcriber.
-- **Copies for AI assistants.** When the user opens a meeting in an AI assistant, ozen also writes a plain-text copy of that meeting, and of related ones it picks, into a `context` folder on the Mac.
+- **Copies for AI assistants.** When the user opens a meeting in an AI assistant, ozen also writes a plain-text copy of that meeting, and of any related ones the user adds, into a `context` folder on the Mac.
 - **Voiceprints also go to GitHub.** So that all the user's Macs recognize the same people, voiceprints are also uploaded to a GitHub repository the user chooses. ozen's instructions say to keep that repository private, but that's up to the user.
 
 Sources: [`src/transcribe.rs`](../src/transcribe.rs), [`src/meetings.rs`](../src/meetings.rs), [the voices registry](../README.md#what-it-does), [ozen's privacy notes](../README.md#privacy).
@@ -36,8 +36,8 @@ Source: [how sync works](https://github.com/ozenhq/sync/blob/main/docs/architect
 The user can connect an AI assistant, such as Claude or Hermes, to ozen and ask it about their meetings.
 
 - **Whole history.** A connected assistant can read the whole transcript history, not only the meeting the user asked about.
-- **What gets sent.** What it reads, and any screenshot it asks for, goes to that AI company and falls under that company's own terms.
-- **Live meetings.** While a meeting is open in an assistant, ozen updates the assistant's copy every 15 seconds.
+- **What gets sent.** What it reads goes to that AI company and falls under that company's own terms. So does a screenshot, if the assistant can run commands on the Mac and asks for one.
+- **Live meetings.** For a meeting opened while it's still going, ozen updates the plain-text copy every 15 seconds until 10 minutes after the last line.
 
 Sources: [`src/mcp.rs`](../src/mcp.rs), [`src/meetings.rs`](../src/meetings.rs), [commands](../README.md#use).
 
