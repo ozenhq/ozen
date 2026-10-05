@@ -196,11 +196,18 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
 /// its temp file (`.<name>.<random>.tmp`) behind, never a half-written `path`; the next write of the same
 /// file removes such leftovers once they're a minute old (a younger one may be another writer's, mid-write).
 pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
-    write_atomic_then(path, bytes, || {})
+    write_atomic_then(path, bytes, |_| Ok(Some(()))).map(|_| ())
 }
 
-/// `write_atomic`, running `before_rename` once the temp file is on disk (tests kill the writer there).
-fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> Result<(), String> {
+/// `write_atomic` in two steps, for a big file others append to under a lock: `bytes` are written and
+/// synced first, then `last` gets the temp file (to take the lock and add what was appended meanwhile,
+/// synced here again). The temp file replaces `path` only when `last` returns Some, and that value is
+/// returned after the rename, so a lock it holds covers the swap; None leaves `path` as it was.
+pub fn write_atomic_then<T>(
+    path: &str,
+    bytes: &[u8],
+    last: impl FnOnce(&mut fs::File) -> Result<Option<T>, String>,
+) -> Result<Option<T>, String> {
     let err = |e: std::io::Error| format!("write {path}: {e}");
     let p = Path::new(path);
     let dir = p
@@ -223,9 +230,18 @@ fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> 
         .map_err(err)?;
     f.write_all(bytes).map_err(err)?;
     f.as_file().sync_all().map_err(err)?;
-    before_rename();
+    let len = f.as_file().metadata().map_err(err)?.len();
+    let Some(held) = last(f.as_file_mut())? else {
+        return Ok(None); // dropping `f` removes the temp file
+    };
+    if f.as_file().metadata().map_err(err)?.len() != len {
+        f.as_file().sync_all().map_err(err)?; // what `last` added
+    }
     f.persist(p).map_err(|e| err(e.error))?;
-    fs::File::open(dir).and_then(|d| d.sync_all()).map_err(err) // the rename itself, durable too
+    fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(err)?; // the rename itself, durable too
+    Ok(Some(held))
 }
 
 /// Removes `write_atomic` temp files (`<prefix><random>.tmp`) a killed writer left in `dir` over a minute ago.

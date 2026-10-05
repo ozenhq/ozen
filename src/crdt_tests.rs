@@ -117,10 +117,11 @@ fn a_writer_killed_before_the_rename_leaves_the_old_file() {
         + "::a_writer_killed_before_the_rename_leaves_the_old_file";
     if let Ok(path) = std::env::var(HANG) {
         // the child: write the new file, then hang before the rename until the parent kills it
-        let _ = write_atomic_then(&path, b"new", || {
+        let _ = write_atomic_then(&path, b"new", |_| {
             println!("ready");
             std::io::stdout().flush().unwrap();
             std::thread::sleep(std::time::Duration::from_secs(600));
+            Ok(Some(()))
         });
         return;
     }
