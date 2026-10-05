@@ -10,9 +10,9 @@ use serde_json::Value;
 const PRINT: usize = 192;
 /// Latest time a line may carry: 2100-01-01, in seconds since 1970.
 const LAST_T: f64 = 4_102_444_800.0;
-/// Longest key and largest record: a record must fit one frame anyway (seal.rs).
+/// Longest key and largest record (a bigger one arrives in parts, parts.rs).
 const KEY: usize = 256;
-const SIZE: usize = 60 << 10;
+const SIZE: usize = super::parts::CAP;
 
 type Obj = serde_json::Map<String, Value>;
 

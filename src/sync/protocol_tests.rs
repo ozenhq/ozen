@@ -282,23 +282,27 @@ fn an_edit_that_wins_over_a_received_one_still_goes_out() {
 }
 
 #[test]
-fn a_record_too_big_for_a_frame_stays_and_the_rest_go() {
+fn a_record_too_big_for_a_frame_goes_in_parts_with_the_rest() {
+    // OFE-76: it used to stay behind for good; one over parts::CAP still does
     let da = folder(json!([]), json!({}));
     let db = folder(json!([]), json!({}));
     let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
     exchange(&mut a, &mut b);
-    let huge = "x".repeat(seal::MAX);
+    let (huge, too_big) = ("x".repeat(seal::MAX), "x".repeat(parts::CAP + 1));
     std::fs::write(
         da.path().join("tags.json"),
-        json!({"big": {"v": 1, "val": huge}, "small": {"v": 1, "val": "Dana"}}).to_string(),
+        json!({"big": {"v": 1, "val": huge}, "small": {"v": 1, "val": "Dana"},
+               "too-big": {"v": 1, "val": too_big}})
+        .to_string(),
     )
     .unwrap();
     let out = a.changes();
-    assert_eq!(out.len(), 1);
+    assert_eq!(out.len(), 3, "small in one frame, big in two parts");
     pipe(&mut a, &mut b, out, vec![]);
     let got = b.synced();
     assert!(got.contains_key(&("tags".into(), "small".into())));
-    assert!(!got.contains_key(&("tags".into(), "big".into())));
+    assert_eq!(got[&("tags".into(), "big".into())]["val"], huge);
+    assert!(!got.contains_key(&("tags".into(), "too-big".into())));
 }
 
 #[test]
