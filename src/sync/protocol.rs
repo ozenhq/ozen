@@ -377,6 +377,9 @@ mod drop_tests;
 #[path = "protocol_golden_tests.rs"]
 mod golden_tests;
 #[cfg(test)]
+#[path = "protocol_prop_tests.rs"]
+mod prop_tests;
+#[cfg(test)]
 #[path = "protocol_scale_tests.rs"]
 mod scale_tests;
 #[cfg(test)]
