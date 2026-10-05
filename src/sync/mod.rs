@@ -24,13 +24,18 @@ pub fn init(server: Option<&str>) -> Result<String, String> {
         config::save(s, Path::new(config::FILE))?;
     }
     let url = config::server()?; // OZEN_SYNC_URL still wins over what was just saved
-    let id = key::vault_id(&k);
-    Ok(match url {
-        Some(u) => format!("vault {id}\nrelay {u}"),
+    Ok(report(&key::vault_id(&k), url.as_deref()))
+}
+
+/// What `init` prints: the vault by its short id only (key::short), and the relay or that sync is off.
+fn report(vault: &str, url: Option<&str>) -> String {
+    let short = key::short(vault);
+    match url {
+        Some(u) => format!("vault {short}\nrelay {u}"),
         None => format!(
-            "vault {id}\nsync is off: run `ozen sync init --server URL` or set OZEN_SYNC_URL"
+            "vault {short}\nsync is off: run `ozen sync init --server URL` or set OZEN_SYNC_URL"
         ),
-    })
+    }
 }
 
 /// `ozen sync ...`: prints the result, or exits 1 (2 with its usage on bad arguments).
@@ -52,3 +57,7 @@ pub fn cli() {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
