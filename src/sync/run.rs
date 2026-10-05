@@ -17,11 +17,15 @@ use std::time::Duration;
 /// Written by `ozen sync init`: this folder syncs. Without it `status` starts nothing.
 pub const ON: &str = ".sync-on";
 
-/// Sync is on here: `init` wrote `ON`, or saved a relay URL before `ON` existed; and `ozen sync undo`
-/// hasn't paused it.
+/// Sync is set up here: `init` wrote `ON`, or saved a relay URL before `ON` existed. Paused or not, the
+/// Macs then share lines and tags directly, so voiceprints never go to the GitHub registry (src/train.rs).
+pub fn configured() -> bool {
+    Path::new(ON).exists() || Path::new(super::config::FILE).exists()
+}
+
+/// Sync is on here: configured, and `ozen sync undo` hasn't paused it.
 fn on() -> bool {
-    (Path::new(ON).exists() || Path::new(super::config::FILE).exists())
-        && !Path::new(super::restore::PAUSED).exists()
+    configured() && !Path::new(super::restore::PAUSED).exists()
 }
 /// Touched by each `ozen status` poll while sync is on.
 pub const ASKED: &str = ".sync-asked";

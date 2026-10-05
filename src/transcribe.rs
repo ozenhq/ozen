@@ -179,7 +179,10 @@ impl Transcriber {
 
     /// (Re)load named voiceprints; src/train.rs rewrites them after every tag, so pick up changes live.
     fn load_registry(&mut self) {
-        if self.last_pull.is_none_or(|t| t.elapsed() > PULL_EVERY) {
+        // with sync, tags made on other Macs arrive as synced records, never through the GitHub registry
+        if !crate::sync::run::configured()
+            && self.last_pull.is_none_or(|t| t.elapsed() > PULL_EVERY)
+        {
             self.last_pull = Some(Instant::now());
             // ponytail: offline or diverged just keeps the local prints; src/train.rs reconciles on its next push
             if let Ok(mut c) = crate::cmd("git")
