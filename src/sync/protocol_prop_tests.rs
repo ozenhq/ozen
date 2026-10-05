@@ -1,4 +1,5 @@
-//! Whatever order Macs meet in, they end with the same data, and it's what crdt.rs's rule picks:
+//! Whatever order Macs meet in, they end with the same data (lines, tags, fixes, places, vocab), and
+//! it's what crdt.rs's rule picks:
 //! for each record the highest `v`, ties broken by the larger JSON text (OFE-43).
 use super::tests::{Mac, exchange, folder};
 use super::*;
@@ -8,6 +9,8 @@ use serde_json::json;
 const LINES: [&str; 5] = ["l0", "l1", "l2@a", "l3@b", "l4"];
 const TAGS: [&str; 4] = ["l0", "l1", "l2@a", "x"];
 const FIXES: [&str; 3] = ["l0", "l3@b", "y"];
+const PLACES: [&str; 3] = ["p0", "p1@a", "p2@b"];
+const WORDS: [&str; 3] = ["Kev", "PR", "Claude"];
 
 /// One Mac's version of a record: (v, which value; None is a delete). `v` is drawn from a small range
 /// so different Macs often hold the same version with different values.
@@ -17,9 +20,24 @@ fn edits(n: usize) -> impl Strategy<Value = Vec<Edit>> {
     prop::collection::vec(prop::option::of((1u64..4, prop::option::of(0u8..3))), n)
 }
 
-/// A Mac's edits to every line, tag and fix key (None: it never had that record).
-fn mac() -> impl Strategy<Value = (Vec<Edit>, Vec<Edit>, Vec<Edit>)> {
-    (edits(LINES.len()), edits(TAGS.len()), edits(FIXES.len()))
+/// A Mac's edits to every line, tag, fix, place and vocab key (None: it never had that record).
+type Edits = (Vec<Edit>, Vec<Edit>, Vec<Edit>, Vec<Edit>, Vec<Edit>);
+
+fn mac() -> impl Strategy<Value = Edits> {
+    (
+        edits(LINES.len()),
+        edits(TAGS.len()),
+        edits(FIXES.len()),
+        edits(PLACES.len()),
+        edits(WORDS.len()),
+    )
+}
+
+fn place(id: &str, v: u64, x: Option<u8>) -> Value {
+    match x {
+        Some(x) => json!({"id": id, "v": v, "label": format!("place {x}"), "action": "record"}),
+        None => json!({"id": id, "v": v, "del": true}),
+    }
 }
 
 fn line(id: &str, v: u64, x: Option<u8>) -> Value {
@@ -37,9 +55,7 @@ fn entry(v: u64, x: Option<u8>) -> Value {
 }
 
 /// A Mac's folder, and every record it starts with as (kind, key) -> record.
-fn sandbox(
-    (l, t, f): &(Vec<Edit>, Vec<Edit>, Vec<Edit>),
-) -> (tempfile::TempDir, BTreeMap<Id, Value>) {
+fn sandbox((l, t, f, p, w): &Edits) -> (tempfile::TempDir, BTreeMap<Id, Value>) {
     let mut has = BTreeMap::new();
     let lines: Vec<Value> = LINES
         .iter()
@@ -64,8 +80,26 @@ fn sandbox(
     };
     let tags = map(&TAGS, t, "tags", &mut has);
     let fixes = map(&FIXES, f, "fixes", &mut has);
+    let vocab = map(&WORDS, w, "vocab", &mut has);
+    let places: Vec<Value> = PLACES
+        .iter()
+        .zip(p)
+        .filter_map(|(id, e)| e.map(|(v, x)| place(id, v, x)))
+        .collect();
+    for r in &places {
+        has.insert(
+            ("places".into(), r["id"].as_str().unwrap().into()),
+            r.clone(),
+        );
+    }
     let d = folder(Value::Array(lines), tags);
     std::fs::write(d.path().join(merge::FIXES), fixes.to_string()).unwrap();
+    std::fs::write(d.path().join(crate::mcp::VOCAB), vocab.to_string()).unwrap();
+    std::fs::write(
+        d.path().join(crate::places::FILE),
+        Value::Array(places).to_string(),
+    )
+    .unwrap();
     (d, has)
 }
 
