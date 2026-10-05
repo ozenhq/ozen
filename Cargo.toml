@@ -59,6 +59,7 @@ tempfile = "3.27.0"  # crash-safe writes of synced files (crdt::write_atomic)
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["rt", "macros", "io-std"] }
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
 url = "2.5.8"
 hmac = "0.13.0"
 mdns-sd = "0.21.4"

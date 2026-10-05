@@ -1,6 +1,6 @@
 //! Where the relay is: `OZEN_SYNC_URL`, else the URL `ozen sync init --server` saved, else sync is off.
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
 
 /// The saved relay URL, in the ozen folder (unlike the key, it's no secret).
 pub const FILE: &str = ".sync-url";
@@ -45,19 +45,31 @@ pub fn server() -> Result<Option<String>, String> {
 }
 
 /// The relay's `/health` (plain HTTP on the same host and path) answers "ok", so a typo can't leave
-/// sync silently dead. `url` is a checked one.
+/// sync silently dead. `url` is a checked one. Rust's own HTTP client (rustls, with the Mac's trust
+/// store for https), no `curl` subprocess: nothing depends on PATH or parses another program's output.
 pub fn healthy(url: &str) -> Result<(), String> {
+    healthy_within(url, Duration::from_secs(10))
+}
+
+fn healthy_within(url: &str, wait: Duration) -> Result<(), String> {
     let http = url.replacen("ws", "http", 1); // wss:// → https://, ws:// → http://
-    let out = Command::new("curl")
-        .args(["-fsSg", "--max-time", "10", &format!("{http}/health")]) // -g: [::1] is a host, not a glob
-        .output()
-        .map_err(|e| format!("curl: {e}"))?;
-    match out.status.success() && out.stdout.trim_ascii() == b"ok" {
-        true => Ok(()),
-        false => Err(format!(
-            "no sync relay answering at {url}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(tls)
+        .timeout_global(Some(wait))
+        .build()
+        .into();
+    let fail = |e: String| format!("no sync relay answering at {url}: {e}");
+    let mut res = agent
+        .get(format!("{http}/health"))
+        .call()
+        .map_err(|e| fail(e.to_string()))?;
+    let body = res.body_mut().with_config().limit(1024).read_to_string();
+    match body.map_err(|e| fail(e.to_string()))?.trim() {
+        "ok" => Ok(()),
+        other => Err(fail(format!("/health said {other:?}, not ok"))),
     }
 }
 
