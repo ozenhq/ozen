@@ -60,3 +60,20 @@ fn a_voice_that_spoke_never_reads_zero_percent() {
     assert_eq!(percent(0.0), "0%");
     assert_eq!(percent(0.68), "68%");
 }
+
+#[test]
+fn the_meeting_line_names_its_day() {
+    let a = 1_790_000_000.0;
+    let at = local(a);
+    let (day, hm) = (at.date_naive(), at.format("%H:%M").to_string());
+    let end = local(a + 1320.0).format("%H:%M").to_string();
+    assert_eq!(head(a, a + 1320.0, day), format!("Today {hm}–{end} · 22m"));
+    assert_eq!(
+        head(a, a + 1320.0, day.succ_opt().unwrap()),
+        format!("{} {hm}–{end} · 22m", at.format("%d %b"))
+    );
+    assert!(
+        head(a, a + 1320.0, day + chrono::Days::new(3))
+            .starts_with(&at.format("%d %b ").to_string())
+    );
+}
