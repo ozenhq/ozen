@@ -353,16 +353,11 @@ impl Session {
                 Ok(self.records_frames(lack)?.0)
             }
             Msg::Records { r } => {
-                // a record that fails validation never reaches the files; the rest of the frame does
-                let (r, bad): (Vec<_>, Vec<_>) = r
-                    .into_iter()
-                    .map(|rec| (super::valid::record(&rec.0, &rec.1, &rec.2), rec))
-                    .partition(|(ok, _)| ok.is_ok());
-                if let Some((Err(e), _)) = bad.last() {
-                    self.dropped.records += bad.len() as u64;
+                let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
+                if let Some(e) = errors.last() {
+                    self.dropped.records += errors.len() as u64;
                     self.dropped.last_error = Some(e.clone());
                 }
-                let r: Vec<_> = r.into_iter().map(|(_, rec)| rec).collect();
                 let got: Vec<(Id, Mark)> = r
                     .iter()
                     .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))

@@ -102,6 +102,16 @@ pub fn record(kind: &str, key: &str, r: &Value) -> Result<(), String> {
     .map_err(err)
 }
 
+/// The records of a received batch that may be merged, and why each of the others may not.
+pub fn keep(recs: Vec<(String, String, Value)>) -> (Vec<(String, String, Value)>, Vec<String>) {
+    let mut errors = vec![];
+    let ok = recs
+        .into_iter()
+        .filter(|(k, key, r)| record(k, key, r).map_err(|e| errors.push(e)).is_ok())
+        .collect();
+    (ok, errors)
+}
+
 #[cfg(test)]
 #[path = "valid_tests.rs"]
 mod tests;
