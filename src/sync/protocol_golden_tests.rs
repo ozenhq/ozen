@@ -52,6 +52,8 @@ fn golden(name: &str) -> PathBuf {
 fn frame(s: &Session, name: &str, msg: &Msg) -> Vec<u8> {
     let p = golden(name);
     if std::env::var("OZEN_GOLDEN").as_deref() == Ok("write") {
+        // Rewriting in CI would make these tests compare today's code with itself.
+        assert!(std::env::var_os("CI").is_none(), "OZEN_GOLDEN=write in CI");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, s.frame(msg).unwrap()).unwrap();
     }
