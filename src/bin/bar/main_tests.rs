@@ -1,4 +1,5 @@
-use super::{idle_status, meeting_cell, menu_header, transcribe_switched};
+use super::{idle_status, menu_header, transcribe_switched};
+use crate::meetings_tab::{meeting_cell, recent_day};
 
 #[test]
 fn transcribe_switch_stops_or_catches_up() {
@@ -57,4 +58,21 @@ fn the_menu_opens_with_the_panel_status() {
         "● Recording · Work"
     );
     assert_eq!(menu_header("", "stopped"), "stopped");
+}
+
+#[test]
+fn recent_meetings_say_today_or_yesterday() {
+    let id = 1_790_000_000; // a moment, in local time
+    let at = chrono::DateTime::from_timestamp(id, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let (day, hm) = (at.date_naive(), at.format("%H:%M").to_string());
+    let id = id.to_string();
+    assert_eq!(recent_day(&id, day), Some(format!("Today {hm}")));
+    assert_eq!(
+        recent_day(&id, day.succ_opt().unwrap()),
+        Some(format!("Yesterday {hm}"))
+    );
+    assert_eq!(recent_day(&id, day + chrono::Days::new(2)), None);
+    assert_eq!(recent_day("not a time", day), None);
 }

@@ -16,12 +16,14 @@ mod crdt; // places.json and fixes.json are synced data
 mod dump_places;
 mod install;
 mod map;
+mod meetings_tab;
 mod places;
 mod timebar;
 mod timeline;
 mod transcript;
 mod voices;
 
+use meetings_tab::meeting_cell;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
@@ -537,26 +539,6 @@ fn idle_status(state: &str, queued: i64, meetings_only: bool, place: &str) -> St
         _ if meetings_only => format!("Waiting for a meeting{place}"),
         _ => format!("Not recording{place}"),
     }
-}
-
-/// The Meetings table's cell in column `col` of `row`: When, Min, Lines, else the first words.
-fn meeting_cell(meetings: &[Vec<String>], col: &str, row: usize) -> String {
-    let i = match col {
-        "When" => 1,
-        "Min" => 2,
-        "Lines" => 3,
-        _ => 4,
-    };
-    let cell = meetings
-        .get(row)
-        .and_then(|m| m.get(i))
-        .cloned()
-        .unwrap_or_default();
-    // a one-line meeting lasts no whole minute: `ozen meetings` says 0, the table says so honestly
-    if i == 2 && cell == "0" {
-        return "<1".into();
-    }
-    cell
 }
 
 /// Ask before a change: `action` or Cancel.
