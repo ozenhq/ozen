@@ -374,6 +374,9 @@ impl Session {
 #[path = "protocol_drop_tests.rs"]
 mod drop_tests;
 #[cfg(test)]
+#[path = "protocol_fuzz_tests.rs"]
+mod fuzz_tests;
+#[cfg(test)]
 #[path = "protocol_golden_tests.rs"]
 mod golden_tests;
 #[cfg(test)]
