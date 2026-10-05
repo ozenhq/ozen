@@ -82,26 +82,45 @@ fn read() -> Result<Option<Vec<u8>>, String> {
             .map(Some)
             .map_err(|e| format!("OZEN_SYNC_KEY_FILE {}: {e}", f.to_string_lossy()));
     }
-    match get_generic_password(SERVICE, ACCOUNT) {
+    read_at(SERVICE)
+}
+
+/// The raw item under Keychain service `service` (tests use a throwaway one).
+fn read_at(service: &str) -> Result<Option<Vec<u8>>, String> {
+    match get_generic_password(service, ACCOUNT) {
         Ok(k) => Ok(Some(k)),
         Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
         Err(e) => Err(format!("Keychain: {e}")),
     }
 }
 
-/// The key in the login Keychain if `ozen sync init` made one; never makes one.
+/// A stored key's bytes as a key.
+fn typed(k: Option<Vec<u8>>) -> Result<Option<Key>, String> {
+    k.map(|k| {
+        k.try_into()
+            .map_err(|_| "vault key in the Keychain is not 32 bytes".into())
+    })
+    .transpose()
+}
+
+/// The key in the login Keychain if `ozen sync init` or `join` stored one; never makes one.
 pub fn stored() -> Result<Option<Key>, String> {
-    read()?
-        .map(|k| {
-            k.try_into()
-                .map_err(|_| "vault key in the Keychain is not 32 bytes".into())
-        })
-        .transpose()
+    typed(read()?)
+}
+
+/// `stored`, under Keychain service `service`.
+pub fn stored_at(service: &str) -> Result<Option<Key>, String> {
+    typed(read_at(service)?)
 }
 
 /// Saves `k` as the key in the login Keychain, replacing any other.
 pub fn store(k: &Key) -> Result<(), String> {
-    set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
+    store_at(SERVICE, k)
+}
+
+/// `store`, under Keychain service `service`.
+pub fn store_at(service: &str, k: &Key) -> Result<(), String> {
+    set_generic_password(service, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
 }
 
 /// The key in the login Keychain, made on first use.

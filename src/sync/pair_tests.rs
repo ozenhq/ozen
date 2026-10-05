@@ -183,3 +183,47 @@ fn errors_print_nothing_key_derived_either() {
         }
     }
 }
+
+/// Against the real login Keychain, with a throwaway service name (never ozen's own item):
+/// `cargo nextest run --release --run-ignored ignored-only real_keychain`.
+#[test]
+#[ignore]
+fn real_keychain_join_round_trip() {
+    let service = format!("ozen-sync-test-{}", std::process::id());
+    let cleanup = || {
+        let _ = security_framework::passwords::delete_generic_password(&service, "vault-key");
+    };
+    cleanup();
+    let first = join(
+        &code(&K, URL),
+        false,
+        key::stored_at(&service).unwrap(),
+        |k| key::store_at(&service, k),
+        |u| Ok(u.to_string()),
+    );
+    let after_first = key::stored_at(&service);
+    // a different key is refused, then --force replaces it
+    let other: Key = [7; 32];
+    let refused = join(
+        &code(&other, URL),
+        false,
+        key::stored_at(&service).unwrap(),
+        |k| key::store_at(&service, k),
+        |u| Ok(u.to_string()),
+    );
+    let forced = join(
+        &code(&other, URL),
+        true,
+        key::stored_at(&service).unwrap(),
+        |k| key::store_at(&service, k),
+        |u| Ok(u.to_string()),
+    );
+    let after_force = key::stored_at(&service);
+    cleanup();
+    assert!(first.is_ok(), "{first:?}");
+    assert_eq!(after_first, Ok(Some(K)));
+    assert!(refused.is_err());
+    assert!(forced.is_ok());
+    assert_eq!(after_force, Ok(Some(other)));
+    assert_eq!(key::stored_at(&service), Ok(None), "cleaned up");
+}
