@@ -72,7 +72,7 @@ fn saves_only_a_relay_that_answers() {
     assert!(save(&relay("not a relay"), &saved).is_err());
     assert!(save("ws://relay.example", &saved).is_err());
     assert!(!saved.exists());
-    // a bracketed IPv6 relay reaches curl as a host, not a glob
+    // a bracketed IPv6 relay is a host
     let l = std::net::TcpListener::bind("[::1]:0").unwrap();
     let port = l.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -84,4 +84,72 @@ fn saves_only_a_relay_that_answers() {
     let url = relay("ok");
     assert_eq!(save(&url, &saved), Ok(url.clone()));
     assert_eq!(resolve(None, &saved), Ok(Some(url)));
+}
+
+#[test]
+fn a_relay_that_never_answers_times_out() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://127.0.0.1:{}", l.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        let (_s, _) = l.accept().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(5)); // holds the socket, says nothing
+    });
+    let started = std::time::Instant::now();
+    let err = healthy_within(&url, std::time::Duration::from_millis(300)).unwrap_err();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        err.starts_with(&format!("no sync relay answering at {url}")),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_wrong_body_says_what_came_back() {
+    let url = relay("not a relay");
+    let err = healthy(&url).unwrap_err();
+    assert!(
+        err.starts_with(&format!("no sync relay answering at {url}")),
+        "{err}"
+    );
+    assert!(err.contains("not a relay"), "{err}");
+}
+
+#[test]
+fn sync_runs_no_external_program() {
+    // ozen's own binary (apply.rs runs `ozen retrain`) is the only program sync starts
+    let start = ["Command", "::new("].concat(); // spelled apart so this file doesn't match itself
+    for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync")).unwrap() {
+        let p = f.unwrap().path();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue; // snapshots/
+        };
+        for line in src.lines().filter(|l| l.contains(&start)) {
+            assert!(
+                line.contains(&format!("{start}exe)")),
+                "{}: {line}",
+                p.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_redirect_to_something_that_answers_ok_is_not_a_relay() {
+    let target = relay("ok");
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://127.0.0.1:{}", l.local_addr().unwrap().port());
+    let to = target.replacen("ws", "http", 1);
+    std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let _ = s.read(&mut [0; 1024]);
+        let _ = write!(
+            s,
+            "HTTP/1.1 301 Moved\r\nlocation: {to}/health\r\ncontent-length: 0\r\n\r\n"
+        );
+    });
+    assert!(healthy(&url).is_err());
 }
