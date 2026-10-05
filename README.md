@@ -89,7 +89,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   (updates every 2s, Hebrew lines right-to-left) with **Start / Pause / Resume / Stop** buttons; right-click for
   the same controls. The icon is a red filled ear only while recording; otherwise it's monochrome (ear stopped, pause paused,
   hourglass finishing transcription) and the panel says what it's doing instead: **Not recording**, **Paused**,
-  **Waiting for a meeting** or **Transcribing N chunks…**, with the place you're at.
+  **Waiting for a meeting** (these two with the place you're at) or **Transcribing N chunks…**.
 - **Transcription on or off (advanced).** The gear button in the panel (or **Advanced…** in the right-click
   menu) has a **Transcribe** switch, on by default, that applies right away. Off, recording goes on but nothing is
   transcribed (the audio waits in `chunks/`, taking disk space); back on, it transcribes what's waiting, then keeps up
