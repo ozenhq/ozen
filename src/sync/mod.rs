@@ -7,6 +7,7 @@ pub mod key;
 pub mod local;
 pub mod protocol;
 pub mod seal;
+pub mod valid;
 
 use std::path::Path;
 

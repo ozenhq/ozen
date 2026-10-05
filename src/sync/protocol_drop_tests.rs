@@ -131,3 +131,52 @@ fn a_dropped_frame_never_reaches_apply() {
     );
     assert!(!db.path().join("vocab.json").exists(), "apply never ran");
 }
+
+/// A records frame for the test vault carrying `r`, as another Mac would send it.
+fn records_frame(r: Value) -> Vec<u8> {
+    let mut z = DeflateEncoder::new(vec![VERSION], Compression::default());
+    serde_json::to_writer(&mut z, &json!({"t": "records", "r": r})).unwrap();
+    seal::seal(&[7; 32], "vault", &z.finish().unwrap()).unwrap()
+}
+
+#[test]
+fn malformed_records_are_dropped_and_counted_and_the_good_ones_still_merge() {
+    let d = folder(
+        json!([{"id": "1@a", "v": 1, "t": 1.0, "text": "hi"}]),
+        json!({}),
+    );
+    let mut m = Mac::new(d.path());
+    let f = records_frame(json!([
+        ["lines", "1@a", {"id": "1@a", "v": 5, "t": "noon", "text": "overwritten?"}],
+        ["lines", "2@b", {"id": "2@b", "v": 1, "t": 2.0, "text": "x", "e": [0.1, 0.2, 0.3]}],
+        ["tags", "1@a", {"v": 1, "val": 7}],
+        ["tags", "2@b", {"v": 1, "val": "Noa"}],
+        ["lines", "3@b", {"id": "3@b", "v": 1, "t": 3.0, "text": "fine"}],
+    ]));
+    assert!(m.receive(&f).is_empty());
+    assert_eq!(m.s.dropped.records, 3);
+    assert_eq!(
+        (m.s.dropped.bad, m.s.dropped.newer),
+        (0, 0),
+        "the frame itself was fine"
+    );
+    assert!(
+        m.s.dropped
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("1@a")
+    );
+    let got = m.synced();
+    assert_eq!(
+        got[&("lines".into(), "1@a".into())]["text"],
+        "hi",
+        "the bad version didn't win"
+    );
+    assert!(!got.contains_key(&("lines".into(), "2@b".into())));
+    assert!(!got.contains_key(&("tags".into(), "1@a".into())));
+    assert_eq!(got[&("tags".into(), "2@b".into())]["val"], "Noa");
+    assert_eq!(got[&("lines".into(), "3@b".into())]["text"], "fine");
+    let after = std::fs::read_to_string(d.path().join("lines.jsonl")).unwrap();
+    assert!(!after.contains("noon"));
+}

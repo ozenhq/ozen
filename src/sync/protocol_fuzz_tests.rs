@@ -3,7 +3,7 @@
 //! files stay readable. Frames are built at every depth: raw bytes; sealed bytes (version and deflate
 //! layers); sealed, deflated bytes (JSON layer); and sealed, well-formed messages with hostile fields.
 //! Up to 15 frames a case, so more than 8 unfinished summaries force evictions. 64 cases per test run; a long run: `PROPTEST_CASES=200000 cargo nextest run any_frames`.
-use super::tests::{Mac, folder};
+use super::tests::{Mac, at, folder};
 use super::*;
 use proptest::prelude::*;
 use serde_json::json;
@@ -197,5 +197,10 @@ proptest! {
                 prop_assert!(now.is_some_and(|n| v(n) >= v(r)), "{:?}: {} became {:?}", id, r, now);
             }
         }
+        // what reaches the files is safe for the readers: the panel and relearning run on it
+        at(d.path(), || {
+            crate::panel::transcript_json("");
+            let _ = crate::fixes::relearn();
+        });
     }
 }
