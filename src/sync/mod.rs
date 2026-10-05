@@ -1,5 +1,6 @@
 //! `ozen sync`: share lines, tags, fixes, places and vocabulary with your other Macs through a relay
-//! (ozenhq/sync) that only sees encrypted ops.
+//! (ozenhq/sync) that only forwards sealed frames: bucket hashes, summaries of the buckets that differ,
+//! then the records the other Mac lacks (protocol.rs, wire.rs, buckets.rs).
 pub mod apply;
 pub mod buckets;
 pub mod config;
