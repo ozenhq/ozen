@@ -9,6 +9,7 @@ pub mod key;
 pub mod link;
 pub mod local;
 pub mod marks;
+pub mod pair;
 pub mod parts;
 pub mod preview;
 pub mod protocol;
@@ -47,7 +48,12 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 (saving the current ones first, so it can be undone too) and pause sync until `init`
   run           sync with this vault's Macs, on this network and through the relay, until the app stops asking
                 (Ozen.app starts it)
-  wake          tell a running `sync run` the Mac just woke, so it reconnects now (Ozen.app runs it on wake)";
+  wake          tell a running `sync run` the Mac just woke, so it reconnects now (Ozen.app runs it on wake)
+  pair          copy a pairing code for another Mac to the clipboard (cleared after 2 minutes); the
+                key never goes through the relay
+  join [--force]
+                join the vault of the Mac that ran `pair`: paste its code at the hidden prompt; --force
+                replaces a different vault key already on this Mac";
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, String> {
@@ -89,7 +95,7 @@ fn report(vault: &str, url: Option<&str>) -> String {
 /// `ozen sync ...`: prints the result, or exits 1 (2 with its usage on bad arguments).
 pub fn cli() {
     let a: Vec<String> = std::env::args().skip(2).collect();
-    let server = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    let out = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["run"] => {
             if let Err(e) = run::run() {
                 eprintln!("{e}");
@@ -118,16 +124,24 @@ pub fn cli() {
             println!("{}", preview::preview());
             return;
         }
-        ["init"] => (None, None),
-        ["init", "--server", url] => (Some(url.to_string()), Some(false)),
-        ["init", "--lan-only"] => (None, Some(true)),
-        ["init", "--relay"] => (None, Some(false)),
+        ["init"] => init(None, None),
+        ["init", "--server", url] => init(Some(url), Some(false)),
+        ["init", "--lan-only"] => init(None, Some(true)),
+        ["init", "--relay"] => init(None, Some(false)),
+        ["pair"] => pair::pair(),
+        ["join"] => pair::join_prompt(false),
+        ["join", "--force"] => pair::join_prompt(true),
+        // the detached helper `pair` leaves behind to clear the clipboard
+        ["forget-code", n] if n.parse::<isize>().is_ok() => {
+            pair::forget_later(n.parse().expect("checked"));
+            return;
+        }
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
         }
     };
-    match init(server.0.as_deref(), server.1) {
+    match out {
         Ok(s) => println!("{s}"),
         Err(e) => {
             eprintln!("{e}");

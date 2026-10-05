@@ -99,11 +99,14 @@ pub fn stored() -> Result<Option<Key>, String> {
         .transpose()
 }
 
+/// Saves `k` as the key in the login Keychain, replacing any other.
+pub fn store(k: &Key) -> Result<(), String> {
+    set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
+}
+
 /// The key in the login Keychain, made on first use.
 pub fn keychain() -> Result<Key, String> {
-    load_or_create(read, |k| {
-        set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
-    })
+    load_or_create(read, store)
 }
 
 #[cfg(test)]

@@ -68,6 +68,8 @@ url = "2.5.8"
 hmac = "0.13.0"
 mdns-sd = "0.21.4"
 socket2 = "0.6.5"
+data-encoding = "2.11.1"
+rpassword = "7.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
