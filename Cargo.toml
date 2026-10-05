@@ -11,6 +11,14 @@ redundant_closure_for_method_calls = "warn"  # CI runs clippy with -D warnings
 [profile.release]
 strip = true
 
+# Tests and clippy use the dev profile: dependencies (candle, whisper, parquet) optimized like release so tests
+# stay fast, own code lightly optimized so it rebuilds quickly. Saves a second full --release tree per worktree.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [dependencies]
 alias_record = "0.3.0"  # imported as dmg_layout
 base64 = "0.23.1"
