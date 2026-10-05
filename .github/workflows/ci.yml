@@ -1,9 +1,7 @@
 name: ci
-# Pull requests, plus main once a day. A squash merge lands code that already passed on its PR head, so
-# re-running on every push to main billed a third of this private repo's macOS minutes (10x rate); the daily
-# run still catches two PRs that pass alone but break together, at one run per day however many merges land.
+# main once a day, plus manual runs (workflow_dispatch, any branch). Not on pull requests: their macOS runs (10x rate)
+# hit this private repo's Actions limit. The daily run catches what lands on main, one run however many merges land.
 on:
-  pull_request:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
