@@ -64,4 +64,10 @@ fn a_mac_too_old_for_a_v3_only_peer_is_told_to_update() {
     assert!(old.s.dropped.newer > 0);
     assert!(old.s.dropped.advice().is_some());
     assert!(!old.synced().contains_key(&("tags".into(), "a".into())));
+    // and the v3 Mac says why it can't read the v1 Mac's hello
+    let e = new.s.dropped.last_error.clone().unwrap_or_default();
+    assert!(
+        e.contains("older ozen") && e.contains("update ozen on that Mac"),
+        "{e}"
+    );
 }

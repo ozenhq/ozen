@@ -58,9 +58,15 @@ pub(super) fn decode(
     frame: &[u8],
 ) -> Result<Option<Msg>, String> {
     let plain = seal::open(key, vault, frame)?;
-    match plain.first().map(|v| (v, versions.read(*v))) {
+    match plain.first().map(|v| (*v, versions.read(*v))) {
         Some((_, Read::Yes)) => {}
         Some((_, Read::Newer)) => return Ok(None),
+        Some((v, Read::Older)) if v > 0 => {
+            return Err(format!(
+                "frame from an older ozen (protocol {v}, this one reads {} and up): update ozen on that Mac",
+                versions.oldest()
+            ));
+        }
         v => return Err(format!("frame with protocol version {:?}", v.map(|v| v.0))),
     }
     // A sender's JSON is at most BUDGET per frame; anything inflating past that is no frame of ours.
