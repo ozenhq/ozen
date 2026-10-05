@@ -673,7 +673,7 @@ fn main() {
                 println!("Place switching is off: {}", why.trim());
             }
             // Sync runs whether or not this Mac records.
-            sync::dropped::health().iter().for_each(|l| println!("{l}"));
+            sync::health().iter().for_each(|l| println!("{l}"));
             if !running(REC) {
                 if recorder_blocked(&String::from_utf8_lossy(
                     &fs::read("start.log").unwrap_or_default(),
