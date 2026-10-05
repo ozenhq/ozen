@@ -563,12 +563,7 @@ impl TimelineView {
             segs.iter().map(|s| s.t).reduce(f64::min),
             segs.iter().map(|s| s.t + s.d).reduce(f64::max),
         ) {
-            let head = format!(
-                "{}–{} · {}",
-                local(a).format("%H:%M"),
-                local(b).format("%H:%M"),
-                minutes(b - a)
-            );
+            let head = head(a, b, chrono::Local::now().date_naive());
             let size = NSSize::new(GUTTER - 12.0, 14.0);
             text_in(
                 &head,
@@ -577,6 +572,17 @@ impl TimelineView {
             );
         }
     }
+}
+
+/// The meeting's line above the names: its day, when it ran and how long ("Today 01:30–01:52 · 22m").
+fn head(a: f64, b: f64, today: chrono::NaiveDate) -> String {
+    let (start, end) = (local(a), local(b).format("%H:%M"));
+    let day = match (today - start.date_naive()).num_days() {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        _ => start.format("%d %b").to_string(), // no weekday: the line has 156pt
+    };
+    format!("{day} {}–{end} · {}", start.format("%H:%M"), minutes(b - a))
 }
 
 fn intersects(a: NSRect, b: NSRect) -> bool {
