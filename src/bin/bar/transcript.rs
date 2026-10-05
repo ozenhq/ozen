@@ -91,6 +91,7 @@ pub fn render(
         NSFont::systemFontOfSize(11.0),
         NSFont::systemFontOfSize(13.0),
     );
+    let mut prev = None; // the line above's header and source
     for l in &lines {
         let s = |k: &str| l[k].as_str().unwrap_or("").to_string();
         let (id, said, heard) = (s("id"), s("text"), s("heard"));
@@ -119,9 +120,15 @@ pub fn render(
             .insert(id.clone(), (at, NSString::from_str(&header).length()));
         let tag_url =
             NSURL::URLWithString(&NSString::from_str(&format!("ozen://tag/{id}"))).unwrap();
+        // the same voice talking on: its name dimmed and no source, so speaker changes stand out
+        let this = Some((header.clone(), s("src")));
+        let same = prev == this;
+        prev = this;
         // unsure lines are what the loop wants tagged next
         let header_color = if l["unsure"].as_bool().unwrap_or(false) {
             &orange
+        } else if same {
+            &tertiary
         } else {
             &secondary
         };
@@ -137,7 +144,11 @@ pub fn render(
         );
         append(
             &out,
-            &format!(" ({}): ", s("src")),
+            &if same {
+                ": ".to_string()
+            } else {
+                format!(" ({}): ", s("src"))
+            },
             &attrs(&[(k_para, para), (k_color, &tertiary), (k_font, &small)]),
         );
         let fix_url =
@@ -269,3 +280,7 @@ pub fn dump_runs(text: &NSTextView) -> Vec<String> {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "transcript_tests.rs"]
+mod tests;
