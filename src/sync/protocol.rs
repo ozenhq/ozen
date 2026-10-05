@@ -22,7 +22,8 @@ use std::io::Read;
 
 /// A synced record: (kind, key). The kinds are the synced files: tags, fixes, vocab, places, lines.
 pub(super) type Id = (String, String);
-/// What a summary says about a record: its version, and the first 8 bytes of SHA-256 of its JSON (hex).
+/// What a summary says about a record: its version, and the first 8 bytes of SHA-256 of its canonical
+/// JSON (`crdt::canonical`, hex).
 pub(super) type Mark = (u64, String);
 /// One summary line: (kind, key, v, hash).
 type Entry = (String, String, u64, String);
@@ -82,7 +83,7 @@ fn hashes(m: &BTreeMap<Id, Mark>) -> Vec<u8> {
 }
 
 fn mark(r: &Value) -> Mark {
-    let h = Sha256::digest(r.to_string().as_bytes());
+    let h = Sha256::digest(crate::crdt::canonical(r).as_bytes());
     (v(r), h[..8].iter().map(|b| format!("{b:02x}")).collect())
 }
 

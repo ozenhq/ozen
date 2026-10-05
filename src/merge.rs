@@ -27,8 +27,10 @@ fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
     }
 }
 
+/// Writes `v` with sorted keys (`crdt::sorted`), so every Mac writes the same data as the same text.
 fn save(path: &str, v: &impl serde::Serialize) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(v).map_err(|e| e.to_string())? + "\n";
+    let v = crate::crdt::sorted(&serde_json::to_value(v).map_err(|e| e.to_string())?);
+    let json = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
     write_new(path, json.as_bytes())
 }
 
@@ -116,7 +118,7 @@ pub fn apply(theirs: &Synced) -> Result<Applied, String> {
     changed |= lines != merge_rows(&mine, &[]);
     let out: String = lines
         .iter()
-        .map(|r| Value::Object(r.clone()).to_string() + "\n")
+        .map(|r| crate::crdt::canonical(&Value::Object(r.clone())) + "\n")
         .collect();
     write_new(LINES, out.as_bytes())?;
     drop(lock);

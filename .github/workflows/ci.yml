@@ -51,6 +51,12 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run
+      # OFE-70: sync's tie-breaks and hashes must not depend on serde_json's map type, which any dependency
+      # could flip through Cargo feature unification; the CRDT, merge and sync tests run again with it flipped.
+      # Golden frames pin the default build's wire JSON, so they stay out of this run.
+      - run: >-
+          cargo nextest run --features serde_json/preserve_order
+          -E '(test(/^(crdt|merge|sync)::/) - test(/golden/)) | test(/^merging_two_macs/)'
   linecheck:
     # Per-file line limits from linecheck.yml; Linux, billed 1x, needs no macOS toolchain.
     needs: changed
