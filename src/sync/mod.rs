@@ -10,8 +10,10 @@ pub mod local;
 pub mod marks;
 pub mod parts;
 pub mod protocol;
+pub mod run;
 pub mod seal;
 pub mod summaries;
+pub mod talk;
 pub mod valid;
 pub mod version;
 pub mod wire;
@@ -22,11 +24,14 @@ const USAGE: &str = "\
 ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
   init [--server URL]
                 make this Mac's vault key (kept in the login Keychain; running it again keeps it) and save
-                the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one";
+                the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one.
+                Turns sync on here: while Ozen.app runs, it keeps `ozen sync run` going
+  run           sync with this vault's Macs on this network until the app stops asking (Ozen.app starts it)";
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>) -> Result<String, String> {
     let k = key::keychain()?;
+    std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
     if let Some(s) = server {
         config::save(s, Path::new(config::FILE))?;
     }
@@ -49,6 +54,13 @@ fn report(vault: &str, url: Option<&str>) -> String {
 pub fn cli() {
     let a: Vec<String> = std::env::args().skip(2).collect();
     let server = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["run"] => {
+            if let Err(e) = run::run() {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            return;
+        }
         ["init"] => None,
         ["init", "--server", url] => Some(url.to_string()),
         _ => {

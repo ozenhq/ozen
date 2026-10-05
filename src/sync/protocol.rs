@@ -6,7 +6,6 @@
 //! out as soon as `changes` is called. Messages are JSON, deflated, then sealed (seal.rs) into frames;
 //! carrying the frames is the connection's job. The protocol is specified, for other clients and for
 //! agreeing on changes, in https://github.com/ozenhq/sync/blob/main/docs/protocol.md.
-#![allow(dead_code)] // ponytail: driven by the connection (OFE-7)
 use super::apply::{self, Coalesced};
 use super::buckets;
 pub use super::dropped::Dropped;
@@ -98,9 +97,12 @@ pub struct Session {
     /// The protocol versions this Mac and the others speak (version.rs).
     versions: Versions,
     pub dropped: Dropped,
+    /// The synced files' stamps at the last `tick`, so a tick with no edit reads nothing.
+    ticked: Option<super::marks::Stamp>,
 }
 
 impl Session {
+    #[cfg(test)]
     pub fn new(seal_key: Key, vault: &str) -> Self {
         Session::with(seal_key, vault, Coalesced::retrain())
     }
@@ -117,6 +119,7 @@ impl Session {
             dropped: Dropped::default(),
             versions: Versions::default(),
             marks: Marks::default(),
+            ticked: None,
         }
     }
 
@@ -214,6 +217,17 @@ impl Session {
             self.told.insert(id.clone(), mark(&ours[&id]));
         }
         Ok(frames)
+    }
+
+    /// `changes`, but only once a synced file changed since the last tick (the connection ticks every
+    /// few seconds). Who wrote it doesn't matter: a record merged from another Mac that ours beat goes out too.
+    pub fn tick(&mut self) -> Result<Vec<Vec<u8>>, String> {
+        let now = super::marks::stamp();
+        if self.ticked.as_ref() == Some(&now) {
+            return Ok(vec![]);
+        }
+        self.ticked = Some(now);
+        self.changes()
     }
 
     /// The message in `frame`: Err for one that doesn't open or parse, Ok(None) for a newer version's.

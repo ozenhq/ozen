@@ -656,6 +656,7 @@ fn main() {
                 let _ = fs::remove_file(".stopping");
                 "stopped"
             };
+            sync::run::keep(log);
             println!("{state}");
         }
         "health" => {

@@ -14,9 +14,9 @@ use super::protocol::{Id, Mark};
 const RACY: Duration = Duration::from_secs(1);
 
 /// (size, modified s, modified ns, inode) of each file the synced data is read from.
-type Stamp = Vec<Option<(u64, i64, i64, u64)>>;
+pub(super) type Stamp = Vec<Option<(u64, i64, i64, u64)>>;
 
-fn stamp() -> Stamp {
+pub(super) fn stamp() -> Stamp {
     crate::crdt::SYNCED
         .iter()
         .map(|(_, f)| *f)
