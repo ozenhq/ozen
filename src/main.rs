@@ -14,6 +14,7 @@ mod mcp;
 mod meetings;
 mod merge;
 mod mic;
+mod one_at_a_time;
 mod overlap;
 mod panel;
 mod places;
@@ -302,6 +303,8 @@ fn sign(path: &str, deep: bool) {
 }
 
 const TR_LOCK: &str = ".transcriber.lock"; // held by the running transcriber for as long as it runs
+const RT_LOCK: &str = ".retrain.lock"; // held by the running retrain
+const RT_AGAIN: &str = ".retrain-again"; // a retrain was asked for while one ran: run once more
 const START_LOCK: &str = ".start.lock"; // held while a command checks what's running and starts what's missing
 const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, to pace automatic restarts
 
@@ -509,9 +512,14 @@ fn build_app(app: &str) -> bool {
 }
 
 /// Rebuild the people's voiceprints and labels; then add the voices to ignore on top, even if training failed.
+/// One retrain at a time per checkout (sync's and a tag's would overwrite each other's labels); one
+/// asked for while another runs is run by that one right after, on fresh inputs.
 fn retrain() {
-    let trained = std::panic::catch_unwind(|| train::retrain(true)).is_ok();
-    ignore::apply();
+    let mut trained = true;
+    one_at_a_time::run(RT_LOCK, RT_AGAIN, || {
+        trained &= std::panic::catch_unwind(|| train::retrain(true)).is_ok();
+        ignore::apply();
+    });
     if !trained {
         exit(1);
     }

@@ -17,6 +17,8 @@ mic-fallback
 .transcriber-started
 .transcriber.lock
 .start.lock
+.retrain.lock
+.retrain-again
 .record-only
 .processing
 .low-priority
