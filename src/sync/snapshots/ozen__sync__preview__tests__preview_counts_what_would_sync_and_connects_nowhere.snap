@@ -1,0 +1,13 @@
+---
+source: src/sync/preview_tests.rs
+expression: out
+---
+Turning on sync shares these with this vault's other Macs, and only them:
+  lines  3, 2026-01-01 to 2026-03-31 (UTC): 1 note; 2 carry the voice embedding of who spoke
+  tags   1
+  fixes  1
+  vocab  2
+  places 2: Home (with its map location), Gym
+  and 3 deleted records, as markers with no content
+Never shared: audio (chunks/, recent/, fixes/), the voiceprint registry (voices/), where this Mac is now (here.json), transcript.txt, context/ copies, labels and stats.
+This preview only read files here; nothing was sent.

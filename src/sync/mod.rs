@@ -9,6 +9,7 @@ pub mod key;
 pub mod local;
 pub mod marks;
 pub mod parts;
+pub mod preview;
 pub mod protocol;
 pub mod run;
 pub mod seal;
@@ -33,6 +34,8 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 make this Mac's vault key (kept in the login Keychain; running it again keeps it) and save
                 the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one.
                 Turns sync on here: while Ozen.app runs, it keeps `ozen sync run` going
+  preview       what turning sync on would share (counts, dates, places) and what it never sends; reads
+                files only, connects nowhere
   run           sync with this vault's Macs on this network until the app stops asking (Ozen.app starts it)";
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
@@ -66,6 +69,10 @@ pub fn cli() {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
+            return;
+        }
+        ["preview"] => {
+            println!("{}", preview::preview());
             return;
         }
         ["init"] => None,
