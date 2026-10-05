@@ -170,3 +170,12 @@ fn it_stops_seconds_after_the_app_stops_asking_or_sync_is_turned_off() {
         assert!(!still_wanted(), "sync turned off");
     });
 }
+
+#[test]
+fn a_folder_that_ran_init_before_sync_on_existed_counts_as_on() {
+    let d = tempfile::tempdir().unwrap();
+    at(d.path(), || {
+        fs::write(crate::sync::config::FILE, "wss://relay.example").unwrap();
+        assert!(wanted());
+    });
+}

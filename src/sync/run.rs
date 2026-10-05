@@ -16,6 +16,11 @@ use std::time::Duration;
 
 /// Written by `ozen sync init`: this folder syncs. Without it `status` starts nothing.
 pub const ON: &str = ".sync-on";
+
+/// Sync is on here: `init` wrote `ON`, or saved a relay URL before `ON` existed.
+fn on() -> bool {
+    Path::new(ON).exists() || Path::new(super::config::FILE).exists()
+}
 /// Touched by each `ozen status` poll while sync is on.
 pub const ASKED: &str = ".sync-asked";
 /// Held by the running `ozen sync run` for as long as it runs: one per folder.
@@ -67,7 +72,7 @@ pub fn serve(
 /// Called from each `ozen status` poll: whether to start `ozen sync run` now. Marks sync as wanted;
 /// true when sync is on, none runs here and none was started in the last minute.
 pub fn wanted() -> bool {
-    if !Path::new(ON).exists() {
+    if !on() {
         return false;
     }
     let _ = File::create(ASKED);
@@ -100,7 +105,7 @@ pub fn keep(log: impl Fn() -> File) {
 
 /// Sync is on and the app asked within `IDLE`.
 fn still_wanted() -> bool {
-    Path::new(ON).exists() && age(ASKED).is_some_and(|a| a < IDLE)
+    on() && age(ASKED).is_some_and(|a| a < IDLE)
 }
 
 /// `ozen sync run`: same-network sync until nobody asks for `IDLE` or sync is turned off.
@@ -110,7 +115,7 @@ pub fn run() -> Result<(), String> {
         println!("another `ozen sync run` is running in this folder; exiting");
         return Ok(());
     }
-    if !Path::new(ON).exists() {
+    if !on() {
         return Err("sync is off here: run `ozen sync init` first".into());
     }
     let key = key::stored()?.ok_or("no vault key here: run `ozen sync init` first")?;
