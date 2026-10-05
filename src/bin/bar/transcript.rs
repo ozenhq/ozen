@@ -86,14 +86,33 @@ pub fn render(
     );
     let digits =
         NSFont::monospacedDigitSystemFontOfSize_weight(11.0, unsafe { NSFontWeightRegular });
+    let small_bold = NSFont::boldSystemFontOfSize(11.0);
     let (bold, small, body) = (
         NSFont::boldSystemFontOfSize(12.0),
         NSFont::systemFontOfSize(11.0),
         NSFont::systemFontOfSize(13.0),
     );
     let mut prev = None; // the line above's header and source
+    let mut day = String::new();
     for l in &lines {
         let s = |k: &str| l[k].as_str().unwrap_or("").to_string();
+        // the times have no date: a line naming the day wherever it changes
+        if s("day") != day {
+            day = s("day");
+            prev = None;
+            let para = NSMutableParagraphStyle::new();
+            para.setParagraphSpacing(4.0);
+            para.setParagraphSpacingBefore(if out.length() == 0 { 0.0 } else { 8.0 });
+            append(
+                &out,
+                &format!("{day}\n"),
+                &attrs(&[
+                    (k_para, &para),
+                    (k_color, &secondary),
+                    (k_font, &small_bold),
+                ]),
+            );
+        }
         let (id, said, heard) = (s("id"), s("text"), s("heard"));
         let ignored = l["ignored"].as_bool().unwrap_or(false);
         let para = NSMutableParagraphStyle::new();

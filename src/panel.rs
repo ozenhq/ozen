@@ -251,8 +251,9 @@ fn transcript<'a>(
             let (id, tagged, speaker, unsure) = view(r);
             let heard = str_of(r, "text");
             let said = fixes.get(id).and_then(Value::as_str).filter(|t| !t.is_empty()).unwrap_or(heard);
-            let time = local(r["t"].as_f64().unwrap_or(0.0)).format("%H:%M:%S").to_string();
-            json!({"id": id, "time": time, "speaker": speaker, "mark": if tagged { "✓" } else if unsure { "?" } else { "" },
+            let at = local(r["t"].as_f64().unwrap_or(0.0));
+            let (time, day) = (at.format("%H:%M:%S").to_string(), at.format("%a %d %b").to_string());
+            json!({"id": id, "time": time, "day": day, "speaker": speaker, "mark": if tagged { "✓" } else if unsure { "?" } else { "" },
                    "src": str_of(r, "src"), "text": said, "heard": heard, "ignored": is_ignored(speaker), "unsure": unsure,
                    "rtl": said.chars().any(|c| ('\u{0590}'..='\u{05FF}').contains(&c))})
         })

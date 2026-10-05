@@ -173,6 +173,7 @@ fn transcript_corrects_speakers_and_text_and_marks_unsure() {
         ),
         (json!(true), json!("Omer"), json!("?"))
     );
+    assert!(v["lines"][0]["day"].as_str().is_some_and(|d| d.len() == 10)); // "Thu 01 Jan"
     let segs: Vec<&str> = v["segments"]
         .as_array()
         .unwrap()
