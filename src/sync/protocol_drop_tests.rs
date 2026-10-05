@@ -253,7 +253,7 @@ fn health_says_update_ozen_after_a_newer_frame_and_counts_add_up_across_sessions
     again.receive(&[1; 1024]);
     let said = health_in(db.path());
     assert_eq!(said.len(), 2, "{said:?}");
-    assert!(said[1].starts_with("1 frames"));
+    assert!(said[1].starts_with("1 frame from"));
 }
 
 #[test]
@@ -266,4 +266,22 @@ fn health_forgets_drops_a_day_old() {
     seen["at"] = json!(seen["at"].as_u64().unwrap() - 24 * 60 * 60);
     std::fs::write(&file, seen.to_string()).unwrap();
     assert!(health_in(db.path()).is_empty());
+}
+
+#[test]
+fn health_names_the_records_error_even_after_another_kind_of_drop() {
+    let d = folder(json!([]), json!({}));
+    let mut m = Mac::new(d.path());
+    m.receive(&records_frame(json!([["tags", "x", {"v": "one"}]])));
+    m.receive(&[1; 1024]); // a later unreadable frame overwrites last_error
+    let said = health_in(d.path());
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[1].starts_with("1 record from another Mac failed checks"),
+        "{said:?}"
+    );
+    assert!(
+        !said[1].contains("(last: unknown)") && !said[1].contains("open"),
+        "{said:?}"
+    );
 }

@@ -30,6 +30,8 @@ pub struct Dropped {
 struct Seen {
     #[serde(flatten)]
     d: Dropped,
+    /// The error of the last records that failed checks (`last_error` may be another kind's).
+    record_error: Option<String>,
     at: u64,
 }
 
@@ -40,12 +42,11 @@ fn now() -> u64 {
 }
 
 /// The counts of the last day, or none.
-fn recent(at: u64) -> Dropped {
+fn recent(at: u64) -> Seen {
     fs::read(FILE)
         .ok()
         .and_then(|b| serde_json::from_slice::<Seen>(&b).ok())
         .filter(|s| at.saturating_sub(s.at) < DAY)
-        .map(|s| s.d)
         .unwrap_or_default()
 }
 
@@ -61,14 +62,19 @@ impl Dropped {
             return;
         }
         let at = now();
-        let mut d = recent(at);
-        d.bad += self.bad - before.bad;
-        d.newer += self.newer - before.newer;
-        d.records += self.records - before.records;
-        d.refused += self.refused - before.refused;
-        d.last_error.clone_from(&self.last_error);
-        if let Ok(b) = serde_json::to_vec(&Seen { d, at }) {
-            let _ = fs::write(FILE, b);
+        let mut s = recent(at);
+        s.d.bad += self.bad.saturating_sub(before.bad);
+        s.d.newer += self.newer.saturating_sub(before.newer);
+        s.d.records += self.records.saturating_sub(before.records);
+        s.d.refused += self.refused.saturating_sub(before.refused);
+        s.d.last_error.clone_from(&self.last_error);
+        if self.records > before.records {
+            s.record_error.clone_from(&self.last_error);
+        }
+        s.at = at;
+        // ponytail: one write per rise; two sync processes at once may lose a count, never the file
+        if let Ok(b) = serde_json::to_vec(&s) {
+            let _ = crate::crdt::write_atomic(FILE, &b);
         }
     }
 }
@@ -76,19 +82,24 @@ impl Dropped {
 /// What `ozen health` says about frames dropped in the last day; nothing if none were.
 /// Refused parts aren't shown: the other Mac resends them, so they fix themselves.
 pub fn health() -> Vec<String> {
-    let d = recent(now());
+    let Seen {
+        d, record_error, ..
+    } = recent(now());
+    let s = |n: u64| if n == 1 { "" } else { "s" };
     let mut out: Vec<String> = d.advice().map(Into::into).into_iter().collect();
     if d.bad > 0 {
         out.push(format!(
-            "{} frames from another Mac couldn't be read (wrong key? both Macs need the same vault key)",
-            d.bad
+            "{} frame{} from another Mac couldn't be read (wrong key? both Macs need the same vault key)",
+            d.bad,
+            s(d.bad)
         ));
     }
     if d.records > 0 {
         out.push(format!(
-            "{} records from another Mac failed checks and were skipped (last: {})",
+            "{} record{} from another Mac failed checks and were skipped (last: {})",
             d.records,
-            d.last_error.as_deref().unwrap_or("unknown")
+            s(d.records),
+            record_error.as_deref().unwrap_or("unknown")
         ));
     }
     out
