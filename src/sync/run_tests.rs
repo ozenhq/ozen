@@ -256,9 +256,14 @@ fn a_denied_local_network_permission_is_named_other_send_errors_are_not() {
     let offline = std::io::Error::from_raw_os_error(51); // ENETUNREACH: no network
     assert_eq!(local_network(Err(offline)), Ok(()));
     assert_eq!(local_network(Ok(12)), Ok(()));
-    assert_eq!(
-        local_network(probe()),
-        Ok(()),
-        "this Mac allows it (the tests run on it)"
-    );
+}
+
+/// The real probe, on a Mac whose Local Network access is known. Ignored by default: CI's macOS runner
+/// denies it (there the probe gets EHOSTUNREACH, which is how this check was confirmed). Run by hand:
+/// `OZEN_LOCAL_NETWORK=allowed|denied cargo nextest run --release --run-ignored only -E 'test(real_probe)'`.
+#[test]
+#[ignore]
+fn the_real_probe_matches_this_macs_local_network_setting() {
+    let allowed = std::env::var("OZEN_LOCAL_NETWORK").as_deref() != Ok("denied");
+    assert_eq!(local_network(probe()).is_ok(), allowed);
 }
