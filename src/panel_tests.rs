@@ -187,6 +187,6 @@ fn transcript_corrects_speakers_and_text_and_marks_unsure() {
     );
     assert_eq!(
         v["footer"],
-        "  accuracy 88% on 8 checks (was 100%) · 3 tagged · 2 ignored · orange ? = unsure, tag it to teach ozen · click text to fix it"
+        "  accuracy 88% on 8 checks (started at 100%) · 3 tagged · 2 ignored · orange ? = unsure, tag it to teach ozen · click text to fix it"
     );
 }
