@@ -1,0 +1,5 @@
+---
+source: src/sync/protocol_golden_tests.rs
+expression: "serde_json::to_string(&msg).unwrap()"
+---
+{"t":"summary","id":1790520395366000000,"part":0,"parts":2,"s":[["tags","x",3,"0123456789abcdef"]],"b":[4,200]}

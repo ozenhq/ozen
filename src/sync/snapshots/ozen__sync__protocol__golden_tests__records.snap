@@ -1,0 +1,5 @@
+---
+source: src/sync/protocol_golden_tests.rs
+expression: "serde_json::to_string(&msg).unwrap()"
+---
+{"t":"records","r":[["tags","x",{"v":1,"val":"Dana"}],["lines","1@a",{"id":"1@a","t":1.0,"text":"hi","v":2}]]}

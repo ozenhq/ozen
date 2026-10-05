@@ -1,0 +1,5 @@
+---
+source: src/sync/protocol_golden_tests.rs
+expression: "serde_json::to_string(&msg).unwrap()"
+---
+{"t":"buckets","h":"q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="}
