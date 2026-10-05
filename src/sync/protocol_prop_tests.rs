@@ -193,21 +193,16 @@ fn synced_files(dir: &std::path::Path) -> Vec<(String, Option<Value>)> {
             serde_json::from_slice(&b).unwrap()
         }
     };
-    [
-        merge::LINES,
-        merge::TAGS,
-        merge::FIXES,
-        crate::mcp::VOCAB,
-        crate::places::FILE,
-    ]
-    .iter()
-    .map(|f| {
-        (
-            f.to_string(),
-            std::fs::read(dir.join(f)).ok().map(|b| parse(f, b)),
-        )
-    })
-    .collect()
+    crate::crdt::SYNCED
+        .iter()
+        .map(|(_, f)| *f)
+        .map(|f| {
+            (
+                f.to_string(),
+                std::fs::read(dir.join(f)).ok().map(|b| parse(f, b)),
+            )
+        })
+        .collect()
 }
 
 proptest! {

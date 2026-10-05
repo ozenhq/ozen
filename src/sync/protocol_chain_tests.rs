@@ -4,14 +4,6 @@ use super::tests::{Mac, exchange, folder};
 use serde_json::json;
 
 const MACS: usize = 5;
-/// The files sync writes (crdt.rs, merge.rs), compared byte for byte.
-const FILES: [&str; 5] = [
-    "lines.jsonl",
-    "tags.json",
-    "fixes.json",
-    "vocab.json",
-    "places.json",
-];
 
 /// Mac `i`'s folder: a line, tag, fix and word only it has; its own version of one shared tag at
 /// the same `v` as everyone else's (an equal-version conflict); and, on Mac 0, a later delete of
@@ -42,8 +34,11 @@ fn sandbox(i: usize) -> tempfile::TempDir {
     d
 }
 
+/// Every synced file (`crdt::SYNCED`), byte for byte, in the table's order.
 fn files(dir: &std::path::Path) -> Vec<(&'static str, Option<Vec<u8>>)> {
-    FILES.map(|f| (f, std::fs::read(dir.join(f)).ok())).to_vec()
+    crate::crdt::SYNCED
+        .map(|(_, f)| (f, std::fs::read(dir.join(f)).ok()))
+        .to_vec()
 }
 
 #[test]
@@ -63,8 +58,9 @@ fn five_macs_meeting_only_in_pairs_along_a_chain_end_byte_identical() {
         meet(&mut ms, a, b);
     }
     let first = files(dirs[0].path());
-    for (f, bytes) in &first[..4] {
-        assert!(bytes.is_some(), "{f} written"); // places.json: no Mac has places here
+    for (f, bytes) in &first {
+        // places.json: no Mac has places here
+        assert!(bytes.is_some() || *f == crate::places::FILE, "{f} written");
     }
     for (i, d) in dirs.iter().enumerate().skip(1) {
         assert_eq!(files(d.path()), first, "Mac {i} differs from Mac 0");

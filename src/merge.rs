@@ -44,6 +44,41 @@ pub struct Synced {
     pub lines: Vec<Row>,
 }
 
+/// One synced kind's records in a `Synced`.
+pub enum Records<'a> {
+    Map(&'a Row),
+    Rows(&'a [Row]),
+}
+
+impl Synced {
+    /// The records of `kind` (one of `crdt::SYNCED`); None for a kind this build doesn't know.
+    pub fn get(&self, kind: &str) -> Option<Records<'_>> {
+        Some(match kind {
+            "tags" => Records::Map(&self.tags),
+            "fixes" => Records::Map(&self.fixes),
+            "vocab" => Records::Map(&self.vocab),
+            "places" => Records::Rows(&self.places),
+            "lines" => Records::Rows(&self.lines),
+            _ => return None,
+        })
+    }
+
+    /// Adds received record `r` of `kind` under key `k`. Two versions of one map key keep the CRDT
+    /// winner, not the last; a kind this build doesn't know (from a newer ozen) is left out.
+    pub fn insert(&mut self, kind: &str, k: String, r: Value) {
+        let put =
+            |m: &mut Row| *m = crate::crdt::merge_maps(m, &[(k, r.clone())].into_iter().collect());
+        match (kind, &r) {
+            ("tags", _) => put(&mut self.tags),
+            ("fixes", _) => put(&mut self.fixes),
+            ("vocab", _) => put(&mut self.vocab),
+            ("places", Value::Object(o)) => self.places.push(o.clone()),
+            ("lines", Value::Object(o)) => self.lines.push(o.clone()),
+            _ => {}
+        }
+    }
+}
+
 /// The synced data in folder `d` ("" for this one, otherwise ending in '/'). A folder from before
 /// vocab.json has its words in vocab.txt.
 pub fn read_synced(d: &str) -> Synced {
