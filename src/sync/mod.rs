@@ -4,6 +4,7 @@ pub mod apply;
 pub mod buckets;
 pub mod config;
 pub mod key;
+pub mod local;
 pub mod protocol;
 pub mod seal;
 
