@@ -71,13 +71,13 @@ impl App {
                         }
                         later(1.0, move |app| {
                             snap(app, 5, &mut out);
-                            std::fs::write(&file2, out).expect("write dump");
                             match &saved {
                                 Some(b) => std::fs::write(&places, b).expect("restore places.json"),
                                 None => {
                                     let _ = std::fs::remove_file(&places);
                                 }
                             }
+                            std::fs::write(&file2, out).expect("write dump");
                             std::process::exit(0);
                         });
                     });
