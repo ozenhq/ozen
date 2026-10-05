@@ -153,3 +153,20 @@ fn status_starts_it_only_when_sync_is_on_none_runs_and_not_just_started() {
         assert!(wanted());
     });
 }
+
+#[test]
+fn it_stops_seconds_after_the_app_stops_asking_or_sync_is_turned_off() {
+    let d = tempfile::tempdir().unwrap();
+    at(d.path(), || {
+        fs::write(ON, "").unwrap();
+        assert!(!still_wanted(), "never asked");
+        let asked = File::create(ASKED).unwrap();
+        assert!(still_wanted());
+        let quiet = std::time::SystemTime::now() - IDLE - Duration::from_secs(1);
+        asked.set_modified(quiet).unwrap();
+        assert!(!still_wanted(), "the app stopped polling");
+        File::create(ASKED).unwrap();
+        fs::remove_file(ON).unwrap();
+        assert!(!still_wanted(), "sync turned off");
+    });
+}

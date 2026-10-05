@@ -22,8 +22,11 @@ pub const ASKED: &str = ".sync-asked";
 const LOCK: &str = ".sync.lock";
 /// When `status` last started it, so one that dies on start isn't respawned every poll.
 const STARTED: &str = ".sync-started";
-/// It exits once nobody has asked for this long (the app polls every 2s).
-const IDLE: Duration = Duration::from_secs(60);
+/// `status` starts it at most this often, so one that dies on start isn't respawned every poll.
+const PACE: Duration = Duration::from_secs(60);
+/// It exits once nobody has asked for this long: the app polls every 2s, so quitting it stops sync
+/// (and its Bonjour advertisement) within seconds.
+const IDLE: Duration = Duration::from_secs(10);
 /// How often an idle connection checks for local edits to send.
 const TICK: Duration = Duration::from_secs(2);
 
@@ -69,7 +72,7 @@ pub fn wanted() -> bool {
     }
     let _ = File::create(ASKED);
     let free = File::create(LOCK).is_ok_and(|l| l.try_lock().is_ok()); // released as `l` drops
-    let paced = age(STARTED).is_none_or(|a| a > IDLE);
+    let paced = age(STARTED).is_none_or(|a| a > PACE);
     if free && paced {
         let _ = File::create(STARTED);
     }
@@ -95,7 +98,12 @@ pub fn keep(log: impl Fn() -> File) {
     }
 }
 
-/// `ozen sync run`: same-network sync until nobody asks for a minute or sync is turned off.
+/// Sync is on and the app asked within `IDLE`.
+fn still_wanted() -> bool {
+    Path::new(ON).exists() && age(ASKED).is_some_and(|a| a < IDLE)
+}
+
+/// `ozen sync run`: same-network sync until nobody asks for `IDLE` or sync is turned off.
 pub fn run() -> Result<(), String> {
     let lock = File::create(LOCK).map_err(|e| format!("{LOCK}: {e}"))?;
     if lock.try_lock().is_err() {
@@ -109,9 +117,9 @@ pub fn run() -> Result<(), String> {
     // ponytail: every interface (Wi-Fi, Ethernet; loopback and VPNs carry no peers); per-interface
     // choice if one ever leaks the tag where it shouldn't (OFE-83)
     let _local = serve(&key, IfKind::All, Coalesced::retrain(), |step| step())?;
-    let _ = File::create(ASKED); // started by hand: the first minute counts as asked
-    while Path::new(ON).exists() && age(ASKED).is_some_and(|a| a < IDLE) {
-        std::thread::sleep(Duration::from_secs(5));
+    let _ = File::create(ASKED); // started by hand: counts as asked until `IDLE` passes
+    while still_wanted() {
+        std::thread::sleep(Duration::from_secs(1));
     }
     Ok(()) // dropping `_local` says goodbye on Bonjour and stops accepting
 }
