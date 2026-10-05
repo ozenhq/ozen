@@ -267,3 +267,49 @@ fn the_real_probe_matches_this_macs_local_network_setting() {
     let allowed = std::env::var("OZEN_LOCAL_NETWORK").as_deref() != Ok("denied");
     assert_eq!(local_network(probe()).is_ok(), allowed);
 }
+
+#[test]
+fn sync_runs_at_background_priority() {
+    // nextest runs each test in its own process, so this lowers only this test
+    assert!(!is_background());
+    background().unwrap();
+    assert!(is_background());
+}
+
+/// Kills the CPU burners when the test ends, however it ends.
+struct Burners(Vec<std::process::Child>);
+
+impl Drop for Burners {
+    fn drop(&mut self) {
+        for c in &mut self.0 {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+#[test]
+fn an_exchange_at_background_priority_completes_with_every_core_busy() {
+    // normal-priority processes on every core, as during a meeting with a busy call and transcriber
+    let cores = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
+    let _load = Burners(
+        (0..cores)
+            .map(|_| {
+                std::process::Command::new("/usr/bin/yes")
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect(),
+    );
+    background().unwrap();
+    let (a, b) = (
+        folder(&[line("1@a", "from a")]),
+        folder(&[line("2@b", "from b")]),
+    );
+    let key = [9; 32];
+    let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
+    wait_for("an exchange under load", || {
+        ids(a.path()).len() == 2 && ids(b.path()).len() == 2
+    });
+}

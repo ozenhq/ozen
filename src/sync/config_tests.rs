@@ -120,10 +120,14 @@ fn a_wrong_body_says_what_came_back() {
 
 #[test]
 fn sync_runs_no_external_program() {
-    // ozen's own binary (apply.rs runs `ozen retrain`) is the only program sync starts
+    // ozen's own binary (apply.rs runs `ozen retrain`) is the only program sync starts; tests may start
+    // others (CPU load in run_tests.rs)
     let start = ["Command", "::new("].concat(); // spelled apart so this file doesn't match itself
     for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync")).unwrap() {
         let p = f.unwrap().path();
+        if p.to_string_lossy().ends_with("_tests.rs") {
+            continue;
+        }
         let Ok(src) = std::fs::read_to_string(&p) else {
             continue; // snapshots/
         };

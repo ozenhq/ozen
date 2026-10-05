@@ -181,6 +181,9 @@ fn serve_here() -> Result<(), String> {
     }
     let key = key::stored()?.ok_or("no vault key here: run `ozen sync init` first")?;
     local_network(probe())?;
+    if let Err(e) = background() {
+        eprintln!("sync: can't lower priority: {e}"); // runs at normal priority instead
+    }
     // ponytail: every interface (Wi-Fi, Ethernet; loopback and VPNs carry no peers); per-interface
     // choice if one ever leaks the tag where it shouldn't (OFE-83)
     let _local = serve(&key, IfKind::All, Coalesced::retrain(), |step| step())?;
@@ -195,6 +198,24 @@ fn serve_here() -> Result<(), String> {
         std::thread::sleep(Duration::from_secs(1));
     }
     Ok(()) // dropping `_local` says goodbye on Bonjour and stops accepting
+}
+
+/// Puts this whole process at macOS background priority, as `taskpolicy -b -p` does for the
+/// transcriber (`ozen priority low`): sync is never latency-critical, and a big first exchange or
+/// batch must not compete with live transcription or the call. An idle Mac still runs it at full speed.
+fn background() -> std::io::Result<()> {
+    // SAFETY: a plain syscall on this process; no memory is passed
+    match unsafe { libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+/// Whether this process runs at background priority (`getpriority` answers 1).
+#[cfg(test)]
+fn is_background() -> bool {
+    // SAFETY: as in `background`
+    unsafe { libc::getpriority(libc::PRIO_DARWIN_PROCESS, 0) == 1 }
 }
 
 /// Sends one empty mDNS query to the mDNS group. With Ozen's Local Network access denied, macOS fails
