@@ -217,3 +217,53 @@ fn a_flood_of_summary_parts_leaves_the_session_working() {
     exchange(&mut a, &mut b);
     assert!(b.synced().contains_key(&("tags".into(), "x".into())));
 }
+
+/// What `ozen health` prints in `dir` (OFE-41).
+fn health_in(dir: &std::path::Path) -> Vec<String> {
+    super::tests::at(dir, crate::sync::dropped::health)
+}
+
+#[test]
+fn health_says_wrong_key_after_a_garbage_frame() {
+    let (_da, db, mut b, good) = two_tag_frames();
+    assert!(health_in(db.path()).is_empty(), "no drops, nothing said");
+    b.receive(&good[0]);
+    assert!(health_in(db.path()).is_empty(), "a good frame says nothing");
+    let garbage: Vec<u8> = (0..1024).map(|i| (i * 31 % 251) as u8).collect();
+    b.receive(&garbage);
+    b.receive(&garbage);
+    assert_eq!(b.s.dropped.bad, 2);
+    let said = health_in(db.path());
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].starts_with("2 frames from another Mac couldn't be read (wrong key?"));
+}
+
+#[test]
+fn health_says_update_ozen_after_a_newer_frame_and_counts_add_up_across_sessions() {
+    let (_da, db, mut b, good) = two_tag_frames();
+    let mut v2 = seal::open(&[7; 32], "vault", &good[0]).unwrap();
+    v2[0] = VERSION + 1;
+    b.receive(&raw_frame(&v2));
+    assert_eq!(
+        health_in(db.path()),
+        ["another Mac runs a newer ozen: update ozen to sync with it"]
+    );
+    // a later sync process starts its counts at zero; the day's file keeps adding
+    let mut again = Mac::new(db.path());
+    again.receive(&[1; 1024]);
+    let said = health_in(db.path());
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[1].starts_with("1 frames"));
+}
+
+#[test]
+fn health_forgets_drops_a_day_old() {
+    let (_da, db, mut b, _) = two_tag_frames();
+    b.receive(&[1; 1024]);
+    let file = db.path().join(crate::sync::dropped::FILE);
+    let mut seen: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    seen["at"] = json!(seen["at"].as_u64().unwrap() - 24 * 60 * 60);
+    std::fs::write(&file, seen.to_string()).unwrap();
+    assert!(health_in(db.path()).is_empty());
+}

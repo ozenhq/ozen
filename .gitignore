@@ -58,3 +58,4 @@ here.json.*
 
 # relay URL saved by `ozen sync init --server` (the vault key lives in the Keychain)
 .sync-url
+.sync-dropped.json

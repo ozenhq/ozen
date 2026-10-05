@@ -225,8 +225,15 @@ impl Session {
     /// all its parts are in) with the records the other Mac lacks; records are merged into the files here.
     /// A frame this Mac can't use is dropped and counted in `dropped`, never merged, and the session
     /// goes on: the sender still has its records and resends them at the next summary exchange. Only
-    /// failing to write here is an error.
+    /// failing to write here is an error. What was dropped is noted for `ozen health` (dropped.rs).
     pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let before = self.dropped.clone();
+        let out = self.take(frame);
+        self.dropped.note_since(&before);
+        out
+    }
+
+    fn take(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
         let msg = match self.decode(frame) {
             Ok(Some(m)) => m,
             Ok(None) => {
