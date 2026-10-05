@@ -114,3 +114,28 @@ fn a_v2_and_a_v1_mac_converge_and_then_stay_quiet() {
     assert!(b.changes().is_empty());
     assert_eq!(exchange(&mut a, &mut b), 0, "in sync: bucket hashes only");
 }
+
+#[test]
+fn a_line_edited_before_the_switch_to_v1_is_still_sent() {
+    let da = folder(json!([transcribed("Dana", 0.3, 1)]), json!({}));
+    let db = folder(json!([]), json!({}));
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    b.s.versions = Versions::new(1);
+    a.hello(); // told in v2
+    let mut edited = transcribed("Dana", 0.3, 1);
+    (edited["text"], edited["v"]) = (json!("hello"), json!(2));
+    std::fs::write(da.path().join("lines.jsonl"), format!("{edited}\n")).unwrap();
+    let hb = b.hello();
+    a.receive(&hb[0]); // a hears b: now speaks v1
+    assert_eq!(a.s.versions.speak(), 1);
+    let sent = a.changes();
+    assert_eq!(sent.len(), 1, "the edited line goes out");
+    for f in sent {
+        b.receive(&f);
+    }
+    let got = b.synced();
+    assert_eq!(
+        got[&("lines".to_string(), "1@a".to_string())]["text"],
+        "hello"
+    );
+}
