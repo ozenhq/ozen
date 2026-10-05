@@ -1793,7 +1793,7 @@ impl App {
                 let on = s.state() == objc2_app_kit::NSControlStateValueOn;
                 *out += &format!("\nSWITCH {}", if on { "on" } else { "off" });
             }
-            for sub in v.subviews().iter() {
+            for sub in &v.subviews() {
                 walk(&sub, out);
             }
         }
