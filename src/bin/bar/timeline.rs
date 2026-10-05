@@ -152,6 +152,14 @@ pub fn talk(segments: &[Segment], lanes: &[String]) -> Vec<(f64, f64)> {
     out
 }
 
+/// A talk share as a whole percent; a voice that spoke at all never reads 0%.
+fn percent(share: f64) -> String {
+    match (share * 100.0).round() as i64 {
+        0 if share > 0.0 => "<1%".into(),
+        p => format!("{p}%"),
+    }
+}
+
 fn minutes(secs: f64) -> String {
     let m = (secs / 60.0).round() as i64;
     if secs < 60.0 {
@@ -531,7 +539,7 @@ impl TimelineView {
                     attrs,
                 )
             };
-            let stats = format!("{} · {}%", minutes(secs), (share * 100.0).round() as i64);
+            let stats = format!("{} · {}", minutes(secs), percent(share));
             row(name, &bold, g.origin.x + 20.0, GUTTER - 82.0, 5.0);
             row(&stats, &small, g.origin.x + GUTTER - 62.0, 56.0, 6.0);
             // share of the talk, against whoever talked most
