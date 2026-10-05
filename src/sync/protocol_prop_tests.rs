@@ -35,6 +35,11 @@ fn mac() -> impl Strategy<Value = Edits> {
 
 fn place(id: &str, v: u64, x: Option<u8>) -> Value {
     match x {
+        // odd values also carry coordinates, as places set from the map do
+        Some(x) if x % 2 == 1 => {
+            json!({"id": id, "v": v, "label": format!("place {x}"), "action": "record",
+            "lat": 32.08, "lon": 34.78 + f64::from(x) / 100.0, "radius": 150.0})
+        }
         Some(x) => json!({"id": id, "v": v, "label": format!("place {x}"), "action": "record"}),
         None => json!({"id": id, "v": v, "del": true}),
     }
@@ -191,11 +196,22 @@ proptest! {
     /// received records): from the same two folders they must leave identical files, or a user who merged
     /// a backup by hand and then synced would see Macs diverge (OFE-87).
     #[test]
-    fn ozen_merge_and_sync_leave_the_same_files(a in mac(), b in mac()) {
+    fn ozen_merge_and_sync_leave_the_same_files(a in mac(), b in mac(), legacy in any::<bool>()) {
         let (by_merge, _) = sandbox(&a);
         let (by_sync, _) = sandbox(&a);
         let (theirs, _) = sandbox(&b);
         let (theirs_too, _) = sandbox(&b);
+        if legacy {
+            // B is a folder from before vocab.json: its live words in vocab.txt
+            for d in [&theirs, &theirs_too] {
+                let json = d.path().join(crate::mcp::VOCAB);
+                let v: serde_json::Map<String, Value> =
+                    serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+                let words: Vec<&String> = v.iter().filter(|(_, e)| e.get("val").is_some()).map(|(w, _)| w).collect();
+                std::fs::write(d.path().join(crate::mcp::VOCAB_TXT), words.iter().map(|w| format!("{w}\n")).collect::<String>()).unwrap();
+                std::fs::remove_file(json).unwrap();
+            }
+        }
         super::tests::at(by_merge.path(), || merge::merge_files(&theirs.path().to_string_lossy()))
             .unwrap();
         let (mut ma, mut mb) = (Mac::new(by_sync.path()), Mac::new(theirs_too.path()));
