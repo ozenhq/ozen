@@ -2376,6 +2376,7 @@ dependencies = [
  "indexmap",
  "insta",
  "jiff",
+ "libc",
  "machine-uid",
  "mdns-sd",
  "objc2",
