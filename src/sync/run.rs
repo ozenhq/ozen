@@ -17,9 +17,11 @@ use std::time::Duration;
 /// Written by `ozen sync init`: this folder syncs. Without it `status` starts nothing.
 pub const ON: &str = ".sync-on";
 
-/// Sync is on here: `init` wrote `ON`, or saved a relay URL before `ON` existed.
+/// Sync is on here: `init` wrote `ON`, or saved a relay URL before `ON` existed; and `ozen sync undo`
+/// hasn't paused it.
 fn on() -> bool {
-    Path::new(ON).exists() || Path::new(super::config::FILE).exists()
+    (Path::new(ON).exists() || Path::new(super::config::FILE).exists())
+        && !Path::new(super::restore::PAUSED).exists()
 }
 /// Touched by each `ozen status` poll while sync is on.
 pub const ASKED: &str = ".sync-asked";

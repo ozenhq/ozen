@@ -1,0 +1,198 @@
+use super::*;
+use crate::merge::read_synced;
+use crate::sync::apply::{Coalesced, received};
+use serde_json::json;
+
+/// Runs `f` in a fresh ozen folder holding one line and one tag.
+fn in_folder<T>(f: impl FnOnce(&Path) -> T) -> T {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("lines.jsonl"),
+        "{\"id\":\"1@a\",\"t\":1.0,\"text\":\"hi\",\"v\":1}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.path().join("tags.json"),
+        json!({"1@a": {"v": 1, "val": "Dana"}}).to_string(),
+    )
+    .unwrap();
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let back = std::env::current_dir().unwrap();
+    std::env::set_current_dir(d.path()).unwrap();
+    let r = f(d.path());
+    std::env::set_current_dir(back).unwrap();
+    r
+}
+
+/// A batch from another Mac with `n` new lines.
+fn batch(n: usize) -> Synced {
+    let lines = (0..n)
+        .map(|i| {
+            json!({"id": format!("{i}@b"), "t": i as f64, "text": "x", "v": 1})
+                .as_object()
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    Synced {
+        lines,
+        ..Default::default()
+    }
+}
+
+fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut s: Vec<(String, Vec<u8>)> = files()
+        .filter_map(|f| Some((f.to_string(), std::fs::read(dir.join(f)).ok()?)))
+        .collect();
+    s.sort();
+    s
+}
+
+#[test]
+fn a_big_batch_takes_a_restore_point_and_a_small_one_doesnt() {
+    in_folder(|_| {
+        received(&batch(10), &Coalesced::new(|| {})).unwrap();
+        assert!(points().is_empty(), "10 records: no restore point");
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        assert_eq!(points().len(), 1, "500 records: one restore point");
+        assert_eq!(
+            read_synced("").lines.len(),
+            1 + 500,
+            "the batches share ids 0..9"
+        );
+    });
+}
+
+#[test]
+fn undo_restores_the_files_byte_for_byte_and_pauses_sync() {
+    in_folder(|dir| {
+        let before = snapshot(dir);
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        assert_ne!(snapshot(dir), before);
+        let said = undo().unwrap();
+        assert_eq!(snapshot(dir), before, "byte-identical");
+        assert!(Path::new(PAUSED).exists(), "sync paused: {said}");
+        assert_eq!(
+            points().len(),
+            2,
+            "what was there before the undo is a restore point too"
+        );
+    });
+}
+
+#[test]
+fn undo_with_no_restore_point_says_so_and_changes_nothing() {
+    in_folder(|dir| {
+        let before = snapshot(dir);
+        assert!(undo().unwrap_err().contains("no restore point"));
+        assert_eq!(snapshot(dir), before);
+        assert!(!Path::new(PAUSED).exists());
+    });
+}
+
+#[test]
+fn restore_points_past_five_or_a_week_old_are_pruned() {
+    in_folder(|_| {
+        let now = now();
+        let day = 24 * 60 * 60;
+        let ages = [
+            9 * day,
+            8 * day,
+            6 * day,
+            5 * day,
+            4 * day,
+            3 * day,
+            2 * day,
+            day,
+        ];
+        for a in ages {
+            std::fs::create_dir_all(Path::new(DIR).join((now - a).to_string())).unwrap();
+        }
+        prune(now);
+        let left: Vec<u64> = points().iter().map(|(t, _, _)| now - t).collect();
+        assert_eq!(
+            left,
+            [5 * day, 4 * day, 3 * day, 2 * day, day],
+            "the newest five, none past a week"
+        );
+    });
+}
+
+#[test]
+fn a_restore_point_past_a_week_old_is_pruned_even_with_room_for_it() {
+    in_folder(|_| {
+        let (now, day) = (now(), 24 * 60 * 60);
+        for a in [8 * day, day] {
+            std::fs::create_dir_all(Path::new(DIR).join((now - a).to_string())).unwrap();
+        }
+        prune(now);
+        let left: Vec<u64> = points().iter().map(|(t, _, _)| now - t).collect();
+        assert_eq!(left, [day]);
+    });
+}
+
+#[test]
+fn a_sync_in_many_big_frames_keeps_one_restore_point_from_before_the_first() {
+    in_folder(|dir| {
+        let before = snapshot(dir);
+        for _ in 0..8 {
+            received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        }
+        assert_eq!(points().len(), 1, "one point for the whole sync");
+        undo().unwrap();
+        assert_eq!(snapshot(dir), before, "back to before the first frame");
+    });
+}
+
+#[test]
+fn nothing_merges_while_undo_has_paused_sync_and_a_second_undo_puts_back_what_the_first_replaced() {
+    in_folder(|dir| {
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        let synced = snapshot(dir);
+        undo().unwrap();
+        let undone = snapshot(dir);
+        let err = received(&batch(200), &Coalesced::new(|| {})).unwrap_err();
+        assert!(err.contains("paused"), "{err}");
+        assert_eq!(
+            snapshot(dir),
+            undone,
+            "a frame during the pause merged nothing"
+        );
+        undo().unwrap();
+        assert_eq!(snapshot(dir), synced, "undoing the undo");
+    });
+}
+
+#[test]
+fn after_an_undo_and_init_a_resent_bad_batch_gets_its_own_restore_point() {
+    in_folder(|dir| {
+        let clean = snapshot(dir);
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        undo().unwrap();
+        std::fs::remove_file(PAUSED).unwrap(); // what `ozen sync init` does
+        received(&batch(500), &Coalesced::new(|| {})).unwrap(); // the bad batch again, minutes later
+        undo().unwrap();
+        assert_eq!(
+            snapshot(dir),
+            clean,
+            "undo goes back to before the batch, not to what undo saved"
+        );
+    });
+}
+
+#[test]
+fn undo_waits_for_a_batch_being_merged() {
+    in_folder(|dir| {
+        received(&batch(500), &Coalesced::new(|| {})).unwrap();
+        let synced = snapshot(dir);
+        let held = merging().unwrap(); // a batch is mid-merge
+        let undoing = std::thread::spawn(undo); // same working directory, under the test's CWD lock
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(snapshot(dir), synced, "undo didn't restore under a merge");
+        drop(held);
+        undoing.join().unwrap().unwrap();
+        assert_ne!(snapshot(dir), synced);
+    });
+}

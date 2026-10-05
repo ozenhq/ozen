@@ -12,6 +12,7 @@ pub mod parts;
 pub mod preview;
 pub mod protocol;
 pub mod records;
+pub mod restore;
 pub mod run;
 pub mod seal;
 pub mod summaries;
@@ -37,12 +38,15 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 Turns sync on here: while Ozen.app runs, it keeps `ozen sync run` going
   preview       what turning sync on would share (counts, dates, places) and what it never sends; reads
                 files only, connects nowhere
+  undo          put the synced files back as they were before the last big batch from another Mac
+                (saving the current ones first, so it can be undone too) and pause sync until `init`
   run           sync with this vault's Macs on this network until the app stops asking (Ozen.app starts it)";
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>) -> Result<String, String> {
     let k = key::keychain()?;
     std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
+    let _ = std::fs::remove_file(restore::PAUSED); // resumes after `ozen sync undo`
     if let Some(s) = server {
         config::save(s, Path::new(config::FILE))?;
     }
@@ -69,6 +73,16 @@ pub fn cli() {
             if let Err(e) = run::run() {
                 eprintln!("{e}");
                 std::process::exit(1);
+            }
+            return;
+        }
+        ["undo"] => {
+            match restore::undo() {
+                Ok(s) => println!("{s}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
             return;
         }
