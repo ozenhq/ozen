@@ -131,7 +131,7 @@ fn stats_and_charts() {
         Align::Left,
         GUTTER + 4.0,
         16.0,
-        "3 waiting".into()
+        "2 waiting".into() // the peak: both waiting chunks, at the end
     )));
     assert_eq!(
         tip(&d.chunks[0], &Utc),

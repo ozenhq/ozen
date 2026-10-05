@@ -362,7 +362,8 @@ pub fn pace(d: &Data, a: f64, b: f64, w: f64, clock: &dyn Clock) -> Vec<Op> {
         queue.push((s, q));
     }
     let max_lag = lags.iter().map(|&(_, l)| l).fold(60.0, f64::max);
-    let max_q = queue.iter().map(|&(_, q)| q).fold(3, usize::max);
+    let peak = queue.iter().map(|&(_, q)| q).max().unwrap_or(0);
+    let max_q = peak.max(1); // the line's scale tops out at the real peak, so its label is a count
     let y = |l: f64| bottom - l / max_lag * (bottom - top);
     let yq = |q: usize| bottom - q as f64 / max_q as f64 * (bottom - top);
     ops.push(Op::Text(
@@ -384,7 +385,11 @@ pub fn pace(d: &Data, a: f64, b: f64, w: f64, clock: &dyn Clock) -> Vec<Op> {
         Align::Left,
         GUTTER + 4.0,
         top + 8.0,
-        format!("{max_q} waiting"),
+        if peak == 0 {
+            "none waiting".into()
+        } else {
+            format!("{peak} waiting")
+        },
     ));
     ops.push(Op::Stroke(
         Col::Line,
