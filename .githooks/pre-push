@@ -9,13 +9,14 @@ touched=
 while read -r _ local_sha _ remote_sha; do
     [ "$local_sha" = "$zero" ] && continue # a branch deletion pushes nothing
     if [ "$remote_sha" = "$zero" ]; then
-        # a new branch: what it adds over origin/main
-        base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=
-        range=${base:+$base..}$local_sha
+        base=$(git merge-base "$local_sha" origin/main 2>/dev/null) # a new branch: what it adds to main
     else
-        range=$remote_sha..$local_sha
+        base=$remote_sha
     fi
-    if git diff --name-only "$range" -- src/sync src/crdt.rs src/merge.rs | grep -q .; then
+    # can't tell what changed (no origin/main, or a remote commit not fetched here): run them anyway
+    if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+        touched=1
+    elif git diff --name-only "$base" "$local_sha" -- src/sync src/crdt.rs src/merge.rs | grep -q .; then
         touched=1
     fi
 done
