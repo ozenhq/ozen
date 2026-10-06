@@ -272,6 +272,12 @@ fn git(args: &[&str]) -> bool {
     }
 }
 
+/// Before the transcriber starts: the newest voiceprints from the GitHub registry, so tags made on other
+/// Macs count. False when the pull failed. With sync there's nothing to pull (see `retrain`).
+pub fn pull_registry() -> bool {
+    crate::sync::run::configured() || git(&["pull", "-q", "--ff-only"])
+}
+
 /// The registry's upstream commit as last fetched, if it has one.
 fn head_of_upstream() -> Option<String> {
     let out = Command::new("git")
@@ -291,10 +297,16 @@ fn now() -> String {
 pub fn retrain(retry: bool) {
     // Start from the newest registry. Local registry state is disposable: this machine's tags live in
     // tags.json and lines.jsonl (append-only), so rebuilding re-applies them on top of everyone else's.
-    if git(&["fetch", "-q"]) {
-        git(&["reset", "-q", "--hard", "@{u}"]);
-    } else {
-        eprintln!("registry fetch failed; training on the local copy");
+    // With sync, lines (with their prints) and tags reach every Mac directly, so each one builds the same
+    // voiceprints from them alone, and none goes to or comes from the GitHub registry (biometric data on a
+    // third-party service). `voices/` stays the local place the transcriber reads them from.
+    let synced = crate::sync::run::configured();
+    if !synced {
+        if git(&["fetch", "-q"]) {
+            git(&["reset", "-q", "--hard", "@{u}"]);
+        } else {
+            eprintln!("registry fetch failed; training on the local copy");
+        }
     }
     // By id, the last copy of a line winning (two transcribers on one chunk).
     let rows = prints();
@@ -331,9 +343,9 @@ pub fn retrain(retry: bool) {
             .collect()
     };
 
-    // The registry keeps tags from earlier meetings.
+    // The registry keeps tags from earlier meetings; with sync, those lines and tags are all here.
     let mut samples: IndexMap<String, Samples> = IndexMap::new();
-    for (f, v) in registry() {
+    for (f, v) in registry().into_iter().filter(|_| !synced) {
         let name = v
             .get("name")
             .and_then(Value::as_str)
@@ -516,6 +528,10 @@ pub fn retrain(retry: bool) {
     .into();
     put(STATS, &dump(&stats, true));
 
+    if synced {
+        println!("{}", dump(&stats, false));
+        return;
+    }
     git(&[
         "add",
         "-A",

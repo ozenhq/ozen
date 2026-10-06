@@ -311,10 +311,7 @@ const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, t
 fn start_transcriber() {
     // First: the pull below can take seconds, and a `status` poll in between would start a second transcriber.
     let _ = File::create(TR_STARTED);
-    if !ok(cmd("git")
-        .args(["-C", "voices", "pull", "-q", "--ff-only"])
-        .stderr(Stdio::null()))
-    {
+    if !train::pull_registry() {
         let _ = std::io::Write::write_all(
             &mut log(),
             b"voices registry pull failed; using local copy\n",
