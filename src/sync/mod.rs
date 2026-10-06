@@ -61,8 +61,7 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, String> {
     let k = key::keychain()?;
-    std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
-    let _ = std::fs::remove_file(restore::PAUSED); // resumes after `ozen sync undo`
+    turn_on()?;
     if let Some(s) = server {
         config::save(s, Path::new(config::FILE))?;
     }
@@ -82,6 +81,17 @@ pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, Stri
     }
     let url = config::server()?; // OZEN_SYNC_URL still wins over what was just saved
     Ok(report(&key::vault_id(&k), url.as_deref()))
+}
+
+/// Sync on here, and not paused (by `ozen sync undo` or `off`): what `init` and `join` both do.
+pub(super) fn turn_on() -> Result<(), String> {
+    std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
+    match std::fs::remove_file(restore::PAUSED) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("{}: {e}", restore::PAUSED))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// What `init` prints: the vault by its short id only (key::short), and the relay or that sync is off.

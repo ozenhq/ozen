@@ -71,7 +71,10 @@ fn after_off_a_frame_still_in_flight_merges_nothing() {
 fn a_keychain_error_is_reported_after_sync_is_already_off() {
     in_synced_folder(|| {
         let e = off_with(|| Err("Keychain: denied".into())).unwrap_err();
-        assert!(e.contains("denied"));
+        assert!(
+            e.contains("denied") && e.contains("run `ozen sync off` again"),
+            "{e}"
+        );
         assert!(
             !run::configured(),
             "sync is off even so: nothing restarts it"
@@ -111,5 +114,25 @@ fn off_waits_for_a_batch_being_merged() {
         drop(held);
         going.join().unwrap().unwrap();
         assert!(!Path::new(run::ON).exists());
+    });
+}
+
+#[test]
+fn turning_sync_on_again_after_off_merges_again() {
+    in_synced_folder(|| {
+        off_with(|| Ok(())).unwrap();
+        crate::sync::turn_on().unwrap(); // what `ozen sync join` and `init` do
+        assert!(run::configured() && !Path::new(restore::PAUSED).exists());
+        let theirs = crate::merge::Synced {
+            lines: vec![
+                json!({"id": "2@b", "t": 2.0, "text": "after", "v": 1})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ],
+            ..Default::default()
+        };
+        received(&theirs, &Coalesced::new(|| {})).unwrap();
+        assert!(fs::read_to_string("lines.jsonl").unwrap().contains("2@b"));
     });
 }

@@ -17,10 +17,13 @@ pub fn off_with(forget: impl FnOnce() -> Result<(), String>) -> Result<String, S
             _ => {}
         }
     }
-    forget()?;
+    forget().map_err(|e| {
+        format!("sync is off, but the vault key is still in the Keychain ({e}); run `ozen sync off` again")
+    })?;
     Ok("sync is off on this Mac: its vault key and relay are gone, and the running sync stops within \
-a second. Your meetings here are untouched, and no copy of them is on any server. To sync again, \
-`ozen sync join` from another Mac or `ozen sync init`."
+a second. Your meetings here are untouched, and no copy of them is on any server; what sync kept here \
+(restore points in .sync-restore/) stays with them. To sync again, `ozen sync join` from another Mac \
+or `ozen sync init`."
         .into())
 }
 
