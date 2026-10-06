@@ -198,8 +198,9 @@ Set it up on the first Mac with `target/release/ozen sync preview` (what would b
 `target/release/ozen sync init --server wss://<your relay>` (or `--lan-only`). While Ozen.app runs it keeps
 `ozen sync run` going in the background; `ozen health` says if it stops. To add another Mac, run
 `target/release/ozen sync pair` on the first one (it puts a pairing code on the clipboard, hidden from clipboard
-managers and cleared after two minutes; send it to yourself privately), then `target/release/ozen sync join` on
-the new Mac and paste it at the prompt. The key goes Mac to Mac by your hand, never through the relay; a
+managers and cleared after two minutes), then `target/release/ozen sync join` on the new Mac and paste it at the
+prompt if your Macs share a clipboard (Handoff's Universal Clipboard), or type it in: dashes, spaces and case
+don't matter, and a typo is caught. The key goes Mac to Mac by your hand, never through the relay; a
 LAN-only Mac's code makes the new one LAN-only too.
 
 ## Use
