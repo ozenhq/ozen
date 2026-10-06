@@ -157,3 +157,22 @@ fn a_redirect_to_something_that_answers_ok_is_not_a_relay() {
     });
     assert!(healthy(&url).is_err());
 }
+
+#[test]
+fn lan_only_means_no_relay_whatever_is_saved_or_set() {
+    let d = tempfile::tempdir().unwrap();
+    let saved = d.path().join(FILE);
+    std::fs::write(&saved, "wss://relay.example").unwrap();
+    let env = Some("wss://other.example".to_string());
+    assert_eq!(pick(true, env.clone(), &saved), Ok(None));
+    assert_eq!(pick(true, None, &saved), Ok(None));
+    // off again: the saved URL (and the env override) come back as they were
+    assert_eq!(
+        pick(false, None, &saved),
+        Ok(Some("wss://relay.example".into()))
+    );
+    assert_eq!(
+        pick(false, env, &saved),
+        Ok(Some("wss://other.example".into()))
+    );
+}
