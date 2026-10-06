@@ -18,6 +18,7 @@ pub mod records;
 pub mod restore;
 pub mod run;
 pub mod seal;
+pub mod status;
 pub mod summaries;
 pub mod talk;
 pub mod valid;
@@ -32,6 +33,7 @@ pub fn health() -> Vec<String> {
     let mut lines = dropped::health();
     lines.extend(run::health());
     lines.extend(link::health());
+    lines.extend(status::health());
     lines
 }
 
@@ -52,6 +54,8 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
   run           sync with this vault's Macs, on this network and through the relay, until the app stops asking
                 (Ozen.app starts it)
   wake          tell a running `sync run` the Mac just woke, so it reconnects now (Ozen.app runs it on wake)
+  status        JSON: whether sync is on and running, the relay connection, other Macs online now, and
+                when this Mac last synced with each of the others
   pair          copy a pairing code for another Mac to the clipboard (cleared after 2 minutes); the
                 key never goes through the relay
   join [--force]
@@ -151,6 +155,7 @@ pub fn cli() {
         ["init", "--server", url] => init(Some(url), Some(false)),
         ["init", "--lan-only"] => init(None, Some(true)),
         ["init", "--relay"] => init(None, Some(false)),
+        ["status"] => Ok(status::status().to_string()),
         ["pair"] => pair::pair(),
         ["join"] => pair::join_prompt(false),
         ["join", "--force"] => pair::join_prompt(true),

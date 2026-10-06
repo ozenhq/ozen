@@ -1,0 +1,11 @@
+---
+source: src/sync/status_tests.rs
+expression: "at(d.path(), || status_at(NOW))"
+---
+{
+  "macs": [],
+  "other_macs_online": null,
+  "relay": null,
+  "running": false,
+  "sync": "off"
+}

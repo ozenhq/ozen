@@ -21,6 +21,10 @@ pub(super) enum Msg {
         h: String,
         #[serde(default = "one")]
         max: u8,
+        /// The sending Mac's id (`crdt::device`) and name, for `ozen sync status` (status.rs); older
+        /// ozens send none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<(String, String)>,
     },
     /// Part `part` (of `parts`) of summary `id`: (kind, key, v, hash) for the sender's records in buckets
     /// `b`.
