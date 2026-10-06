@@ -201,7 +201,7 @@ fn mac_at(
         if peers.fetch_add(1, Ordering::SeqCst) == 0 {
             return;
         }
-        let mut session = Session::new([9; 32], &v);
+        let mut session = Session::with([9; 32], &v, crate::sync::apply::Coalesced::new(|| {}));
         let _ = talk(s, Duration::from_secs(1), |i| {
             at(&dir, || match i {
                 Input::Hello => session.hello(),

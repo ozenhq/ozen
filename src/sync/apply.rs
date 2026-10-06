@@ -25,6 +25,10 @@ impl Coalesced {
     /// Relearn, then retrain in a child `ozen retrain`, waiting for it on the job's thread. The child is
     /// this binary: sync runs inside `ozen`, whose working directory is already the ozen checkout.
     pub fn retrain() -> Self {
+        // In a test, "this binary" is the test runner: `retrain` would run every test named so.
+        if cfg!(test) {
+            return Coalesced::new(|| {});
+        }
         Coalesced::new(|| {
             if let Err(e) = crate::fixes::relearn() {
                 eprintln!("sync: relearn: {e}");
