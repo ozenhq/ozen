@@ -33,9 +33,27 @@ pub fn json(args: &[&str]) -> Value {
 
 /// Runs the CLI off the main thread, then `done(stdout, stderr, exit code)` on it (trimmed).
 pub fn run(args: &[&str], done: impl FnOnce(String, String, i32) + Send + 'static) {
+    run_input(args, String::new(), done);
+}
+
+/// `run`, with `input` on its stdin.
+pub fn run_input(
+    args: &[&str],
+    input: String,
+    done: impl FnOnce(String, String, i32) + Send + 'static,
+) {
     let mut c = command(args);
+    c.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     std::thread::spawn(move || {
-        let (out, err, code) = match c.output() {
+        let ran = c.spawn().and_then(|mut child| {
+            let mut stdin = child.stdin.take().expect("piped");
+            std::io::Write::write_all(&mut stdin, input.as_bytes())?;
+            drop(stdin); // EOF
+            child.wait_with_output()
+        });
+        let (out, err, code) = match ran {
             Ok(o) => (
                 String::from_utf8_lossy(&o.stdout).trim().to_string(),
                 String::from_utf8_lossy(&o.stderr).trim().to_string(),

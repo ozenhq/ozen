@@ -104,3 +104,23 @@ fn health_speaks_up_only_after_seven_days() {
         "nothing while sync is off"
     );
 }
+
+#[test]
+fn status_lan_only() {
+    let (d, _lock) = running(1);
+    fs::write(d.path().join(super::super::config::LAN_ONLY), "").unwrap();
+    fs::remove_file(d.path().join(super::super::link::STATUS)).unwrap(); // no relay link at all
+    snapshot("status_lan_only", at(d.path(), || status_at(NOW)));
+}
+
+#[test]
+fn status_when_the_runner_stopped_with_an_error() {
+    let d = tempfile::tempdir().unwrap();
+    fs::write(d.path().join(super::super::run::ON), "").unwrap();
+    fs::write(
+        d.path().join(super::super::run::ERROR),
+        "Local Network access is off\n",
+    )
+    .unwrap();
+    snapshot("status_runner_error", at(d.path(), || status_at(NOW)));
+}
