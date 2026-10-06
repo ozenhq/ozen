@@ -48,6 +48,8 @@ parquet = { version = "60.0.0", default-features = false, features = ["snap"] }
 plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }  # the relay link's TLS (sync/link.rs)
+rustls-platform-verifier = "0.7"  # trust the relay's certificate as macOS does, like ureq in sync init
 screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }
 security-framework = "3.7.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -60,6 +62,7 @@ tempfile = "3.27.0"  # crash-safe writes of synced files (crdt::write_atomic)
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["rt", "macros", "io-std"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "__rustls-tls"] }  # relay WebSocket (sync/link.rs)
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
 url = "2.5.8"
 hmac = "0.13.0"
