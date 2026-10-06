@@ -195,4 +195,4 @@ pub fn cli() {
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
-mod tests;
+pub(super) mod tests;

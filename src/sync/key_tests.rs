@@ -216,7 +216,7 @@ fn init_remembers_the_vault_so_a_lost_key_is_noticed() {
     let _cwd = crate::CWD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let back = std::env::current_dir().unwrap();
+    let _back = crate::sync::tests::Back(std::env::current_dir().unwrap());
     std::env::set_current_dir(d.path()).unwrap();
     assert_eq!(remembered(), None, "a first run");
     remember(&key([7; 32])).unwrap();
@@ -231,7 +231,6 @@ fn init_remembers_the_vault_so_a_lost_key_is_noticed() {
         || Ok(None),
         |_| panic!("no new key"),
     );
-    std::env::set_current_dir(back).unwrap();
     assert!(r.unwrap_err().contains("ozen sync join"));
 }
 

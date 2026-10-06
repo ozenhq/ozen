@@ -192,7 +192,8 @@ fn serve_here() -> Result<(), String> {
     if !on() {
         return Err("sync is off here: run `ozen sync init` first".into());
     }
-    let key = key::stored()?.ok_or("no vault key here: run `ozen sync init` first")?;
+    let key = key::stored()?
+        .ok_or_else(|| key::missing("no vault key here: run `ozen sync init` first"))?;
     local_network(probe())?;
     if let Err(e) = background() {
         eprintln!("sync: can't lower priority: {e}"); // runs at normal priority instead

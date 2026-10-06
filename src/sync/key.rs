@@ -85,6 +85,20 @@ pub fn remember(k: &Key) -> Result<(), String> {
     std::fs::write(VAULT, short(&vault_id(k))).map_err(|e| format!("{VAULT}: {e}"))
 }
 
+/// What to do when this Mac was in vault `v` but its key is gone from the Keychain.
+fn lost(v: &str) -> String {
+    format!(
+        "this Mac was in vault {v}, but its key is gone from the Keychain; a new key would leave \
+that vault. Run `ozen sync pair` on another Mac in it, then `ozen sync join` here. To start a new \
+vault instead, run `ozen sync off`, then `ozen sync init`"
+    )
+}
+
+/// Why there's no key here: lost (`lost`) if this Mac was in a vault, else `first`, the first-run hint.
+pub fn missing(first: &str) -> String {
+    remembered().map_or_else(|| first.to_string(), |v| lost(&v))
+}
+
 /// The stored key, or a new random one saved through `write`. Running it again keeps the key. If none
 /// is stored but this Mac was in vault `remembered`, the key was lost (a Keychain reset, a migration):
 /// a new one would silently leave that vault, so it errors with how to get the key back instead.
@@ -97,11 +111,7 @@ pub fn load_or_create(
         return from_bytes(k);
     }
     if let Some(v) = remembered {
-        return Err(format!(
-            "this Mac was in vault {v}, but its key is gone from the Keychain; a new key would leave \
-that vault. Run `ozen sync pair` on another Mac in it, then `ozen sync join` here. To start a new \
-vault instead, run `ozen sync off`, then `ozen sync init`"
-        ));
+        return Err(lost(v));
     }
     let k = random()?;
     write(&k)?;
