@@ -25,6 +25,8 @@ pub const STATUS: &str = ".sync-link.json";
 const HANDSHAKE: Duration = Duration::from_secs(10);
 /// How often an idle connection checks for local edits to send (as local.rs's connections do).
 const TICK: Duration = Duration::from_secs(2);
+/// Why a connection was dropped after a wake or a network change (start reconnects at once).
+const WOKE: &str = "woke from sleep or changed networks";
 /// A relay that stops reading for this long is dropped and redialed.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Reconnect after this, doubling to `BACKOFF_MAX`, each wait jittered down by up to half so Macs
@@ -48,6 +50,17 @@ enum End {
 /// The running link; dropping it stops it (an attempt in progress gives up within `HANDSHAKE`).
 pub struct Link {
     stop: Arc<AtomicBool>,
+    /// Tests stand in for a wake with it; in use, wake.rs notices wakes and network changes itself.
+    #[cfg(test)]
+    nudge: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+impl Link {
+    /// Reconnect now, as after a wake or a network change.
+    pub fn nudge(&self) {
+        self.nudge.store(true, Ordering::SeqCst);
+    }
 }
 
 impl Drop for Link {
@@ -159,6 +172,7 @@ fn talk(
     session: &mut Session,
     within: &(dyn Fn(&mut dyn FnMut()) + Send + Sync),
     stop: &AtomicBool,
+    woken: &mut dyn FnMut() -> bool,
 ) -> Result<(), End> {
     let mut run = |f: &mut Step| {
         let mut out = Ok(vec![]);
@@ -169,6 +183,9 @@ fn talk(
     let mut online = 0;
     within(&mut || write_status(true, online, None, false));
     while !stop.load(Ordering::SeqCst) {
+        if woken() {
+            return Err(End::Retry(WOKE.into())); // the connection is likely dead: start a fresh one
+        }
         let frames = match ws.read() {
             Ok(Message::Binary(f)) => run(&mut |s| s.receive(&f))?,
             Ok(Message::Text(t)) => {
@@ -229,18 +246,24 @@ pub fn start(
         key::vault_id(key),
         key::seal_key(key),
     );
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopped = stop.clone();
+    let (stop, nudge) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (stopped, nudged) = (stop.clone(), nudge.clone());
     std::thread::spawn(move || {
         within(&mut || write_status(false, 0, None, false));
+        let mut watch = super::wake::Watch::new();
+        let mut woken = || nudged.swap(false, Ordering::SeqCst) || watch.changed();
         let mut wait = BACKOFF;
         while !stopped.load(Ordering::SeqCst) {
             let error = match connect(&url, &vault, &token) {
                 Ok(mut ws) => {
                     wait = BACKOFF; // it worked: a later drop retries quickly
                     let mut session = Session::with(seal, &vault, after.clone());
-                    match talk(&mut ws, &mut session, &within, &stopped) {
-                        Ok(()) => return, // stopped
+                    match talk(&mut ws, &mut session, &within, &stopped, &mut woken) {
+                        Ok(()) => return,                            // stopped
+                        Err(End::Retry(e)) if e == WOKE => continue, // reconnect at once
                         Err(End::Retry(e) | End::Refused(e)) => e,
                     }
                 }
@@ -253,15 +276,26 @@ pub fn start(
             within(&mut || write_status(false, 0, Some(&error), false));
             let pause = jitter(wait);
             let start = std::time::Instant::now();
+            wait = (wait * 2).min(BACKOFF_MAX);
             while start.elapsed() < pause && !stopped.load(Ordering::SeqCst) {
+                if woken() {
+                    wait = BACKOFF; // a new network or a fresh wake: try now, and soon again
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            wait = (wait * 2).min(BACKOFF_MAX);
         }
     });
-    Link { stop }
+    Link {
+        stop,
+        #[cfg(test)]
+        nudge,
+    }
 }
 
 #[cfg(test)]
 #[path = "link_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "link_wake_tests.rs"]
+mod wake_tests;

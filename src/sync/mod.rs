@@ -20,6 +20,7 @@ pub mod summaries;
 pub mod talk;
 pub mod valid;
 pub mod version;
+pub mod wake;
 pub mod wire;
 
 use std::path::Path;
