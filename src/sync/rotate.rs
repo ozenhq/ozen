@@ -21,6 +21,14 @@ pub fn rotate_with(
     if !run::configured() {
         return Err("sync isn't set up here: nothing to rotate".into());
     }
+    // the new key must be shareable, or no other Mac could follow it (pair.rs `pair` needs either)
+    if super::config::server()?.is_none() && !std::path::Path::new(super::config::LAN_ONLY).exists()
+    {
+        return Err(
+            "no relay and not LAN only: run `ozen sync init --server URL` or `--lan-only` first"
+                .into(),
+        );
+    }
     let new = {
         // a batch being merged finishes; the pause stops the running sync, which holds the old key
         let _merging = restore::merging()?;
@@ -41,15 +49,21 @@ pub fn rotate_with(
                 .copy_bytes(&mut new)
                 .map_err(|e| format!("random key: {e}"))?;
         }
-        store(&new)?; // replaces the old key
+        store(&new).map_err(|e| {
+            format!("couldn't store the new key ({e}); sync is paused on the old one: run `ozen sync rotate` again")
+        })?; // replaces the old key
         super::turn_on()?; // the app starts sync again, on the new key
         new
     };
-    let shared = pair()?;
+    let id = key::vault_id(&new);
+    let short = key::short(&id);
+    let shared = pair().map_err(|e| {
+        format!("the key rotated (new vault {short}), but its pair code couldn't be made ({e}); run `ozen sync pair`")
+    })?;
     Ok(format!(
-        "new vault {}: Macs on the old key can no longer sync with this one\n{shared}\n\
-on each Mac you still use, run `ozen sync join --force` and paste it",
-        key::short(&key::vault_id(&new))
+        "new vault {short}: Macs on the old key can no longer sync with this one\n{shared}\n\
+on each Mac you still use, run `ozen sync join --force` (it replaces their old key) and paste it, soon: \
+until then they still sync with the lost Mac"
     ))
 }
 
