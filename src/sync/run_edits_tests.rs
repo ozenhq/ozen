@@ -27,7 +27,8 @@ fn synced(dir: &Path) -> Vec<(String, String)> {
 #[test]
 fn a_tag_fix_note_place_and_vocab_word_each_reach_the_other_mac_on_the_next_tick() {
     let (a, b) = (folder(&[line("1@a", "hi")]), folder(&[line("2@b", "yo")]));
-    let key = [7; 32];
+    // a vault of its own: Bonjour on loopback is shared with the tests running alongside
+    let key = [41; 32];
     let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
     wait_for("first exchange", || ids(b.path()).len() == 2);
     at(a.path(), || {
@@ -75,7 +76,7 @@ fn a_tag_fix_note_place_and_vocab_word_each_reach_the_other_mac_on_the_next_tick
 #[test]
 fn a_burst_of_forty_tags_arrives_whole() {
     let (a, b) = (folder(&[line("1@a", "hi")]), folder(&[]));
-    let key = [7; 32];
+    let key = [42; 32]; // a vault of its own, as above
     let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
     wait_for("first exchange", || ids(b.path()).len() == 1);
     at(a.path(), || {
