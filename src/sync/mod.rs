@@ -9,6 +9,7 @@ pub mod key;
 pub mod link;
 pub mod local;
 pub mod marks;
+pub mod off;
 pub mod pair;
 pub mod parts;
 pub mod preview;
@@ -44,6 +45,8 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 --relay: back to the saved relay (no pairing again)
   preview       what turning sync on would share (counts, dates, places) and what it never sends; reads
                 files only, connects nowhere
+  off           leave the vault on this Mac: remove its key from the Keychain and the relay URL, stop
+                syncing; meetings here stay, and no copy of them is on any server
   undo          put the synced files back as they were before the last big batch from another Mac
                 (saving the current ones first, so it can be undone too) and pause sync until `init`
   run           sync with this vault's Macs, on this network and through the relay, until the app stops asking
@@ -107,6 +110,16 @@ pub fn cli() {
             if let Err(e) = wake::touch() {
                 eprintln!("{e}");
                 std::process::exit(1);
+            }
+            return;
+        }
+        ["off"] => {
+            match off::off() {
+                Ok(s) => println!("{s}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
             return;
         }
