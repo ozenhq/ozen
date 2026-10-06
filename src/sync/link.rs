@@ -294,6 +294,12 @@ pub fn start(
 }
 
 #[cfg(test)]
+#[path = "link_e2e_tests.rs"]
+mod e2e_tests;
+#[cfg(test)]
+#[path = "link_relay_tests.rs"]
+mod relay_tests;
+#[cfg(test)]
 #[path = "link_tests.rs"]
 mod tests;
 #[cfg(test)]
