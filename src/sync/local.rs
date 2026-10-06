@@ -38,7 +38,7 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn random() -> Result<[u8; 32], String> {
+pub(super) fn random() -> Result<[u8; 32], String> {
     let mut b = [0; 32];
     SecRandom::default()
         .copy_bytes(&mut b)
