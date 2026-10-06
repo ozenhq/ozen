@@ -1,6 +1,43 @@
 use super::*;
 use std::cell::RefCell;
 
+/// A throwaway keychain for this test process, unlocked; every Keychain call in tests goes there
+/// (`test_keychain`). Gone, file and all, when dropped.
+pub(crate) fn throwaway() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("test.keychain-db");
+    security_framework::os::macos::keychain::CreateOptions::new()
+        .password(TEST_PASSWORD)
+        .create(&path)
+        .unwrap();
+    // SAFETY: nextest runs each test in its own process
+    unsafe { std::env::set_var("OZEN_TEST_KEYCHAIN", &path) };
+    d
+}
+
+#[test]
+fn tests_never_fall_back_to_the_login_keychain() {
+    // SAFETY: as in `throwaway`
+    unsafe { std::env::remove_var("OZEN_TEST_KEYCHAIN") };
+    let e = stored().unwrap_err();
+    assert!(e.contains("never use the login Keychain"), "{e}");
+    assert!(store(&key(BYTES)).is_err() && forget().is_err() && keychain().is_err());
+}
+
+#[test]
+fn the_keychain_key_is_made_once_kept_and_forgotten() {
+    let _kc = throwaway();
+    assert_eq!(stored().unwrap(), None);
+    let k = keychain().unwrap();
+    assert_eq!(stored().unwrap(), Some(k.clone()));
+    assert_eq!(keychain().unwrap(), k, "made once");
+    store(&key(BYTES)).unwrap();
+    assert_eq!(stored().unwrap(), Some(key(BYTES)), "replaced");
+    forget().unwrap();
+    assert_eq!(stored().unwrap(), None);
+    forget().unwrap(); // fine when there's none
+}
+
 const BYTES: [u8; 32] = {
     let mut k = [0; 32];
     let mut i = 0;
