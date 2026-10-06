@@ -192,7 +192,11 @@ fn serve_here() -> Result<(), String> {
     }
     // ponytail: every interface (Wi-Fi, Ethernet; loopback and VPNs carry no peers); per-interface
     // choice if one ever leaks the tag where it shouldn't (OFE-83)
-    let _local = serve(&key, IfKind::All, Coalesced::retrain(), |step| step())?;
+    let after = Coalesced::retrain(); // one retrain queue for both ways records arrive
+    let _local = serve(&key, IfKind::All, after.clone(), |step| step())?;
+    // and through the relay, when one is set: Macs elsewhere (link.rs)
+    let _link =
+        super::config::server()?.map(|url| super::link::start(&url, &key, after, |step| step()));
     let _ = File::create(ASKED); // started by hand: counts as asked until `IDLE` passes
     let started = std::time::Instant::now();
     let mut stayed = false;

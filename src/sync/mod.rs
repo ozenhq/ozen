@@ -6,6 +6,7 @@ pub mod buckets;
 pub mod config;
 pub mod dropped;
 pub mod key;
+pub mod link;
 pub mod local;
 pub mod marks;
 pub mod parts;
@@ -27,6 +28,7 @@ use std::path::Path;
 pub fn health() -> Vec<String> {
     let mut lines = dropped::health();
     lines.extend(run::health());
+    lines.extend(link::health());
     lines
 }
 

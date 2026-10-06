@@ -29,9 +29,12 @@ fn no_source_in_sync_formats_a_full_vault_id() {
             continue;
         }
         for (i, l) in std::fs::read_to_string(&p).unwrap().lines().enumerate() {
+            // a line marked `vault-id: request path` builds the relay URL, which needs the full id
+            // and is never shown (link.rs)
             if ["{vault}", "{vault_id}", "{self.vault}"]
                 .iter()
                 .any(|c| l.contains(c))
+                && !l.contains("// vault-id: request path")
             {
                 found.push(format!("{name}:{}: {}", i + 1, l.trim()));
             }
