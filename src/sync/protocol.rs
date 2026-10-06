@@ -374,6 +374,9 @@ mod prop_tests;
 #[path = "protocol_scale_tests.rs"]
 mod scale_tests;
 #[cfg(test)]
+#[path = "protocol_sealed_tests.rs"]
+mod sealed_tests;
+#[cfg(test)]
 #[path = "protocol_synced_tests.rs"]
 mod synced_tests;
 #[cfg(test)]
