@@ -1,0 +1,29 @@
+---
+source: src/sync/status_tests.rs
+expression: "at(d.path(), || status_at(NOW))"
+---
+{
+  "macs": [
+    {
+      "days_ago": 0,
+      "id": "a1b2c3d4",
+      "last_synced": "2026-09-21T14:12:20+00:00",
+      "name": "Desk"
+    },
+    {
+      "days_ago": 9,
+      "id": "e5f6a7b8",
+      "last_synced": "2026-09-12T14:13:20+00:00",
+      "name": "Old laptop"
+    }
+  ],
+  "other_macs_online": 1,
+  "relay": {
+    "connected": true,
+    "error": null,
+    "online": 2,
+    "refused": false
+  },
+  "running": true,
+  "sync": "on"
+}

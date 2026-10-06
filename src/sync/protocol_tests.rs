@@ -378,3 +378,22 @@ pub(super) fn bytes(frames: Vec<crate::sync::seal::Sealed>) -> Vec<Vec<u8>> {
         .map(crate::sync::seal::Sealed::into_bytes)
         .collect()
 }
+
+#[test]
+fn a_connection_that_stays_up_says_hello_again_every_hour() {
+    let d = folder(json!([]), json!({}));
+    let mut a = Mac::new(d.path());
+    a.hello();
+    assert!(
+        at(d.path(), || a.s.tick()).unwrap().is_empty(),
+        "nothing new"
+    );
+    a.s.said_hello = Some(std::time::Instant::now() - super::super::status::HELLO_EVERY);
+    let again = at(d.path(), || a.s.tick()).unwrap();
+    let b = Mac::new(d.path());
+    assert_eq!(again.len(), 1);
+    assert!(matches!(
+        b.s.decode(&again[0]),
+        Ok(Some(Msg::Buckets { .. }))
+    ));
+}

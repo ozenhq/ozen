@@ -73,6 +73,8 @@ pub struct Session {
     pub dropped: Dropped,
     /// The synced files' stamps at the last `tick`, so a tick with no edit reads nothing.
     ticked: Option<super::marks::Stamp>,
+    /// When `hello` last went out (said again every `status::HELLO_EVERY`).
+    said_hello: Option<std::time::Instant>,
 }
 
 impl Session {
@@ -90,6 +92,7 @@ impl Session {
             versions: Versions::default(),
             marks: Marks::default(),
             ticked: None,
+            said_hello: None,
         }
     }
 
@@ -133,9 +136,11 @@ impl Session {
         self.told = ours.clone();
         self.told_in = self.versions.speak();
         let max = self.versions.own();
+        let from = Some((crate::crdt::device().into(), super::status::name()));
+        self.said_hello = Some(std::time::Instant::now());
         Ok(vec![self.frame_in(
             self.versions.oldest(),
-            &Msg::Buckets { h, max },
+            &Msg::Buckets { h, max, from },
         )?])
     }
 
@@ -194,6 +199,12 @@ impl Session {
     /// `changes`, but only once a synced file changed since the last tick (the connection ticks every
     /// few seconds). Who wrote it doesn't matter: a record merged from another Mac that ours beat goes out too.
     pub fn tick(&mut self) -> Result<Vec<Sealed>, String> {
+        let due = self
+            .said_hello
+            .is_some_and(|t| t.elapsed() >= super::status::HELLO_EVERY);
+        if due {
+            return self.hello();
+        }
         let now = super::marks::stamp();
         if self.ticked.as_ref() == Some(&now) {
             return Ok(vec![]);
@@ -238,8 +249,11 @@ impl Session {
             }
         };
         match msg {
-            Msg::Buckets { h, max } => {
+            Msg::Buckets { h, max, from } => {
                 self.versions.heard(max);
+                if let Some((id, name)) = from {
+                    super::status::seen(&id, &name, super::status::now())?;
+                }
                 let theirs = base64::engine::general_purpose::STANDARD
                     .decode(h)
                     .unwrap_or_default();

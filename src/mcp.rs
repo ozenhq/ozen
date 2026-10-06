@@ -677,6 +677,14 @@ impl Ozen {
     }
 
     #[tool(
+        description = "Sync with the user's other Macs: whether it is on and running, the relay connection, other Macs online now, and when this Mac last synced with each (Macs sync only while online together).",
+        annotations(read_only_hint = true)
+    )]
+    async fn sync_status(&self) -> Reply {
+        ozen(&["sync", "status"])
+    }
+
+    #[tool(
         description = "Vocabulary: names and terms the transcriber should spell right (it also learns words from fixes).",
         annotations(read_only_hint = true)
     )]

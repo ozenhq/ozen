@@ -126,6 +126,7 @@ fn garbled_bucket_hashes_get_a_full_summary_not_a_crash() {
         .frame(&Msg::Buckets {
             h: "not base64!".into(),
             max: 1,
+            from: None,
         })
         .unwrap();
     let summary = a.receive(&bogus);

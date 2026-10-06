@@ -24,7 +24,7 @@ pub fn configured() -> bool {
 }
 
 /// Sync is on here: configured, and `ozen sync undo` hasn't paused it.
-fn on() -> bool {
+pub(super) fn on() -> bool {
     configured() && !Path::new(super::restore::PAUSED).exists()
 }
 /// Touched by each `ozen status` poll while sync is on.
@@ -96,7 +96,7 @@ fn retry_after(failed: u32) -> Duration {
 
 /// Whether an `ozen sync run` holds the lock here. Takes it for an instant: a runner starting at that
 /// moment retries (`run`).
-fn running() -> bool {
+pub(super) fn running() -> bool {
     File::create(LOCK).is_ok_and(|l| l.try_lock().is_err())
 }
 
