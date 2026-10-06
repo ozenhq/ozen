@@ -11,9 +11,9 @@ fn a_mac_on_the_old_key_gets_nothing_and_one_on_the_new_key_converges() {
         super::super::local::random().unwrap(),
     );
     let (rotated, rejoined, lost) = (folder(&["1@a"]), folder(&["2@b"]), folder(&["3@c"]));
-    let _a = mac(&relay.url(), rotated.path(), &new);
-    let _b = mac(&relay.url(), rejoined.path(), &new);
-    let _c = mac(&relay.url(), lost.path(), &old); // the lost Mac, still on the old key
+    let _a = mac(&relay.url(), rotated.path(), &crate::sync::key::key(new));
+    let _b = mac(&relay.url(), rejoined.path(), &crate::sync::key::key(new));
+    let _c = mac(&relay.url(), lost.path(), &crate::sync::key::key(old)); // the lost Mac, still on the old key
     wait_for(
         Duration::from_secs(20),
         "the rejoined Mac converges",

@@ -118,7 +118,12 @@ fn two_macs_with_their_own_histories_join_and_end_the_same() {
             let after = Coalesced::after_quiet(crate::sync::apply::QUIET, move || {
                 n.fetch_add(1, Ordering::SeqCst);
             });
-            start(&relay.url(), &key, after, move |step| at(&dir, step))
+            start(
+                &relay.url(),
+                &crate::sync::key::key(key),
+                after,
+                move |step| at(&dir, step),
+            )
         })
         .collect();
     wait_for(

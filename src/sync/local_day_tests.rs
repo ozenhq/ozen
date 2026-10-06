@@ -14,7 +14,7 @@ fn macs_on_either_side_of_midnight_still_find_each_other() {
         IfKind::LoopbackV4,
         a.path(),
         &vault,
-        key,
+        crate::sync::key::key(key),
         peers.clone(),
     );
     let _mb = mac_at(
@@ -22,7 +22,7 @@ fn macs_on_either_side_of_midnight_still_find_each_other() {
         IfKind::LoopbackV4,
         b.path(),
         &vault,
-        key,
+        crate::sync::key::key(key),
         peers.clone(),
     );
     let started = Instant::now();
@@ -50,7 +50,7 @@ fn a_running_mac_advertises_a_new_tag_and_id_when_its_day_changes() {
         IfKind::LoopbackV4,
         a.path(),
         &vault,
-        key,
+        crate::sync::key::key(key),
         peers.clone(),
     );
     let before = ma.fullname.lock().unwrap().clone();
@@ -67,7 +67,7 @@ fn a_running_mac_advertises_a_new_tag_and_id_when_its_day_changes() {
         IfKind::LoopbackV4,
         b.path(),
         &vault,
-        key,
+        crate::sync::key::key(key),
         peers,
     );
     let started = Instant::now();

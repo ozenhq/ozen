@@ -261,7 +261,7 @@ pub fn start(
             let error = match connect(&url, &vault, &token) {
                 Ok(mut ws) => {
                     wait = BACKOFF; // it worked: a later drop retries quickly
-                    let mut session = Session::with(seal, &vault, after.clone());
+                    let mut session = Session::with(seal.clone(), &vault, after.clone());
                     match talk(&mut ws, &mut session, &within, &stopped, &mut woken) {
                         Ok(()) => return,                            // stopped
                         Err(End::Retry(e)) if e == WOKE => continue, // reconnect at once

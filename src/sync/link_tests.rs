@@ -62,8 +62,8 @@ fn two_macs_converge_through_the_relay_and_a_later_edit_follows() {
     let (a, b) = (folder(&["1@a"]), folder(&["2@b"]));
     let key = [3; 32];
     let (_la, _lb) = (
-        mac(&relay.url(), a.path(), &key),
-        mac(&relay.url(), b.path(), &key),
+        mac(&relay.url(), a.path(), &crate::sync::key::key(key)),
+        mac(&relay.url(), b.path(), &crate::sync::key::key(key)),
     );
     wait_for(Duration::from_secs(20), "first exchange", || {
         ids(a.path()).len() == 2 && ids(b.path()).len() == 2
@@ -92,8 +92,8 @@ fn a_restarted_relay_is_reconnected_and_what_changed_meanwhile_arrives() {
     let (a, b) = (folder(&["1@a"]), folder(&["2@b"]));
     let key = [4; 32];
     let (_la, _lb) = (
-        mac(&relay.url(), a.path(), &key),
-        mac(&relay.url(), b.path(), &key),
+        mac(&relay.url(), a.path(), &crate::sync::key::key(key)),
+        mac(&relay.url(), b.path(), &crate::sync::key::key(key)),
     );
     wait_for(Duration::from_secs(20), "first exchange", || {
         ids(b.path()).len() == 2
@@ -121,7 +121,10 @@ fn a_restarted_relay_is_reconnected_and_what_changed_meanwhile_arrives() {
 fn a_wrong_token_is_a_refusal_not_a_retry() {
     let relay = Relay::start();
     // a token that doesn't hash to the vault id asked for: the relay answers 401
-    let (wrong_vault, token) = (key::vault_id(&[6; 32]), key::token(&[5; 32]));
+    let (wrong_vault, token) = (
+        key::vault_id(&crate::sync::key::key([6; 32])),
+        key::token(&crate::sync::key::key([5; 32])),
+    );
     assert_eq!(
         connect(&relay.url(), &wrong_vault, &token).unwrap_err(),
         End::Refused("refused the key (401 Unauthorized)".into())
@@ -136,9 +139,12 @@ fn a_refused_link_records_it_for_health_and_never_retries() {
     let d = folder(&[]);
     let refusing = format!("{}/x", relay.url()); // path /x/v/<vault> never matches /v/<vault>
     let dir = PathBuf::from(d.path());
-    let _link = start(&refusing, &[7; 32], Coalesced::new(|| {}), move |s| {
-        at(&dir, s)
-    });
+    let _link = start(
+        &refusing,
+        &crate::sync::key::key([7; 32]),
+        Coalesced::new(|| {}),
+        move |s| at(&dir, s),
+    );
     wait_for(Duration::from_secs(10), "the refusal", || {
         at(d.path(), status)["refused"] == json!(true)
     });
@@ -160,7 +166,12 @@ fn a_relay_that_never_answers_doesnt_hold_anything_up() {
     let d = folder(&["1@a"]);
     let dir = PathBuf::from(d.path());
     let t = Instant::now();
-    let link = start(&url, &[8; 32], Coalesced::new(|| {}), move |s| at(&dir, s));
+    let link = start(
+        &url,
+        &crate::sync::key::key([8; 32]),
+        Coalesced::new(|| {}),
+        move |s| at(&dir, s),
+    );
     assert!(
         t.elapsed() < Duration::from_millis(200),
         "start returns at once"
@@ -185,7 +196,10 @@ fn two_macs_converge_through_the_real_relay() {
     let url = std::env::var("OZEN_RELAY_URL").expect("OZEN_RELAY_URL");
     let (a, b) = (folder(&["1@a"]), folder(&["2@b"]));
     let key = [42; 32];
-    let (_la, _lb) = (mac(&url, a.path(), &key), mac(&url, b.path(), &key));
+    let (_la, _lb) = (
+        mac(&url, a.path(), &crate::sync::key::key(key)),
+        mac(&url, b.path(), &crate::sync::key::key(key)),
+    );
     wait_for(Duration::from_secs(30), "first exchange", || {
         ids(a.path()).len() == 2 && ids(b.path()).len() == 2
     });

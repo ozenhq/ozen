@@ -11,7 +11,9 @@ use std::io::Write;
 
 /// Sealed for the test Macs' key and vault (protocol_tests::Mac).
 fn sealed(plain: &[u8]) -> Vec<u8> {
-    seal::seal(&[7; 32], "vault", plain).unwrap().into_bytes()
+    seal::seal(&crate::sync::key::key([7; 32]), "vault", plain)
+        .unwrap()
+        .into_bytes()
 }
 
 fn deflated(version: u8, body: &[u8]) -> Vec<u8> {

@@ -5,7 +5,9 @@ use serde_json::json;
 
 /// A frame sealed for the test vault with `plain` as its plaintext, whatever it says.
 fn raw_frame(plain: &[u8]) -> Vec<u8> {
-    seal::seal(&[7; 32], "vault", plain).unwrap().into_bytes()
+    seal::seal(&crate::sync::key::key([7; 32]), "vault", plain)
+        .unwrap()
+        .into_bytes()
 }
 
 /// Two Macs where A has two tags B lacks, and the records frames A sends B.
@@ -51,7 +53,11 @@ fn a_frame_under_an_old_key_or_with_a_flipped_byte_is_dropped_not_merged() {
     let dc = folder(json!([]), json!({"z": {"v": 1, "val": "Gal"}}));
     let mut c = Mac {
         dir: dc.path().into(),
-        s: Session::with([9; 32], "vault", Coalesced::new(|| {})),
+        s: Session::with(
+            crate::sync::key::key([9; 32]),
+            "vault",
+            Coalesced::new(|| {}),
+        ),
     };
     let old_key = c.changes();
     assert_eq!(old_key.len(), 1);
@@ -82,7 +88,7 @@ fn a_frame_inflating_past_a_frame_of_json_is_dropped() {
 fn a_frame_from_a_newer_protocol_is_held_back_with_update_ozen() {
     let (_da, _db, mut b, good) = two_tag_frames();
     // a v2 Mac's records frame, otherwise valid for v1: this build must still not merge it
-    let mut v2 = seal::open(&[7; 32], "vault", &good[0]).unwrap();
+    let mut v2 = seal::open(&crate::sync::key::key([7; 32]), "vault", &good[0]).unwrap();
     v2[0] = VERSION + 1;
     b.receive(&raw_frame(&v2));
     assert!(b.synced().is_empty());
@@ -107,7 +113,7 @@ fn a_dropped_frame_never_reaches_apply() {
     let mut b = Mac {
         dir: db.path().into(),
         s: Session::with(
-            [7; 32],
+            crate::sync::key::key([7; 32]),
             "vault",
             Coalesced::new(move || {
                 r.fetch_add(1, Ordering::SeqCst);
@@ -136,9 +142,13 @@ fn a_dropped_frame_never_reaches_apply() {
 fn records_frame(r: Value) -> Vec<u8> {
     let mut z = DeflateEncoder::new(vec![VERSION], Compression::default());
     serde_json::to_writer(&mut z, &json!({"t": "records", "r": r})).unwrap();
-    seal::seal(&[7; 32], "vault", &z.finish().unwrap())
-        .unwrap()
-        .into_bytes()
+    seal::seal(
+        &crate::sync::key::key([7; 32]),
+        "vault",
+        &z.finish().unwrap(),
+    )
+    .unwrap()
+    .into_bytes()
 }
 
 #[test]
@@ -243,7 +253,7 @@ fn health_says_wrong_key_after_a_garbage_frame() {
 #[test]
 fn health_says_update_ozen_after_a_newer_frame_and_counts_add_up_across_sessions() {
     let (_da, db, mut b, good) = two_tag_frames();
-    let mut v2 = seal::open(&[7; 32], "vault", &good[0]).unwrap();
+    let mut v2 = seal::open(&crate::sync::key::key([7; 32]), "vault", &good[0]).unwrap();
     v2[0] = VERSION + 1;
     b.receive(&raw_frame(&v2));
     assert_eq!(

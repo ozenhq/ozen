@@ -22,9 +22,9 @@ fn rotate_stores_a_new_key_keeps_sync_on_and_shares_it() {
         let mut stored = None;
         let mut paired = 0;
         let said = rotate_with(
-            old,
+            crate::sync::key::key(old),
             |k| {
-                stored = Some(*k);
+                stored = Some(k.clone());
                 Ok(())
             },
             || {
@@ -34,7 +34,7 @@ fn rotate_stores_a_new_key_keeps_sync_on_and_shares_it() {
         )
         .unwrap();
         let new = stored.expect("a new key is stored");
-        assert_ne!(new, old);
+        assert_ne!(*new, old);
         assert_eq!(paired, 1, "the new pair code goes on the clipboard");
         assert!(
             run::configured() && !Path::new(restore::PAUSED).exists(),
@@ -57,7 +57,7 @@ fn rotate_without_sync_set_up_changes_nothing() {
     let back = std::env::current_dir().unwrap();
     std::env::set_current_dir(d.path()).unwrap();
     let r = rotate_with(
-        [1; 32],
+        crate::sync::key::key([1; 32]),
         |_| panic!("no key may be stored"),
         || panic!("no code"),
     );
@@ -69,7 +69,7 @@ fn rotate_without_sync_set_up_changes_nothing() {
 fn a_failed_store_leaves_sync_paused_on_the_old_key() {
     in_synced_folder(|| {
         let e = rotate_with(
-            [1; 32],
+            crate::sync::key::key([1; 32]),
             |_| Err("Keychain: denied".into()),
             || panic!("no code"),
         )
@@ -85,7 +85,12 @@ fn a_failed_store_leaves_sync_paused_on_the_old_key() {
 #[test]
 fn a_pair_code_failure_after_the_key_rotated_says_so() {
     in_synced_folder(|| {
-        let e = rotate_with([1; 32], |_| Ok(()), || Err("pasteboard busy".into())).unwrap_err();
+        let e = rotate_with(
+            crate::sync::key::key([1; 32]),
+            |_| Ok(()),
+            || Err("pasteboard busy".into()),
+        )
+        .unwrap_err();
         assert!(
             e.contains("the key rotated") && e.contains("ozen sync pair"),
             "{e}"
@@ -104,7 +109,7 @@ fn a_vault_with_no_relay_and_not_lan_only_isnt_rotated() {
         // SAFETY: nextest runs each test in its own process
         unsafe { std::env::remove_var("OZEN_SYNC_URL") };
         let e = rotate_with(
-            [1; 32],
+            crate::sync::key::key([1; 32]),
             |_| panic!("no key may be stored"),
             || panic!("no code"),
         );

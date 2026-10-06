@@ -83,7 +83,7 @@ fn three_macs() -> [tempfile::TempDir; 3] {
 /// meanwhile included; then both go offline.
 fn meet(
     relay: &Relay,
-    key: &[u8; 32],
+    key: &crate::sync::key::Key,
     macs: &[tempfile::TempDir; 3],
     x: usize,
     y: usize,
@@ -125,7 +125,7 @@ const PLAIN: [&str; 7] = [
 /// Runs `pairs` (each pair online alone, in order) for three fresh Macs; checks the end state.
 fn schedule(seed: u8, pairs: &[(usize, usize)]) {
     let relay = Relay::start();
-    let key = [100u8.wrapping_add(seed); 32]; // a vault per schedule: they run side by side
+    let key = crate::sync::key::key([100u8.wrapping_add(seed); 32]); // a vault per schedule: they run side by side
     let macs = three_macs();
     // An edit reaches all three if at least two meetings follow it: the last two of a schedule only
     // carry what's there (any two distinct pairs of three Macs share one Mac).

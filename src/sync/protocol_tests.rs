@@ -1,4 +1,5 @@
 use super::*;
+use crate::sync::key::key;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -37,7 +38,7 @@ impl Mac {
     pub(super) fn new(dir: &Path) -> Self {
         Mac {
             dir: dir.into(),
-            s: Session::with([7; 32], "vault", Coalesced::new(|| {})),
+            s: Session::with(key([7; 32]), "vault", Coalesced::new(|| {})),
         }
     }
     pub(super) fn hello(&mut self) -> Vec<Vec<u8>> {
@@ -355,7 +356,7 @@ fn received_records_that_change_something_retrain_once() {
     let mut b = Mac {
         dir: db.path().into(),
         s: Session::with(
-            [7; 32],
+            key([7; 32]),
             "vault",
             Coalesced::new(move || {
                 r.fetch_add(1, Ordering::SeqCst);

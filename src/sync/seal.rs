@@ -55,7 +55,7 @@ pub fn seal(seal_key: &Key, vault_id: &str, plaintext: &[u8]) -> Result<Sealed, 
     SecRandom::default()
         .copy_bytes(&mut nonce)
         .map_err(|e| format!("random nonce: {e}"))?;
-    let ct = XChaCha20Poly1305::new(seal_key.into())
+    let ct = XChaCha20Poly1305::new((&**seal_key).into())
         .encrypt(
             &XNonce::from(nonce),
             Payload {
@@ -75,7 +75,7 @@ pub fn open(seal_key: &Key, vault_id: &str, frame: &[u8]) -> Result<Vec<u8>, Str
     }
     let (nonce, ct) = frame.split_at(NONCE);
     let nonce: [u8; NONCE] = nonce.try_into().expect("split at NONCE");
-    let padded = XChaCha20Poly1305::new(seal_key.into())
+    let padded = XChaCha20Poly1305::new((&**seal_key).into())
         .decrypt(
             &XNonce::from(nonce),
             Payload {

@@ -5,7 +5,6 @@
 //! vault with the pair code this leaves on the clipboard.
 use super::key::{self, Key};
 use super::{restore, run};
-use security_framework::random::SecRandom;
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -43,11 +42,9 @@ pub fn rotate_with(
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        let mut new = old;
+        let mut new = key::random()?;
         while new == old {
-            SecRandom::default()
-                .copy_bytes(&mut new)
-                .map_err(|e| format!("random key: {e}"))?;
+            new = key::random()?;
         }
         store(&new).map_err(|e| {
             format!("couldn't store the new key ({e}); sync is paused on the old one: run `ozen sync rotate` again")

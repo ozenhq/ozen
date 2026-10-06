@@ -6,7 +6,7 @@ use serde_json::json;
 
 /// The JSON message inside one of the test vault's frames.
 fn message(frame: &[u8]) -> Value {
-    let plain = seal::open(&[7; 32], "vault", frame).unwrap();
+    let plain = seal::open(&crate::sync::key::key([7; 32]), "vault", frame).unwrap();
     let mut json = vec![];
     flate2::read::DeflateDecoder::new(&plain[1..])
         .read_to_end(&mut json)
@@ -58,7 +58,7 @@ fn one_changed_tag_costs_one_bucket_summary_and_one_record() {
     // B hears A's hashes and summarizes the one bucket that differs
     let summary = b.receive(&a.hello()[0]);
     assert_eq!(summary.len(), 1);
-    let plain = seal::open(&[7; 32], "vault", &summary[0]).unwrap();
+    let plain = seal::open(&crate::sync::key::key([7; 32]), "vault", &summary[0]).unwrap();
     let mut json = vec![];
     flate2::read::DeflateDecoder::new(&plain[1..])
         .read_to_end(&mut json)

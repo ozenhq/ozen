@@ -95,7 +95,11 @@ fn golden_message_json_is_unchanged() {
 
 #[test]
 fn golden_v1_frames_still_open_and_parse_to_the_same_json() {
-    let s = Session::with([7; 32], "vault", Coalesced::new(|| {}));
+    let s = Session::with(
+        crate::sync::key::key([7; 32]),
+        "vault",
+        Coalesced::new(|| {}),
+    );
     for (name, msg) in messages() {
         let f = frame(&s, name, &msg);
         let got = s
