@@ -34,3 +34,46 @@ fn rounds_and_calibrates_like_python() {
     assert_eq!(slug("  Dana Levi! "), "dana-levi");
     assert_eq!(slug("אורן דן"), "אורן-דן");
 }
+
+/// Retrain's git runs only in a registry that is its own repository: with `voices/` a plain folder
+/// inside the ozen checkout, git would otherwise reset, commit and push the checkout itself.
+#[test]
+fn registry_git_never_touches_the_repository_around_a_plain_voices_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(d.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    run(&["init", "-q"]);
+    run(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "ours",
+    ]);
+    std::fs::create_dir(d.path().join("voices")).unwrap();
+    let head = |out: std::process::Output| String::from_utf8(out.stdout).unwrap();
+    let before = head(run(&["rev-parse", "HEAD"]));
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let back = std::env::current_dir().unwrap();
+    std::env::set_current_dir(d.path()).unwrap();
+    let ran = super::git(&["commit", "-q", "--allow-empty", "-m", "stray"]);
+    std::env::set_current_dir(back).unwrap();
+    assert!(!ran, "git ran in a voices folder that isn't a repository");
+    assert_eq!(
+        head(run(&["rev-parse", "HEAD"])),
+        before,
+        "the checkout got a commit"
+    );
+}

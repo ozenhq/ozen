@@ -105,12 +105,9 @@ fn take(suffix: &str) -> Result<PathBuf, String> {
 
 /// `take`, for a caller already holding the lines lock.
 fn copy(suffix: &str) -> Result<PathBuf, String> {
-    let mut at = now();
-    let name = |at: u64| Path::new(DIR).join(format!("{at}{suffix}"));
-    while name(at).exists() {
-        at += 1; // two in one second
-    }
-    let dir = name(at);
+    // strictly after the newest point, even within one second, so "newest" is never a tie
+    let at = now().max(points().last().map_or(0, |(t, _, _)| t + 1));
+    let dir = Path::new(DIR).join(format!("{at}{suffix}"));
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for f in files().filter(|f| Path::new(f).exists()) {
         fs::copy(f, dir.join(f)).map_err(|e| format!("{f}: {e}"))?;

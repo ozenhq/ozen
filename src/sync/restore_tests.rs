@@ -196,3 +196,18 @@ fn undo_waits_for_a_batch_being_merged() {
         assert_ne!(snapshot(dir), synced);
     });
 }
+
+#[test]
+fn a_new_point_is_always_newer_than_an_undo_point_from_the_same_second() {
+    in_folder(|_| {
+        // an undo saved its point this second (or the clock reads earlier than its name)
+        let later = now() + 5;
+        std::fs::create_dir_all(Path::new(DIR).join(format!("{later}{BY_UNDO}"))).unwrap();
+        take("").unwrap();
+        let newest = points().pop().unwrap();
+        assert!(
+            !newest.1,
+            "the batch point taken after the undo is the newest"
+        );
+    });
+}

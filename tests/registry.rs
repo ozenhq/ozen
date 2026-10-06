@@ -10,6 +10,8 @@ use tempfile::TempDir;
 /// A folder with `n` lines from three people (192-float prints) and every 10th line tagged.
 fn folder(n: usize) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
+    // a cloned registry, as in real use: ozen runs registry git only in one (train.rs `git`)
+    fs::create_dir_all(dir.path().join("voices/.git")).unwrap();
     let mut lines = String::new();
     let mut tags = serde_json::Map::new();
     for i in 0..n {

@@ -245,8 +245,20 @@ fn calibrate(genuine: &[f64], impostor: &[f64]) -> f64 {
 }
 
 /// git in the registry, given up on after a minute: offline, a sync failure must never lose the tag.
+/// Only in a registry that is its own repository: `voices/` missing its `.git` (no registry cloned,
+/// a plain folder), git would act on whatever repository holds it, the ozen checkout itself, and
+/// reset, commit and push there. Inherited `GIT_*` variables (a git hook running the tests) are
+/// dropped for the same reason.
 fn git(args: &[&str]) -> bool {
+    if !Path::new(REPO).join(".git").exists() {
+        return false;
+    }
     let Ok(mut child) = Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX")
         .arg("-C")
         .arg(REPO)
         .args(args)
@@ -280,7 +292,12 @@ pub fn pull_registry() -> bool {
 
 /// The registry's upstream commit as last fetched, if it has one.
 fn head_of_upstream() -> Option<String> {
+    if !Path::new(REPO).join(".git").exists() {
+        return None; // as in `git`: never another repository's upstream
+    }
     let out = Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
         .args(["-C", REPO, "rev-parse", "-q", "--verify", "@{u}"])
         .stderr(Stdio::null())
         .output()

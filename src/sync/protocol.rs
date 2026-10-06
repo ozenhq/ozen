@@ -75,11 +75,6 @@ pub struct Session {
 }
 
 impl Session {
-    #[cfg(test)]
-    pub fn new(seal_key: Key, vault: &str) -> Self {
-        Session::with(seal_key, vault, Coalesced::retrain())
-    }
-
     /// A session that runs `after` (instead of relearn + `ozen retrain`) when received records change something.
     pub fn with(seal_key: Key, vault: &str, after: Coalesced) -> Self {
         Session {
