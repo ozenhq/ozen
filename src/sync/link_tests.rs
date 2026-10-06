@@ -358,3 +358,31 @@ fn two_macs_converge_through_the_real_relay() {
     });
     assert_eq!(at(a.path(), status)["online"], json!(2));
 }
+
+/// TLS as the app does it: `wss` through rustls with macOS's own certificate checks (rustls-platform-
+/// verifier). Ignored by default (it needs the internet). Run by hand against any public WebSocket server,
+/// e.g. `OZEN_WSS_URL=wss://echo.websocket.org cargo nextest run --release --run-ignored only -E 'test(public_wss)'`.
+/// A server that isn't a relay answers the upgrade or refuses the path; either way the TLS handshake and the
+/// certificate check have passed. An untrusted certificate fails before that.
+#[test]
+#[ignore]
+fn wss_with_the_platforms_certificate_checks_reaches_a_public_wss_server() {
+    let url = std::env::var("OZEN_WSS_URL").expect("OZEN_WSS_URL");
+    match connect(&url, "0", "0") {
+        Ok(_) => {}
+        Err(End::Refused(e)) => eprintln!("TLS fine, path refused: {e}"),
+        Err(End::Retry(e)) => {
+            assert!(
+                !e.contains("certificate") && !e.contains("tls") && !e.contains("TLS"),
+                "{e}"
+            );
+            eprintln!("TLS fine, then: {e}");
+        }
+    }
+    // and a certificate macOS doesn't trust is refused before any WebSocket talk
+    let bad = connect("wss://self-signed.badssl.com", "0", "0").unwrap_err();
+    assert!(
+        matches!(&bad, End::Retry(e) if e.to_lowercase().contains("certificate")),
+        "{bad:?}"
+    );
+}
