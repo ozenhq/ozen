@@ -67,7 +67,8 @@ until then they still sync with the lost Mac"
 /// `ozen sync rotate`.
 pub fn rotate() -> Result<String, String> {
     let old = key::stored()?.ok_or("no vault key here: nothing to rotate")?;
-    rotate_with(old, key::store, super::pair::pair)
+    let store = |k: &Key| key::store(k).and_then(|()| key::remember(k));
+    rotate_with(old, store, super::pair::pair)
 }
 
 #[cfg(test)]

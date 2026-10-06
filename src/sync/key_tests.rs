@@ -21,16 +21,16 @@ fn tests_never_fall_back_to_the_login_keychain() {
     unsafe { std::env::remove_var("OZEN_TEST_KEYCHAIN") };
     let e = stored().unwrap_err();
     assert!(e.contains("never use the login Keychain"), "{e}");
-    assert!(store(&key(BYTES)).is_err() && forget().is_err() && keychain().is_err());
+    assert!(store(&key(BYTES)).is_err() && forget().is_err() && keychain(None).is_err());
 }
 
 #[test]
 fn the_keychain_key_is_made_once_kept_and_forgotten() {
     let _kc = throwaway();
     assert_eq!(stored().unwrap(), None);
-    let k = keychain().unwrap();
+    let k = keychain(None).unwrap();
     assert_eq!(stored().unwrap(), Some(k.clone()));
-    assert_eq!(keychain().unwrap(), k, "made once");
+    assert_eq!(keychain(None).unwrap(), k, "made once");
     store(&key(BYTES)).unwrap();
     assert_eq!(stored().unwrap(), Some(key(BYTES)), "replaced");
     forget().unwrap();
@@ -84,6 +84,7 @@ fn init_twice_keeps_the_key() {
     let stored: RefCell<Option<Vec<u8>>> = RefCell::new(None);
     let run = || {
         load_or_create(
+            None,
             || Ok(stored.borrow().clone()),
             |k| {
                 *stored.borrow_mut() = Some(k.to_vec());
@@ -98,7 +99,11 @@ fn init_twice_keeps_the_key() {
 
 #[test]
 fn a_wrong_sized_stored_key_is_an_error() {
-    let r = load_or_create(|| Ok(Some(vec![1; 5])), |_| panic!("must not overwrite"));
+    let r = load_or_create(
+        None,
+        || Ok(Some(vec![1; 5])),
+        |_| panic!("must not overwrite"),
+    );
     assert!(r.is_err());
 }
 
@@ -114,7 +119,7 @@ fn a_debug_build_takes_the_key_from_ozen_sync_key_file() {
     unsafe { std::env::set_var("OZEN_SYNC_KEY_FILE", &f) };
     assert_eq!(stored().unwrap(), Some(key([7u8; 32])));
     assert_eq!(
-        keychain().unwrap(),
+        keychain(None).unwrap(),
         key([7u8; 32]),
         "and never makes a Keychain one"
     );
@@ -168,4 +173,76 @@ fn no_raw_key_arrays_in_sync_code() {
         }
     }
     assert!(found.is_empty(), "{found:#?}");
+}
+
+/// A key gone from the Keychain on a Mac that was in a vault errors with how to rejoin and makes no
+/// new key; a first run (nothing remembered) still makes one, and a stored key loads either way (OFE-77).
+#[test]
+fn a_lost_key_asks_to_rejoin_instead_of_making_a_new_vault() {
+    let e = load_or_create(
+        Some("96e30ee4"),
+        || Ok(None),
+        |_| panic!("must not make a key"),
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("vault 96e30ee4") && e.contains("ozen sync join"),
+        "{e}"
+    );
+    let mut made = 0;
+    load_or_create(
+        None,
+        || Ok(None),
+        |_| {
+            made += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(made, 1, "a first run makes the key");
+    let k = load_or_create(
+        Some("96e30ee4"),
+        || Ok(Some(vec![7; 32])),
+        |_| panic!("kept"),
+    )
+    .unwrap();
+    assert_eq!(k, key([7; 32]));
+}
+
+/// `init` remembers the vault by its short id only, and after that a missing key is a lost one.
+#[test]
+fn init_remembers_the_vault_so_a_lost_key_is_noticed() {
+    let d = tempfile::tempdir().unwrap();
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let back = std::env::current_dir().unwrap();
+    std::env::set_current_dir(d.path()).unwrap();
+    assert_eq!(remembered(), None, "a first run");
+    remember(&key([7; 32])).unwrap();
+    let id = vault_id(&key([7; 32]));
+    assert_eq!(remembered().as_deref(), Some(short(&id)));
+    assert!(
+        !std::fs::read_to_string(VAULT).unwrap().contains(&id[..9]),
+        "never the full id"
+    );
+    let r = load_or_create(
+        remembered().as_deref(),
+        || Ok(None),
+        |_| panic!("no new key"),
+    );
+    std::env::set_current_dir(back).unwrap();
+    assert!(r.unwrap_err().contains("ozen sync join"));
+}
+
+/// On a (throwaway) Keychain: a key deleted there while the vault is remembered stays gone; init
+/// errors and puts no new key in (OFE-77).
+#[test]
+fn a_deleted_keychain_key_is_not_replaced() {
+    let _kc = throwaway();
+    let k = keychain(None).unwrap();
+    let v = short(&vault_id(&k)).to_string();
+    forget().unwrap();
+    assert!(keychain(Some(&v)).unwrap_err().contains("ozen sync join"));
+    assert_eq!(stored().unwrap(), None, "no new key was made");
 }

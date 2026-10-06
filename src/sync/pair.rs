@@ -176,7 +176,8 @@ pub fn join_prompt(force: bool) -> Result<String, String> {
         std::io::stdin().read_line(&mut c).map(|_| c)
     }
     .map_err(|e| format!("can't read the code: {e}"))?;
-    let out = join(&code, force, key::stored()?, key::store, |u| {
+    let store = |k: &Key| key::store(k).and_then(|()| key::remember(k));
+    let out = join(&code, force, key::stored()?, store, |u| {
         if u.is_empty() {
             // the other Mac is LAN-only: so is this one
             std::fs::write(config::LAN_ONLY, "")

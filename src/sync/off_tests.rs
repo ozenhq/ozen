@@ -16,7 +16,12 @@ fn in_synced_folder<T>(f: impl FnOnce() -> T) -> T {
         "{\"id\":\"1@a\",\"t\":1.0,\"text\":\"hi\",\"v\":1}\n",
     )
     .unwrap();
-    for f in [run::ON, config::FILE, config::LAN_ONLY] {
+    for f in [
+        run::ON,
+        config::FILE,
+        config::LAN_ONLY,
+        crate::sync::key::VAULT,
+    ] {
         fs::write(f, "wss://relay.example").unwrap();
     }
     let r = f();
@@ -35,7 +40,12 @@ fn off_removes_the_key_and_the_switches_and_leaves_the_meetings() {
         })
         .unwrap();
         assert_eq!(forgot, 1, "the Keychain key is removed");
-        for f in [run::ON, config::FILE, config::LAN_ONLY] {
+        for f in [
+            run::ON,
+            config::FILE,
+            config::LAN_ONLY,
+            crate::sync::key::VAULT,
+        ] {
             assert!(!Path::new(f).exists(), "{f} is gone");
         }
         assert!(!run::configured(), "nothing starts `ozen sync run` again");

@@ -41,7 +41,8 @@ pub fn health() -> Vec<String> {
 const USAGE: &str = "\
 ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
   init [--server URL | --lan-only | --relay]
-                make this Mac's vault key (kept in the login Keychain; running it again keeps it) and save
+                make this Mac's vault key (kept in the login Keychain; running it again keeps it; if the
+                key is lost, it asks you to `join` again instead of leaving your vault) and save
                 the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one.
                 Turns sync on here: while Ozen.app runs, it keeps `ozen sync run` going.
                 --lan-only: never contact any relay, sync only with Macs on the same network;
@@ -67,7 +68,8 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, String> {
-    let k = key::keychain()?;
+    let k = key::keychain(key::remembered().as_deref())?;
+    key::remember(&k)?; // keys made before OFE-77 are noted on the next init
     turn_on()?;
     if let Some(s) = server {
         config::save(s, Path::new(config::FILE))?;

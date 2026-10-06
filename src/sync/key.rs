@@ -68,13 +68,40 @@ pub fn lan_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync lan")
 }
 
-/// The stored key, or a new random one saved through `write`. Running it again keeps the key.
+/// The ozen-folder file naming the vault this Mac is in, by its short id (public: `short`). With it, a
+/// key missing from the Keychain reads as lost, not as a first run (OFE-77).
+pub const VAULT: &str = ".sync-vault";
+
+/// The short id in `VAULT`, if this Mac was in a vault.
+pub fn remembered() -> Option<String> {
+    std::fs::read_to_string(VAULT)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Notes in `VAULT` that this Mac is in `k`'s vault.
+pub fn remember(k: &Key) -> Result<(), String> {
+    std::fs::write(VAULT, short(&vault_id(k))).map_err(|e| format!("{VAULT}: {e}"))
+}
+
+/// The stored key, or a new random one saved through `write`. Running it again keeps the key. If none
+/// is stored but this Mac was in vault `remembered`, the key was lost (a Keychain reset, a migration):
+/// a new one would silently leave that vault, so it errors with how to get the key back instead.
 pub fn load_or_create(
+    remembered: Option<&str>,
     read: impl FnOnce() -> Result<Option<Vec<u8>>, String>,
     write: impl FnOnce(&Key) -> Result<(), String>,
 ) -> Result<Key, String> {
     if let Some(k) = read()? {
         return from_bytes(k);
+    }
+    if let Some(v) = remembered {
+        return Err(format!(
+            "this Mac was in vault {v}, but its key is gone from the Keychain; a new key would leave \
+that vault. Run `ozen sync pair` on another Mac in it, then `ozen sync join` here. To start a new \
+vault instead, run `ozen sync off`, then `ozen sync init`"
+        ));
     }
     let k = random()?;
     write(&k)?;
@@ -216,9 +243,9 @@ pub fn forget_at(service: &str) -> Result<(), String> {
     }
 }
 
-/// The key in the login Keychain, made on first use.
-pub fn keychain() -> Result<Key, String> {
-    load_or_create(read, store)
+/// The key in the login Keychain, made on first use, unless this Mac was in vault `remembered`.
+pub fn keychain(remembered: Option<&str>) -> Result<Key, String> {
+    load_or_create(remembered, read, store)
 }
 
 #[cfg(test)]

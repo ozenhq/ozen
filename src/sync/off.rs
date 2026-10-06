@@ -11,7 +11,8 @@ pub fn off_with(forget: impl FnOnce() -> Result<(), String>) -> Result<String, S
     // a batch from another Mac being merged finishes first; none merges after (`PAUSED`, restore.rs)
     let _merging = restore::merging()?;
     fs::write(restore::PAUSED, "").map_err(|e| format!("{}: {e}", restore::PAUSED))?;
-    for f in [run::ON, config::FILE, config::LAN_ONLY] {
+    // and which vault it was in: `init` after leaving makes a new vault without asking to rejoin
+    for f in [run::ON, config::FILE, config::LAN_ONLY, super::key::VAULT] {
         match fs::remove_file(f) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{f}: {e}")),
             _ => {}
