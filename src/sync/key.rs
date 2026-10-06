@@ -1,11 +1,14 @@
 //! The vault key: 32 random bytes in the login Keychain (never in the ozen folder), and what the
 //! relay (ozenhq/sync src/auth) and the encryption derive from it.
 use hkdf::Hkdf;
+#[cfg(test)]
+use security_framework::os::macos::keychain::SecKeychain;
+#[cfg(not(test))]
 use security_framework::passwords::{get_generic_password, set_generic_password};
 use security_framework::random::SecRandom;
 use sha2::{Digest, Sha256};
 
-const SERVICE: &str = "ozen-sync";
+pub(super) const SERVICE: &str = "ozen-sync";
 const ACCOUNT: &str = "vault-key";
 
 /// A 32-byte key: the vault key or one derived from it. Wiped from memory when dropped, and not `Copy`,
@@ -116,9 +119,37 @@ fn key_file() -> Option<std::ffi::OsString> {
     std::env::var_os("OZEN_SYNC_KEY_FILE").filter(|_| cfg!(debug_assertions))
 }
 
+/// Tests' keychain: a throwaway file named by `OZEN_TEST_KEYCHAIN` (key_tests::throwaway), never the
+/// login Keychain, with prompts off for the whole process, so a test can neither change the user's keys nor
+/// show a dialog that blocks every Keychain call on the Mac (OFE-55). Without one, tests fail.
+#[cfg(test)]
+pub(crate) fn test_keychain() -> Result<SecKeychain, String> {
+    static NO_PROMPTS: std::sync::Once = std::sync::Once::new();
+    NO_PROMPTS.call_once(|| {
+        if let Ok(l) = SecKeychain::disable_user_interaction() {
+            std::mem::forget(l); // for the rest of the process
+        }
+    });
+    let p = std::env::var_os("OZEN_TEST_KEYCHAIN")
+        .ok_or("tests never use the login Keychain: make a key_tests::throwaway() first")?;
+    let mut k = SecKeychain::open(p).map_err(|e| format!("test keychain: {e}"))?;
+    k.unlock(Some(TEST_PASSWORD))
+        .map_err(|e| format!("test keychain: {e}"))?;
+    Ok(k)
+}
+
+#[cfg(test)]
+pub(crate) const TEST_PASSWORD: &str = "ozen-test";
+
 /// The raw item under Keychain service `service` (tests use a throwaway one).
 fn read_at(service: &str) -> Result<Option<Vec<u8>>, String> {
-    match get_generic_password(service, ACCOUNT) {
+    #[cfg(test)]
+    let found = test_keychain()?
+        .find_generic_password(service, ACCOUNT)
+        .map(|(p, _)| p.to_vec());
+    #[cfg(not(test))]
+    let found = get_generic_password(service, ACCOUNT);
+    match found {
         Ok(k) => Ok(Some(k)),
         Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
         Err(e) => Err(format!("Keychain: {e}")),
@@ -151,7 +182,11 @@ pub fn store(k: &Key) -> Result<(), String> {
 
 /// `store`, under Keychain service `service`.
 pub fn store_at(service: &str, k: &Key) -> Result<(), String> {
-    set_generic_password(service, ACCOUNT, &k[..]).map_err(|e| format!("Keychain: {e}"))
+    #[cfg(test)]
+    let r = test_keychain()?.set_generic_password(service, ACCOUNT, &k[..]);
+    #[cfg(not(test))]
+    let r = set_generic_password(service, ACCOUNT, &k[..]);
+    r.map_err(|e| format!("Keychain: {e}"))
 }
 
 /// Removes the key from the login Keychain (`ozen sync off`); fine if there was none.
@@ -169,7 +204,13 @@ pub fn forget() -> Result<(), String> {
 
 /// `forget`, under Keychain service `service`.
 pub fn forget_at(service: &str) -> Result<(), String> {
-    match security_framework::passwords::delete_generic_password(service, ACCOUNT) {
+    #[cfg(test)]
+    let r = test_keychain()?
+        .find_generic_password(service, ACCOUNT)
+        .map(|(_, item)| item.delete());
+    #[cfg(not(test))]
+    let r = security_framework::passwords::delete_generic_password(service, ACCOUNT);
+    match r {
         Err(e) if e.code() != -25300 => Err(format!("Keychain: {e}")), // -25300: errSecItemNotFound
         _ => Ok(()),
     }
@@ -182,4 +223,4 @@ pub fn keychain() -> Result<Key, String> {
 
 #[cfg(test)]
 #[path = "key_tests.rs"]
-mod tests;
+pub(super) mod tests;
