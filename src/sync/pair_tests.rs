@@ -65,7 +65,7 @@ fn run(
 fn run_with(
     c: &str,
     force: bool,
-    existing: Option<Vec<u8>>,
+    existing: Option<Key>,
     relay_up: bool,
 ) -> (Option<Key>, Option<String>, Result<String, String>) {
     let (wrote, saved) = (RefCell::new(None), RefCell::new(None));
@@ -157,11 +157,7 @@ fn the_clipboard_item_is_concealed_and_forgotten_unless_replaced() {
 
 #[test]
 fn a_relay_that_is_down_leaves_the_key_as_it_was() {
-    for (existing, force) in [
-        (None, false),
-        (Some(vec![1; 32]), true),
-        (Some(K.to_vec()), false),
-    ] {
+    for (existing, force) in [(None, false), (Some([1; 32]), true), (Some(K), false)] {
         let (wrote, saved, r) = run_with(&code(&K, URL), force, existing, false);
         assert!(r.is_err());
         assert_eq!((wrote, saved), (None, None), "nothing replaced");
@@ -173,7 +169,7 @@ fn errors_print_nothing_key_derived_either() {
     let c = code(&K, URL);
     let hex: String = K.iter().map(|b| format!("{b:02x}")).collect();
     let errors = [
-        run(&c, false, Some(vec![1; 32])).2.unwrap_err(),
+        run(&c, false, Some([1; 32])).2.unwrap_err(),
         run_with(&c, false, None, false).2.unwrap_err(),
         parse(&c[..c.len() - 3]).unwrap_err(),
     ];
@@ -226,4 +222,19 @@ fn real_keychain_join_round_trip() {
     assert!(forced.is_ok());
     assert_eq!(after_force, Ok(Some(other)));
     assert_eq!(key::stored_at(&service), Ok(None), "cleaned up");
+}
+
+#[test]
+fn a_lan_only_vault_pairs_with_no_relay_in_the_code() {
+    // `pair` on a LAN-only Mac: the code carries the key and no relay URL
+    let c = code(&K, "");
+    assert_eq!(parse(&c), Ok((K, String::new())));
+    let (wrote, saved, r) = run(&c, false, None);
+    assert_eq!(wrote, Some(K), "the key is stored");
+    assert_eq!(
+        saved,
+        Some(String::new()),
+        "no relay URL to save: the joining Mac goes LAN-only"
+    );
+    assert!(r.unwrap().contains("LAN only"));
 }

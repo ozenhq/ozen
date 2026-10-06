@@ -23,7 +23,8 @@ fn checksum(payload: &[u8]) -> [u8; 4] {
     Sha256::digest(payload)[..4].try_into().expect("4 bytes")
 }
 
-/// The pairing code for key `k` and relay `url`, in dash-separated groups of four.
+/// The pairing code for key `k` and relay `url` (empty for a LAN-only vault), in dash-separated groups of
+/// four.
 pub fn code(k: &Key, url: &str) -> String {
     let mut p = vec![VERSION];
     p.extend(k);
@@ -60,6 +61,9 @@ pub fn parse(code: &str) -> Result<(Key, String), String> {
     }
     let k: Key = payload[1..33].try_into().expect("32 bytes");
     let url = std::str::from_utf8(&payload[33..]).map_err(|_| bad)?;
+    if url.is_empty() {
+        return Ok((k, String::new())); // a LAN-only vault: no relay to join
+    }
     Ok((k, config::check(url)?))
 }
 
@@ -75,7 +79,7 @@ pub fn join(
     save_url: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let (k, url) = parse(code)?;
-    let same = existing.as_deref() == Some(&k[..]);
+    let same = existing == Some(k);
     if existing.is_some() && !same && !force {
         return Err(
             "this Mac already has a different vault key; `ozen sync join --force` \
@@ -86,6 +90,11 @@ pub fn join(
     let url = save_url(&url)?; // checks the relay answers: before anything replaces the key
     if !same {
         write(&k)?;
+    }
+    if url.is_empty() {
+        return Ok(
+            "joined: this Mac now syncs with your other Macs on the same network (LAN only)".into(),
+        );
     }
     Ok(format!(
         "joined: this Mac now syncs with your other Macs through {url}"
@@ -115,11 +124,17 @@ pub fn forget(pb: &NSPasteboard, count: isize) -> bool {
 
 /// `ozen sync pair`: the code on the clipboard, cleared by a detached `ozen sync forget-code`.
 pub fn pair() -> Result<String, String> {
-    let url = config::server()?.ok_or("no relay yet: run `ozen sync init --server URL` first")?;
-    let k: Key = key::stored()?
-        .ok_or("no vault key yet: run `ozen sync init --server URL` first")?
-        .try_into()
-        .map_err(|_| "vault key in the Keychain is not 32 bytes")?;
+    let url = match config::server()? {
+        Some(u) => u,
+        None if std::path::Path::new(config::LAN_ONLY).exists() => String::new(), // no relay to share
+        None => {
+            return Err(
+                "no relay yet: run `ozen sync init --server URL` (or `--lan-only`) first".into(),
+            );
+        }
+    };
+    let k: Key =
+        key::stored()?.ok_or("no vault key yet: run `ozen sync init --server URL` first")?;
     let count = put(&NSPasteboard::generalPasteboard(), &code(&k, &url))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     std::process::Command::new(exe)
@@ -152,9 +167,19 @@ pub fn join_prompt(force: bool) -> Result<String, String> {
     let code =
         rpassword::prompt_password("pairing code (from `ozen sync pair` on your other Mac): ")
             .map_err(|e| format!("can't read the code: {e}"))?;
-    join(&code, force, key::stored()?, key::store, |u| {
+    let out = join(&code, force, key::stored()?, key::store, |u| {
+        if u.is_empty() {
+            // the other Mac is LAN-only: so is this one
+            std::fs::write(config::LAN_ONLY, "")
+                .map_err(|e| format!("{}: {e}", config::LAN_ONLY))?;
+            return Ok(String::new());
+        }
+        let _ = std::fs::remove_file(config::LAN_ONLY);
         config::save(u, std::path::Path::new(config::FILE))
-    })
+    })?;
+    // sync is on here now, as after `init`: Ozen.app starts `ozen sync run`
+    std::fs::write(super::run::ON, "").map_err(|e| format!("{}: {e}", super::run::ON))?;
+    Ok(out)
 }
 
 #[cfg(test)]

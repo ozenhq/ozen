@@ -109,6 +109,7 @@ pub fn stored() -> Result<Option<Key>, String> {
 }
 
 /// `stored`, under Keychain service `service`.
+#[cfg(test)]
 pub fn stored_at(service: &str) -> Result<Option<Key>, String> {
     typed(read_at(service)?)
 }
