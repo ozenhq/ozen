@@ -13,6 +13,7 @@ pub mod off;
 pub mod pair;
 pub mod parts;
 pub mod preview;
+pub mod progress;
 pub mod protocol;
 pub mod records;
 pub mod restore;
