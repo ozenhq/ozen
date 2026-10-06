@@ -1,7 +1,8 @@
 #!/bin/sh
 # Two ozen sandboxes syncing through a local relay, for trying sync by hand (OFE-58).
 #   scripts/sync-dev.sh         run until Ctrl-C; edit one sandbox's files and watch the other
-#   scripts/sync-dev.sh --demo  tag a line in A, wait for it in B (at most 5 s), exit 0 or 1
+#   scripts/sync-dev.sh --demo  tag a line in A, wait for it in B (at most 5 s), exit 0 or 1; it may
+#                               arrive through the relay or through Bonjour, whichever is first
 # Needs the relay's checkout: OZEN_SYNC_REPO, default ../sync next to this one. The sandboxes use a
 # throwaway vault key (OZEN_SYNC_KEY_FILE, honoured by debug builds only): never the Keychain's, so
 # they can't join the vault of your real Macs. Both sync through the relay and, on this network, Bonjour.
@@ -30,10 +31,11 @@ head -c 32 /dev/urandom > "$dev/key"
 BIND=127.0.0.1:0 "$relay_bin" > "$dev/relay.log" 2>&1 &
 pids="$pids $!"
 port=
-for _ in $(seq 50); do
-    port=$(sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$dev/relay.log")
-    [ -n "$port" ] && break
+tries=0
+while [ -z "$port" ] && [ $tries -lt 50 ]; do
     sleep 0.1
+    port=$(sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$dev/relay.log")
+    tries=$((tries + 1))
 done
 [ -n "$port" ] || { cat "$dev/relay.log" >&2; echo "the relay didn't start" >&2; exit 1; }
 url=ws://127.0.0.1:$port
@@ -50,7 +52,13 @@ for m in a b; do
 done
 
 if [ "${1:-}" = --demo ]; then
-    sleep 2 # both connect and say hello
+    # both on the relay and seeing each other (link.rs writes "online": 2 to .sync-link.json)
+    tries=0
+    until [ "$(grep -l '"online":2' "$dev"/[ab]/.sync-link.json 2>/dev/null | wc -l)" -eq 2 ]; do
+        [ $tries -ge 300 ] && { echo "demo: the sandboxes never both reached the relay" >&2; exit 1; }
+        sleep 0.1
+        tries=$((tries + 1))
+    done
     start=$(date +%s)
     printf '{"1@a":{"v":5,"val":"Dana"}}' > "$dev/a/tags.json"
     while ! grep -q Dana "$dev/b/tags.json" 2>/dev/null; do
