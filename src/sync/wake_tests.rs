@@ -3,7 +3,18 @@ use super::*;
 fn watch(ips: &[[u8; 4]]) -> (Watch, SystemTime, Instant) {
     let (wall, mono) = (SystemTime::now(), Instant::now());
     let ips = ips.iter().map(|o| IpAddr::from(*o)).collect();
-    (Watch { wall, mono, ips }, wall, mono)
+    let wake = PathBuf::from("/nonexistent/.sync-wake");
+    (
+        Watch {
+            wall,
+            mono,
+            ips,
+            wake,
+            woke: None,
+        },
+        wall,
+        mono,
+    )
 }
 
 #[test]
@@ -61,4 +72,24 @@ fn this_macs_addresses_are_read_and_steady() {
     let a = addrs();
     assert!(a.iter().all(|ip| !ip.is_loopback()));
     assert_eq!(a, addrs(), "two looks a moment apart agree");
+}
+
+#[test]
+fn ozen_sync_wake_from_the_app_counts_once() {
+    let d = tempfile::tempdir().unwrap();
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let back = std::env::current_dir().unwrap();
+    std::env::set_current_dir(d.path()).unwrap();
+    let mut w = Watch::new();
+    std::thread::sleep(Duration::from_millis(20));
+    touch().unwrap(); // what Ozen.app runs on NSWorkspaceDidWakeNotification
+    let first = w.changed();
+    let again = w.changed();
+    std::thread::sleep(Duration::from_millis(20));
+    touch().unwrap();
+    let second = w.changed();
+    std::env::set_current_dir(back).unwrap();
+    assert!(first && !again && second);
 }

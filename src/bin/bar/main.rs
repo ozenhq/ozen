@@ -281,6 +281,7 @@ define_class!(
             // The Mac may have moved while asleep: restarting the watcher sends a fresh fix within seconds; the old
             // place holds until it lands, rather than dropping to the global mode.
             cli::run(&["place", "--restart"], |out, _, _| APP.with(|a| a.get().unwrap().apply_place(&out)));
+            cli::run(&["sync", "wake"], |_, _, _| {}); // the relay link reconnects now, not at its next retry
         }
 
         #[unsafe(method(showVoices:))]

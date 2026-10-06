@@ -43,7 +43,9 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 files only, connects nowhere
   undo          put the synced files back as they were before the last big batch from another Mac
                 (saving the current ones first, so it can be undone too) and pause sync until `init`
-  run           sync with this vault's Macs on this network until the app stops asking (Ozen.app starts it)";
+  run           sync with this vault's Macs, on this network and through the relay, until the app stops asking
+                (Ozen.app starts it)
+  wake          tell a running `sync run` the Mac just woke, so it reconnects now (Ozen.app runs it on wake)";
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>) -> Result<String, String> {
@@ -74,6 +76,13 @@ pub fn cli() {
     let server = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["run"] => {
             if let Err(e) = run::run() {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        ["wake"] => {
+            if let Err(e) = wake::touch() {
                 eprintln!("{e}");
                 std::process::exit(1);
             }

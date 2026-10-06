@@ -3,9 +3,28 @@
 //! minutes after the lid opened. No AppKit run loop is needed in `ozen sync run`: `Instant` is
 //! CLOCK_UPTIME_RAW on macOS (Rust std), which stops while the Mac sleeps, and the wall clock doesn't,
 //! so a gap between the two means it slept; and the set of IPv4 addresses changes when it joins another
-//! network.
+//! network. Ozen.app also passes on macOS's own wake notification: on `NSWorkspaceDidWakeNotification` it
+//! runs `ozen sync wake`, which touches `WAKE`.
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
+
+/// Touched by `ozen sync wake` (Ozen.app's wake handler).
+pub const WAKE: &str = ".sync-wake";
+
+/// `ozen sync wake`: tells a running `ozen sync run` the Mac just woke.
+pub fn touch() -> Result<(), String> {
+    std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(WAKE)
+        .and_then(|f| f.set_modified(SystemTime::now()))
+        .map_err(|e| format!("{WAKE}: {e}"))
+}
+
+fn modified(p: &PathBuf) -> Option<SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+}
 
 /// A wall-clock lead this big over the monotonic clock is a sleep, not drift or a small clock adjustment.
 const SLEPT: Duration = Duration::from_secs(5);
@@ -14,20 +33,30 @@ pub struct Watch {
     wall: SystemTime,
     mono: Instant,
     ips: Vec<IpAddr>,
+    /// `WAKE` (absolute: the link's thread doesn't move with tests' working directories) and its time.
+    wake: PathBuf,
+    woke: Option<SystemTime>,
 }
 
 impl Watch {
+    /// Watching this folder's `WAKE` (`ozen sync run` runs in the ozen folder).
     pub fn new() -> Self {
+        let wake = std::env::current_dir().unwrap_or_default().join(WAKE);
         Watch {
             wall: SystemTime::now(),
             mono: Instant::now(),
             ips: addrs(),
+            woke: modified(&wake),
+            wake,
         }
     }
 
-    /// True once after the Mac slept or its addresses changed since the last call.
+    /// True once after the Mac slept, its addresses changed or Ozen.app said it woke, since the last call.
     pub fn changed(&mut self) -> bool {
-        self.changed_at(SystemTime::now(), Instant::now(), addrs())
+        let woke = modified(&self.wake);
+        let told = woke != self.woke;
+        self.woke = woke;
+        self.changed_at(SystemTime::now(), Instant::now(), addrs()) || told
     }
 
     fn changed_at(&mut self, wall: SystemTime, mono: Instant, ips: Vec<IpAddr>) -> bool {
