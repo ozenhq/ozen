@@ -16,6 +16,7 @@ pub mod preview;
 pub mod protocol;
 pub mod records;
 pub mod restore;
+pub mod rotate;
 pub mod run;
 pub mod seal;
 pub mod status;
@@ -47,6 +48,8 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 --relay: back to the saved relay (no pairing again)
   preview       what turning sync on would share (counts, dates, places) and what it never sends; reads
                 files only, connects nowhere
+  rotate        a new vault key after losing a Mac: Macs on the old key can't sync with this one; a
+                new pair code goes on the clipboard for the Macs you still use (`join --force`)
   off           leave the vault on this Mac: remove its key from the Keychain and the relay URL, stop
                 syncing; meetings here stay, and no copy of them is on any server
   undo          put the synced files back as they were before the last big batch from another Mac
@@ -124,6 +127,16 @@ pub fn cli() {
             if let Err(e) = wake::touch() {
                 eprintln!("{e}");
                 std::process::exit(1);
+            }
+            return;
+        }
+        ["rotate"] => {
+            match rotate::rotate() {
+                Ok(s) => println!("{s}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
             return;
         }

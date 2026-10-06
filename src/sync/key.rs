@@ -75,14 +75,18 @@ pub fn load_or_create(
 /// throwaway key instead (scripts/sync-dev.sh), so dev sandboxes never touch the Keychain or join the
 /// vault of the user's real Macs.
 fn read() -> Result<Option<Vec<u8>>, String> {
-    if cfg!(debug_assertions)
-        && let Some(f) = std::env::var_os("OZEN_SYNC_KEY_FILE")
-    {
+    if let Some(f) = key_file() {
         return std::fs::read(&f)
             .map(Some)
             .map_err(|e| format!("OZEN_SYNC_KEY_FILE {}: {e}", f.to_string_lossy()));
     }
     read_at(SERVICE)
+}
+
+/// The throwaway key file a debug build uses instead of the Keychain (`read`), for reading, storing and
+/// forgetting alike: a dev sandbox must never write the user's real key.
+fn key_file() -> Option<std::ffi::OsString> {
+    std::env::var_os("OZEN_SYNC_KEY_FILE").filter(|_| cfg!(debug_assertions))
 }
 
 /// The raw item under Keychain service `service` (tests use a throwaway one).
@@ -116,7 +120,10 @@ pub fn stored_at(service: &str) -> Result<Option<Key>, String> {
 
 /// Saves `k` as the key in the login Keychain, replacing any other.
 pub fn store(k: &Key) -> Result<(), String> {
-    store_at(SERVICE, k)
+    match key_file() {
+        Some(f) => std::fs::write(&f, k).map_err(|e| format!("OZEN_SYNC_KEY_FILE: {e}")),
+        None => store_at(SERVICE, k),
+    }
 }
 
 /// `store`, under Keychain service `service`.
@@ -126,7 +133,15 @@ pub fn store_at(service: &str, k: &Key) -> Result<(), String> {
 
 /// Removes the key from the login Keychain (`ozen sync off`); fine if there was none.
 pub fn forget() -> Result<(), String> {
-    forget_at(SERVICE)
+    match key_file() {
+        Some(f) => match std::fs::remove_file(&f) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("OZEN_SYNC_KEY_FILE: {e}"))
+            }
+            _ => Ok(()),
+        },
+        None => forget_at(SERVICE),
+    }
 }
 
 /// `forget`, under Keychain service `service`.

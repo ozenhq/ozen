@@ -74,3 +74,19 @@ fn a_debug_build_takes_the_key_from_ozen_sync_key_file() {
         "and never makes a Keychain one"
     );
 }
+
+/// With `OZEN_SYNC_KEY_FILE` (debug builds), storing and forgetting use the file too: a dev sandbox's
+/// rotate, join or off never writes or deletes the user's real Keychain key.
+#[cfg(debug_assertions)]
+#[test]
+fn a_debug_build_stores_and_forgets_in_ozen_sync_key_file() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("key");
+    // SAFETY: nextest runs each test in its own process
+    unsafe { std::env::set_var("OZEN_SYNC_KEY_FILE", &f) };
+    store(&[8; 32]).unwrap();
+    assert_eq!(std::fs::read(&f).unwrap(), [8u8; 32]);
+    assert_eq!(stored().unwrap(), Some([8u8; 32]));
+    forget().unwrap();
+    assert!(!f.exists());
+}
