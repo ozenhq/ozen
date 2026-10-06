@@ -67,13 +67,14 @@ until then they still sync with the lost Mac"
 /// `ozen sync rotate`.
 pub fn rotate() -> Result<String, String> {
     let old = key::stored()?.ok_or_else(|| key::missing("no vault key here: nothing to rotate"))?;
-    let out = rotate_with(old, key::store, super::pair::pair)?;
-    // the new key is stored and shared by now: a failure here only leaves the note behind, which the
-    // next `init` (keeping the key) writes again
-    Ok(match key::stored()?.map(|k| key::remember(&k)) {
-        Some(Err(e)) => format!("{out}\n(couldn't note the new vault: {e}; run `ozen sync init`)"),
-        _ => out,
-    })
+    // noted as soon as the new key is stored, so a pair code failing after can't skip it; a failed
+    // note is only stale until the next `init` (which keeps the key) writes it again
+    let store = |k: &Key| {
+        key::store(k)?;
+        let _ = key::remember(k);
+        Ok(())
+    };
+    rotate_with(old, store, super::pair::pair)
 }
 
 #[cfg(test)]
