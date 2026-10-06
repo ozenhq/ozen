@@ -298,6 +298,9 @@ pub fn start(
 #[path = "link_e2e_tests.rs"]
 mod e2e_tests;
 #[cfg(test)]
+#[path = "link_join_tests.rs"]
+mod join_tests;
+#[cfg(test)]
 #[path = "link_lan_only_tests.rs"]
 mod lan_only_tests;
 #[cfg(test)]
