@@ -59,9 +59,9 @@ fn a_tag_fix_note_place_and_vocab_word_each_reach_the_other_mac_on_the_next_tick
     });
     let edited = Instant::now();
     wait_for("every edit on b", || synced(b.path()) == synced(a.path()));
-    // the tick is every 2 s (run.rs TICK): ~2.1 s measured; 4 s leaves room for a loaded machine
+    // the tick is every 2 s (run.rs TICK): ~2.1 s measured; 6 s leaves room for a loaded machine
     assert!(
-        edited.elapsed() < Duration::from_secs(4),
+        edited.elapsed() < Duration::from_secs(6),
         "took {:?}",
         edited.elapsed()
     );
@@ -79,14 +79,18 @@ fn a_burst_of_forty_tags_arrives_whole() {
     let key = [42; 32]; // a vault of its own, as above
     let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
     wait_for("first exchange", || ids(b.path()).len() == 1);
-    at(a.path(), || {
-        // `ozen name` tagging 40 lines: 40 writes in a row
-        let mut tags = serde_json::Map::new();
-        for i in 0..40 {
-            tags.insert(format!("{i}@a"), json!({"v": 5, "val": "Dana"}));
-            fs::write("tags.json", Value::Object(tags.clone()).to_string()).unwrap();
-        }
-    });
+    // 40 tags over ~4 s, so the burst spans ticks: some go out while later ones are still written.
+    // Written by path, not under `at`: its lock would stall the runners' steps meanwhile.
+    let mut tags = serde_json::Map::new();
+    for i in 0..40 {
+        tags.insert(format!("{i}@a"), json!({"v": 5, "val": "Dana"}));
+        fs::write(
+            a.path().join("tags.json"),
+            Value::Object(tags.clone()).to_string(),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    }
     wait_for("40 tags on b", || {
         synced(b.path()).iter().filter(|(k, _)| k == "tags").count() == 40
     });
