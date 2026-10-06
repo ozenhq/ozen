@@ -317,3 +317,6 @@ fn an_exchange_at_background_priority_completes_with_half_the_cores_busy() {
         ids(a.path()).len() == 2 && ids(b.path()).len() == 2
     });
 }
+
+#[path = "run_edits_tests.rs"]
+mod edits;
