@@ -5,7 +5,7 @@ use serde_json::json;
 
 /// A frame sealed for the test vault with `plain` as its plaintext, whatever it says.
 fn raw_frame(plain: &[u8]) -> Vec<u8> {
-    seal::seal(&[7; 32], "vault", plain).unwrap()
+    seal::seal(&[7; 32], "vault", plain).unwrap().into_bytes()
 }
 
 /// Two Macs where A has two tags B lacks, and the records frames A sends B.
@@ -136,7 +136,9 @@ fn a_dropped_frame_never_reaches_apply() {
 fn records_frame(r: Value) -> Vec<u8> {
     let mut z = DeflateEncoder::new(vec![VERSION], Compression::default());
     serde_json::to_writer(&mut z, &json!({"t": "records", "r": r})).unwrap();
-    seal::seal(&[7; 32], "vault", &z.finish().unwrap()).unwrap()
+    seal::seal(&[7; 32], "vault", &z.finish().unwrap())
+        .unwrap()
+        .into_bytes()
 }
 
 #[test]

@@ -130,7 +130,7 @@ fn frames_over_64_kib_are_refused_both_ways() {
     });
     let mut s = TcpStream::connect(addr).unwrap();
     assert!(read_frame(&mut s).unwrap_err().contains("over"));
-    assert!(write_frame(&mut s, &vec![0; MAX_FRAME + 1]).is_err());
+    assert!(write_raw(&mut s, &vec![0; MAX_FRAME + 1]).is_err());
 }
 
 #[test]

@@ -42,7 +42,7 @@ fn one() -> u8 {
 }
 
 /// Message `m` as a frame of protocol `version`.
-pub(super) fn encode(key: &Key, vault: &str, version: u8, m: &Msg) -> Result<Vec<u8>, String> {
+pub(super) fn encode(key: &Key, vault: &str, version: u8, m: &Msg) -> Result<seal::Sealed, String> {
     let mut z = DeflateEncoder::new(vec![version], Compression::default());
     serde_json::to_writer(&mut z, m).map_err(|e| e.to_string())?;
     let plain = z.finish().map_err(|e| e.to_string())?;
