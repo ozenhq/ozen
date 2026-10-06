@@ -18,7 +18,7 @@ use super::records::records;
 use super::seal;
 use super::seal::Sealed;
 use super::status::{self, HELLO_EVERY};
-use crate::merge::{self, Synced};
+use crate::merge;
 use base64::Engine;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -41,16 +41,6 @@ use {
     std::io::Read,
 };
 
-/// Received records as a folder's worth of synced data, for `merge::apply`. A kind this build doesn't
-/// know (from a newer ozen) is left out.
-fn synced(recs: Vec<(String, String, Value)>) -> Synced {
-    let mut s = Synced::default();
-    for (kind, k, r) in recs {
-        s.insert(&kind, k, r);
-    }
-    s
-}
-
 /// One Mac's side of the conversation with the vault's other Macs, over one connection. Records only
 /// flow in answer to a summary or as local changes, so every Mac says `hello` when it connects and when
 /// the online count rises (relay presence frames, OFE-31).
@@ -72,6 +62,8 @@ pub struct Session {
     /// The protocol versions this Mac and the others speak (version.rs).
     versions: Versions,
     pub dropped: Dropped,
+    /// How many records the other Mac's summary says are coming, and how many merged (progress.rs).
+    progress: super::progress::Progress,
     /// The synced files' stamps at the last `tick`, so a tick with no edit reads nothing.
     ticked: Option<super::marks::Stamp>,
     /// When `hello` last went out (said again every `status::HELLO_EVERY`).
@@ -90,6 +82,7 @@ impl Session {
             parts: parts::Pending::default(),
             after,
             dropped: Dropped::default(),
+            progress: Default::default(),
             versions: Versions::default(),
             marks: Marks::default(),
             ticked: None,
@@ -250,6 +243,7 @@ impl Session {
             Msg::Buckets { h, max, from } => {
                 self.versions.heard(max);
                 if let Some((id, name)) = from {
+                    self.progress.heard(&name);
                     status::seen(&id, &name, status::now())?;
                 }
                 let theirs = base64::engine::general_purpose::STANDARD
@@ -282,6 +276,8 @@ impl Session {
                         return Ok(vec![]);
                     }
                 };
+                let coming = super::progress::coming(self.ours().0, &theirs);
+                self.progress.expect(coming);
                 let wanted = buckets::set(&b);
                 let lack = records(&merge::read_synced(""), self.versions.speak())
                     .into_iter()
@@ -348,7 +344,8 @@ impl Session {
             .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
             .collect();
         self.retell();
-        apply::received(&synced(r), &self.after)?;
+        self.progress.got(got.len() as u64);
+        apply::received(&apply::synced(r), &self.after)?;
         // A record that merged to exactly what the sender has is known to them: not a change to
         // send back. One where ours won stays unmarked, so `changes` sends it.
         let ours = records(&merge::read_synced(""), self.versions.speak());

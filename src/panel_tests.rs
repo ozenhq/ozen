@@ -200,3 +200,24 @@ fn recent_days_are_named() {
     assert_eq!(day_label(d("2026-10-04"), today), "Yesterday");
     assert_eq!(day_label(d("2026-09-28"), today), "Mon 28 Sep");
 }
+
+/// While a big exchange with another Mac runs, the footer shows its progress instead (OFE-78); once
+/// the note is gone (done), the usual footer is back.
+#[test]
+fn the_footer_shows_a_big_sync_exchange_until_it_is_done() {
+    let d = tempfile::tempdir().unwrap();
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let back = std::env::current_dir().unwrap();
+    std::env::set_current_dir(d.path()).unwrap();
+    let note =
+        json!({"mac": "Studio", "done": 420, "total": 1300, "at": crate::sync::status::now()});
+    fs::write(crate::sync::progress::FILE, note.to_string()).unwrap();
+    let during = transcript_json("")["footer"].clone();
+    fs::remove_file(crate::sync::progress::FILE).unwrap();
+    let after = transcript_json("")["footer"].clone();
+    std::env::set_current_dir(back).unwrap();
+    assert_eq!(during, "  Syncing with Studio: 420 / 1,300");
+    assert!(after.as_str().unwrap().contains("accuracy"), "{after}");
+}

@@ -116,6 +116,8 @@ pub fn status_at(now: u64) -> Value {
         "relay": relay,
         "other_macs_online": online,
         "macs": macs,
+        // a big exchange in progress (progress.rs), while the runner that counts it runs
+        "progress": running.then(|| super::progress::read_at(now)).flatten(),
     })
 }
 

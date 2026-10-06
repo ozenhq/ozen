@@ -4,6 +4,7 @@
 //! it. A first exchange arrives as many batches; the retrain waits until they stop (`QUIET`), so joining
 //! a Mac with months of meetings retrains once, not once per batch (OFE-20).
 use crate::merge::{self, Synced};
+use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -106,6 +107,16 @@ impl Coalesced {
             }
         });
     }
+}
+
+/// Received records as a folder's worth of synced data, for `merge::apply`. A kind this build doesn't
+/// know (from a newer ozen) is left out.
+pub(super) fn synced(recs: Vec<(String, String, Value)>) -> Synced {
+    let mut s = Synced::default();
+    for (kind, k, r) in recs {
+        s.insert(&kind, k, r);
+    }
+    s
 }
 
 /// Merges received records here; if any record changed, asks `after` for a relearn and retrain. A big
