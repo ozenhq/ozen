@@ -16,6 +16,7 @@ pub(super) use super::records::mark;
 use super::records::records;
 #[cfg(test)]
 use super::seal;
+use super::seal::Sealed;
 use crate::merge::{self, Synced};
 use base64::Engine;
 use serde_json::Value;
@@ -92,17 +93,17 @@ impl Session {
         }
     }
 
-    fn frame(&self, m: &Msg) -> Result<Vec<u8>, String> {
+    fn frame(&self, m: &Msg) -> Result<Sealed, String> {
         self.frame_in(self.versions.speak(), m)
     }
 
-    fn frame_in(&self, version: u8, m: &Msg) -> Result<Vec<u8>, String> {
+    fn frame_in(&self, version: u8, m: &Msg) -> Result<Sealed, String> {
         wire::encode(&self.seal_key, &self.vault, version, m)
     }
 
     /// Frames carrying `recs`, and the ids that went out. A record too big for one frame goes in parts;
     /// one over `parts::CAP` stays here (reported on stderr): the rest still go.
-    fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<(Vec<Vec<u8>>, Vec<Id>), String> {
+    fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<(Vec<Sealed>, Vec<Id>), String> {
         let flat = recs.into_iter().map(|((k, key), r)| (k, key, r)).collect();
         let (groups, big) = parts::groups(flat, BUDGET);
         let (mut sent, mut frames) = (vec![], vec![]);
@@ -126,7 +127,7 @@ impl Session {
 
     /// The bucket hashes of everything here, one frame: sent on connecting and when another Mac comes
     /// online. The other Mac answers with summaries of the buckets that differ.
-    pub fn hello(&mut self) -> Result<Vec<Vec<u8>>, String> {
+    pub fn hello(&mut self) -> Result<Vec<Sealed>, String> {
         let (ours, hashes) = self.ours();
         let h = base64::engine::general_purpose::STANDARD.encode(hashes);
         self.told = ours.clone();
@@ -147,7 +148,7 @@ impl Session {
     }
 
     /// Summary frames of the records here in buckets `b` (at least one frame, even with none).
-    fn summary(&self, ours: &BTreeMap<Id, Mark>, b: Vec<u8>) -> Result<Vec<Vec<u8>>, String> {
+    fn summary(&self, ours: &BTreeMap<Id, Mark>, b: Vec<u8>) -> Result<Vec<Sealed>, String> {
         let wanted = buckets::set(&b);
         let s: Vec<Entry> = ours
             .iter()
@@ -175,7 +176,7 @@ impl Session {
     }
 
     /// Frames with every record that changed here since the other Macs last heard about it.
-    pub fn changes(&mut self) -> Result<Vec<Vec<u8>>, String> {
+    pub fn changes(&mut self) -> Result<Vec<Sealed>, String> {
         self.retell();
         let ours = records(&merge::read_synced(""), self.versions.speak());
         let changed: Vec<(Id, Value)> = ours
@@ -192,7 +193,7 @@ impl Session {
 
     /// `changes`, but only once a synced file changed since the last tick (the connection ticks every
     /// few seconds). Who wrote it doesn't matter: a record merged from another Mac that ours beat goes out too.
-    pub fn tick(&mut self) -> Result<Vec<Vec<u8>>, String> {
+    pub fn tick(&mut self) -> Result<Vec<Sealed>, String> {
         let now = super::marks::stamp();
         if self.ticked.as_ref() == Some(&now) {
             return Ok(vec![]);
@@ -211,14 +212,14 @@ impl Session {
     /// A frame this Mac can't use is dropped and counted in `dropped`, never merged, and the session
     /// goes on: the sender still has its records and resends them at the next summary exchange. Only
     /// failing to write here is an error. What was dropped is noted for `ozen health` (dropped.rs).
-    pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Sealed>, String> {
         let before = self.dropped.clone();
         let out = self.take(frame);
         self.dropped.note_since(&before);
         out
     }
 
-    fn take(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    fn take(&mut self, frame: &[u8]) -> Result<Vec<Sealed>, String> {
         let msg = match self.decode(frame) {
             Ok(Some(m)) => m,
             Ok(None) => {
@@ -324,7 +325,7 @@ impl Session {
     }
 
     /// Merges received records (kind, key, record) into the files here.
-    fn merge(&mut self, r: Vec<(String, String, Value)>) -> Result<Vec<Vec<u8>>, String> {
+    fn merge(&mut self, r: Vec<(String, String, Value)>) -> Result<Vec<Sealed>, String> {
         let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
         if let Some(e) = errors.last() {
             self.dropped.records += errors.len() as u64;
@@ -372,6 +373,9 @@ mod prop_tests;
 #[cfg(test)]
 #[path = "protocol_scale_tests.rs"]
 mod scale_tests;
+#[cfg(test)]
+#[path = "protocol_sealed_tests.rs"]
+mod sealed_tests;
 #[cfg(test)]
 #[path = "protocol_synced_tests.rs"]
 mod synced_tests;

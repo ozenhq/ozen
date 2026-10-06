@@ -6,7 +6,7 @@
 //! relay would carry.
 use super::key::Key;
 #[cfg(test)]
-use super::talk::{Input, MAX_FRAME, read_frame, talk, write_frame};
+use super::talk::{Input, MAX_FRAME, read_frame, talk, write_raw};
 use hmac::{Hmac, KeyInit, Mac};
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use security_framework::random::SecRandom;

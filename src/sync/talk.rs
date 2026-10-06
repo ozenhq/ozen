@@ -1,5 +1,6 @@
 //! One authenticated connection to another Mac (local.rs): length-prefixed frames both ways, and the
 //! loop that runs the summary protocol over them.
+use super::seal::Sealed;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
@@ -8,7 +9,13 @@ use std::time::Duration;
 /// The relay's frame cap too: a sealed frame is at most 60 KiB (seal.rs).
 pub(super) const MAX_FRAME: usize = 64 << 10;
 
-pub(super) fn write_frame(s: &mut TcpStream, f: &[u8]) -> Result<(), String> {
+/// Sends one sealed frame to the other Mac: the only way bytes other than the handshake (local.rs) reach
+/// a same-network peer.
+pub(super) fn write_frame(s: &mut TcpStream, f: &Sealed) -> Result<(), String> {
+    write_bytes(s, f)
+}
+
+fn write_bytes(s: &mut TcpStream, f: &[u8]) -> Result<(), String> {
     if f.len() > MAX_FRAME {
         return Err(format!("frame of {} bytes is over {MAX_FRAME}", f.len()));
     }
@@ -49,10 +56,10 @@ pub enum Input<'a> {
 pub fn talk(
     s: TcpStream,
     every: Duration,
-    mut step: impl FnMut(Input) -> Result<Vec<Vec<u8>>, String>,
+    mut step: impl FnMut(Input) -> Result<Vec<Sealed>, String>,
 ) -> Result<(), String> {
     let mut w = s.try_clone().map_err(|e| e.to_string())?;
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let (tx, rx) = mpsc::channel::<Sealed>();
     let writer = std::thread::spawn(move || {
         for f in rx {
             if let Err(e) = write_frame(&mut w, &f) {
@@ -73,7 +80,7 @@ pub fn talk(
             }
         }
     });
-    let send = |fs: Vec<Vec<u8>>| fs.into_iter().all(|f| tx.send(f).is_ok());
+    let send = |fs: Vec<Sealed>| fs.into_iter().all(|f| tx.send(f).is_ok());
     let mut out = Ok(());
     if send(step(Input::Hello)?) {
         out = loop {
@@ -98,4 +105,10 @@ pub fn talk(
     drop(tx);
     let wrote = writer.join().unwrap_or(Err("writer panicked".into()));
     out.and(wrote)
+}
+
+/// What no seal would make, for the size-limit test.
+#[cfg(test)]
+pub(super) fn write_raw(s: &mut TcpStream, f: &[u8]) -> Result<(), String> {
+    write_bytes(s, f)
 }

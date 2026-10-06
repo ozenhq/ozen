@@ -8,6 +8,7 @@
 use super::apply::Coalesced;
 use super::key::{self, Key};
 use super::protocol::Session;
+use super::seal::Sealed;
 use serde_json::{Value, json};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -36,7 +37,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(300);
 
 type Ws = WebSocket<MaybeTlsStream<TcpStream>>;
 /// One protocol step on the connection's session; returns the frames to send.
-type Step<'a> = dyn FnMut(&mut Session) -> Result<Vec<Vec<u8>>, String> + 'a;
+type Step<'a> = dyn FnMut(&mut Session) -> Result<Vec<Sealed>, String> + 'a;
 
 /// Why a connection attempt or connection ended.
 #[derive(Debug, PartialEq)]
@@ -157,9 +158,9 @@ fn connect(url: &str, vault: &str, token: &str) -> Result<Ws, End> {
     }
 }
 
-fn send(ws: &mut Ws, frames: Vec<Vec<u8>>) -> Result<(), End> {
+fn send(ws: &mut Ws, frames: Vec<Sealed>) -> Result<(), End> {
     for f in frames {
-        ws.send(Message::Binary(f.into()))
+        ws.send(Message::Binary(f.into_bytes().into()))
             .map_err(|e| End::Retry(e.to_string()))?;
     }
     Ok(())

@@ -15,9 +15,34 @@ pub const BUCKETS: [usize; 4] = [1 << 10, 4 << 10, 16 << 10, 60 << 10];
 /// The most plaintext one frame carries.
 pub const MAX: usize = BUCKETS[3] - NONCE - TAG - LEN;
 
+/// A frame `seal` made, and the only thing ozen sends to another Mac or the relay (talk.rs, link.rs take
+/// nothing else). Its bytes can be read, but only this module can make one, so no code path can hand
+/// plaintext to a connection: the no-data promise rests on every byte sent being sealed (OFE-28).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sealed(Vec<u8>);
+
+impl std::ops::Deref for Sealed {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for Sealed {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Sealed {
+    /// The frame's bytes, to hand to the socket.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
 /// `plaintext` encrypted and padded into the smallest bucket it fits.
-#[allow(dead_code)] // ponytail: used by the sync protocol (OFE-10)
-pub fn seal(seal_key: &Key, vault_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub fn seal(seal_key: &Key, vault_id: &str, plaintext: &[u8]) -> Result<Sealed, String> {
     let bucket = BUCKETS
         .into_iter()
         .find(|b| plaintext.len() <= b - NONCE - TAG - LEN)
@@ -39,12 +64,11 @@ pub fn seal(seal_key: &Key, vault_id: &str, plaintext: &[u8]) -> Result<Vec<u8>,
             },
         )
         .map_err(|_| "seal failed")?;
-    Ok([&nonce[..], &ct].concat())
+    Ok(Sealed([&nonce[..], &ct].concat()))
 }
 
 /// The plaintext of a frame sealed with this key and vault id; a frame that is not a bucket size,
 /// was altered, or was sealed under another key or vault errors.
-#[allow(dead_code)] // ponytail: used by the sync protocol (OFE-10)
 pub fn open(seal_key: &Key, vault_id: &str, frame: &[u8]) -> Result<Vec<u8>, String> {
     if !BUCKETS.contains(&frame.len()) {
         return Err(format!("frame is {} bytes, not a bucket size", frame.len()));

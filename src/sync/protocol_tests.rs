@@ -41,13 +41,13 @@ impl Mac {
         }
     }
     pub(super) fn hello(&mut self) -> Vec<Vec<u8>> {
-        at(&self.dir, || self.s.hello()).unwrap()
+        bytes(at(&self.dir, || self.s.hello()).unwrap())
     }
     pub(super) fn changes(&mut self) -> Vec<Vec<u8>> {
-        at(&self.dir, || self.s.changes()).unwrap()
+        bytes(at(&self.dir, || self.s.changes()).unwrap())
     }
     pub(super) fn receive(&mut self, f: &[u8]) -> Vec<Vec<u8>> {
-        at(&self.dir, || self.s.receive(f)).unwrap()
+        bytes(at(&self.dir, || self.s.receive(f)).unwrap())
     }
     pub(super) fn synced(&self) -> BTreeMap<Id, Value> {
         at(&self.dir, || records(&merge::read_synced(""), VERSION))
@@ -370,3 +370,11 @@ fn received_records_that_change_something_retrain_once() {
 
 #[path = "protocol_local_fields_tests.rs"]
 mod local_fields;
+
+/// Sealed frames as bytes, for tests that look inside or tamper with them.
+pub(super) fn bytes(frames: Vec<crate::sync::seal::Sealed>) -> Vec<Vec<u8>> {
+    frames
+        .into_iter()
+        .map(crate::sync::seal::Sealed::into_bytes)
+        .collect()
+}
