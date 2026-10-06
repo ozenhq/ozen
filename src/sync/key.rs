@@ -71,7 +71,17 @@ pub fn load_or_create(
     Ok(k)
 }
 
+/// The vault key, from the login Keychain. Debug builds only: `OZEN_SYNC_KEY_FILE` names a file with a
+/// throwaway key instead (scripts/sync-dev.sh), so dev sandboxes never touch the Keychain or join the
+/// vault of the user's real Macs.
 fn read() -> Result<Option<Vec<u8>>, String> {
+    if cfg!(debug_assertions)
+        && let Some(f) = std::env::var_os("OZEN_SYNC_KEY_FILE")
+    {
+        return std::fs::read(&f)
+            .map(Some)
+            .map_err(|e| format!("OZEN_SYNC_KEY_FILE {}: {e}", f.to_string_lossy()));
+    }
     match get_generic_password(SERVICE, ACCOUNT) {
         Ok(k) => Ok(Some(k)),
         Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound

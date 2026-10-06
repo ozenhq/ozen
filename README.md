@@ -161,6 +161,9 @@ Settings > Privacy & Security and press **Open Anyway**. On launch it unpacks it
 
 Working on ozen? Run `git config core.hooksPath .githooks` once in the clone: a push that touches sync then
 runs the sync tests first ([.githooks/pre-push](.githooks/pre-push)), since CI only runs once a day.
+To try sync by hand, [scripts/sync-dev.sh](scripts/sync-dev.sh) runs a local relay (from the ozenhq/sync checkout
+next to this one, or `OZEN_SYNC_REPO`) and two sandboxes syncing through it on a throwaway key; `--demo` checks a
+tag made in one reaches the other.
 
 Then open **Ozen** from Spotlight, Launchpad or Finder like any app. It lives in the menu bar (no Dock icon);
 press Start there. After pulling new code, run `cargo run --release -- app` again to rebuild both.
