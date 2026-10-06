@@ -88,7 +88,7 @@ fn a_keychain_error_is_reported_after_sync_is_already_off() {
 #[ignore]
 fn real_keychain_forget_removes_the_item_and_a_second_forget_is_fine() {
     let service = format!("ozen-sync-test-{}", std::process::id());
-    crate::sync::key::store_at(&service, &[4; 32]).unwrap();
+    crate::sync::key::store_at(&service, &crate::sync::key::key([4; 32])).unwrap();
     crate::sync::key::forget_at(&service).unwrap();
     assert_eq!(crate::sync::key::stored_at(&service).unwrap(), None);
     crate::sync::key::forget_at(&service).unwrap();

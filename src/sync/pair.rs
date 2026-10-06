@@ -26,8 +26,10 @@ fn checksum(payload: &[u8]) -> [u8; 4] {
 /// The pairing code for key `k` and relay `url` (empty for a LAN-only vault), in dash-separated groups of
 /// four.
 pub fn code(k: &Key, url: &str) -> String {
-    let mut p = vec![VERSION];
-    p.extend(k);
+    // holds the key: wiped when dropped, and sized up front so no reallocation leaves a copy behind
+    let mut p = zeroize::Zeroizing::new(Vec::with_capacity(1 + 32 + url.len() + 4));
+    p.push(VERSION);
+    p.extend(k.iter());
     p.extend(url.as_bytes());
     let sum = checksum(&p);
     p.extend(sum);
@@ -48,7 +50,7 @@ pub fn parse(code: &str) -> Result<(Key, String), String> {
         .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_ascii_uppercase();
-    let p = BASE32_NOPAD.decode(c.as_bytes()).map_err(|_| bad)?;
+    let p = zeroize::Zeroizing::new(BASE32_NOPAD.decode(c.as_bytes()).map_err(|_| bad)?);
     if p.len() < 1 + 32 + 4 {
         return Err(bad.into());
     }
@@ -59,7 +61,8 @@ pub fn parse(code: &str) -> Result<(Key, String), String> {
     if payload[0] != VERSION {
         return Err("this pairing code is from a newer ozen: update ozen on this Mac".into());
     }
-    let k: Key = payload[1..33].try_into().expect("32 bytes");
+    let mut k = key::key([0; 32]);
+    k.copy_from_slice(&payload[1..33]);
     let url = std::str::from_utf8(&payload[33..]).map_err(|_| bad)?;
     if url.is_empty() {
         return Ok((k, String::new())); // a LAN-only vault: no relay to join
@@ -79,7 +82,7 @@ pub fn join(
     save_url: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let (k, url) = parse(code)?;
-    let same = existing == Some(k);
+    let same = existing.as_ref() == Some(&k);
     if existing.is_some() && !same && !force {
         return Err(
             "this Mac already has a different vault key; `ozen sync join --force` \

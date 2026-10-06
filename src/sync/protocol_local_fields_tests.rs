@@ -74,7 +74,7 @@ fn a_received_line_without_a_speaker_guess_retrains_here() {
     let mut a = Mac::new(da.path());
     let mut b = Mac::new(db.path());
     b.s = Session::with(
-        [7; 32],
+        crate::sync::key::key([7; 32]),
         "vault",
         Coalesced::new(move || {
             n.fetch_add(1, Ordering::SeqCst);

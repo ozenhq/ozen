@@ -28,7 +28,10 @@ fn synced(dir: &Path) -> Vec<(String, String)> {
 fn a_tag_fix_note_place_and_vocab_word_each_reach_the_other_mac_on_the_next_tick() {
     let (a, b) = (folder(&[line("1@a", "hi")]), folder(&[line("2@b", "yo")]));
     let key = crate::sync::local::random().unwrap();
-    let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
+    let (_ma, _mb) = (
+        mac(a.path(), &crate::sync::key::key(key)),
+        mac(b.path(), &crate::sync::key::key(key)),
+    );
     wait_for("first exchange", || ids(b.path()).len() == 2);
     at(a.path(), || {
         fs::write(
@@ -76,7 +79,10 @@ fn a_tag_fix_note_place_and_vocab_word_each_reach_the_other_mac_on_the_next_tick
 fn a_burst_of_forty_tags_arrives_whole() {
     let (a, b) = (folder(&[line("1@a", "hi")]), folder(&[]));
     let key = crate::sync::local::random().unwrap();
-    let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
+    let (_ma, _mb) = (
+        mac(a.path(), &crate::sync::key::key(key)),
+        mac(b.path(), &crate::sync::key::key(key)),
+    );
     wait_for("first exchange", || ids(b.path()).len() == 1);
     // 40 tags over ~4 s, so the burst spans ticks: some go out while later ones are still written.
     // Written by path, not under `at`: its lock would stall the runners' steps meanwhile.

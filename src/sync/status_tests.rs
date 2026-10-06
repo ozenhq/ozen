@@ -68,8 +68,16 @@ fn status_with_two_macs_online() {
 #[test]
 fn a_hello_records_the_mac_that_said_it() {
     let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let mut sa = Session::with([7; 32], "vault", Coalesced::new(|| {}));
-    let mut sb = Session::with([7; 32], "vault", Coalesced::new(|| {}));
+    let mut sa = Session::with(
+        crate::sync::key::key([7; 32]),
+        "vault",
+        Coalesced::new(|| {}),
+    );
+    let mut sb = Session::with(
+        crate::sync::key::key([7; 32]),
+        "vault",
+        Coalesced::new(|| {}),
+    );
     let hello = at(a.path(), || sa.hello()).unwrap();
     at(b.path(), || sb.receive(hello[0].as_ref())).unwrap();
     let heard = at(b.path(), macs);

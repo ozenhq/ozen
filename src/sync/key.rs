@@ -8,23 +8,35 @@ use sha2::{Digest, Sha256};
 const SERVICE: &str = "ozen-sync";
 const ACCOUNT: &str = "vault-key";
 
-pub type Key = [u8; 32];
+/// A 32-byte key: the vault key or one derived from it. Wiped from memory when dropped, and not `Copy`,
+/// so it isn't silently duplicated (OFE-60); clone it only where a second owner is needed.
+pub type Key = zeroize::Zeroizing<[u8; 32]>;
+
+/// `bytes` as a key.
+pub fn key(bytes: [u8; 32]) -> Key {
+    zeroize::Zeroizing::new(bytes)
+}
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    let mut s = String::with_capacity(b.len() * 2); // no reallocation leaves key hex behind
+    for x in b {
+        let _ = write!(s, "{x:02x}");
+    }
+    s
 }
 
 fn hkdf(key: &Key, info: &str) -> Key {
-    let mut out = [0; 32];
-    Hkdf::<Sha256>::new(None, key)
-        .expand(info.as_bytes(), &mut out)
+    let mut out = self::key([0; 32]);
+    Hkdf::<Sha256>::new(None, &key[..])
+        .expand(info.as_bytes(), &mut out[..])
         .expect("32 bytes is a valid HKDF-SHA256 length");
     out
 }
 
 /// The bearer token the relay checks: an HKDF output separate from the encryption key.
-pub fn token(key: &Key) -> String {
-    hex(&hkdf(key, "ozen-sync token"))
+pub fn token(key: &Key) -> zeroize::Zeroizing<String> {
+    zeroize::Zeroizing::new(hex(&hkdf(key, "ozen-sync token")[..]))
 }
 
 /// The vault's name on the relay: hex(SHA-256(token)), 64 lowercase hex chars. The relay checks a
@@ -59,15 +71,30 @@ pub fn load_or_create(
     write: impl FnOnce(&Key) -> Result<(), String>,
 ) -> Result<Key, String> {
     if let Some(k) = read()? {
-        return k
-            .try_into()
-            .map_err(|_| "vault key in the Keychain is not 32 bytes".into());
+        return from_bytes(k);
     }
-    let mut k = [0; 32];
-    SecRandom::default()
-        .copy_bytes(&mut k)
-        .map_err(|e| format!("random key: {e}"))?;
+    let k = random()?;
     write(&k)?;
+    Ok(k)
+}
+
+/// A new random key.
+pub fn random() -> Result<Key, String> {
+    let mut k = key([0; 32]);
+    SecRandom::default()
+        .copy_bytes(&mut k[..])
+        .map_err(|e| format!("random key: {e}"))?;
+    Ok(k)
+}
+
+/// Stored bytes as a key; the bytes are wiped either way.
+fn from_bytes(bytes: Vec<u8>) -> Result<Key, String> {
+    let bytes = zeroize::Zeroizing::new(bytes);
+    if bytes.len() != 32 {
+        return Err("vault key in the Keychain is not 32 bytes".into());
+    }
+    let mut k = key([0; 32]);
+    k.copy_from_slice(&bytes);
     Ok(k)
 }
 
@@ -100,11 +127,7 @@ fn read_at(service: &str) -> Result<Option<Vec<u8>>, String> {
 
 /// A stored key's bytes as a key.
 fn typed(k: Option<Vec<u8>>) -> Result<Option<Key>, String> {
-    k.map(|k| {
-        k.try_into()
-            .map_err(|_| "vault key in the Keychain is not 32 bytes".into())
-    })
-    .transpose()
+    k.map(from_bytes).transpose()
 }
 
 /// The key in the login Keychain if `ozen sync init` or `join` stored one; never makes one.
@@ -121,14 +144,14 @@ pub fn stored_at(service: &str) -> Result<Option<Key>, String> {
 /// Saves `k` as the key in the login Keychain, replacing any other.
 pub fn store(k: &Key) -> Result<(), String> {
     match key_file() {
-        Some(f) => std::fs::write(&f, k).map_err(|e| format!("OZEN_SYNC_KEY_FILE: {e}")),
+        Some(f) => std::fs::write(&f, &k[..]).map_err(|e| format!("OZEN_SYNC_KEY_FILE: {e}")),
         None => store_at(SERVICE, k),
     }
 }
 
 /// `store`, under Keychain service `service`.
 pub fn store_at(service: &str, k: &Key) -> Result<(), String> {
-    set_generic_password(service, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
+    set_generic_password(service, ACCOUNT, &k[..]).map_err(|e| format!("Keychain: {e}"))
 }
 
 /// Removes the key from the login Keychain (`ozen sync off`); fine if there was none.

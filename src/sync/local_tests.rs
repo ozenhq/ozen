@@ -9,29 +9,47 @@ use std::time::Instant;
 #[test]
 fn the_tag_matches_between_a_vaults_macs_on_a_day_and_changes_every_day() {
     let d = 20_000;
-    assert_eq!(tag(&[5; 32], d), tag(&[5; 32], d), "paired Macs, same day");
-    assert_eq!(tag(&[5; 32], d).len(), 16);
-    assert_ne!(tag(&[5; 32], d), tag(&[6; 32], d), "another vault");
-    let week: HashSet<String> = (d..d + 7).map(|x| tag(&[5; 32], x)).collect();
+    assert_eq!(
+        tag(&crate::sync::key::key([5; 32]), d),
+        tag(&crate::sync::key::key([5; 32]), d),
+        "paired Macs, same day"
+    );
+    assert_eq!(tag(&crate::sync::key::key([5; 32]), d).len(), 16);
+    assert_ne!(
+        tag(&crate::sync::key::key([5; 32]), d),
+        tag(&crate::sync::key::key([6; 32]), d),
+        "another vault"
+    );
+    let week: HashSet<String> = (d..d + 7)
+        .map(|x| tag(&crate::sync::key::key([5; 32]), x))
+        .collect();
     assert_eq!(week.len(), 7, "a new tag each day");
 }
 
 #[test]
 fn a_tag_from_just_before_midnight_is_still_ours_just_after() {
     let midnight = 20_000 * 86_400;
-    let advertised = tag(&[5; 32], day(midnight - 10)); // 23:59:50
-    assert!(ours(&[5; 32], &advertised, midnight + 30)); // 00:00:30
+    let advertised = tag(&crate::sync::key::key([5; 32]), day(midnight - 10)); // 23:59:50
     assert!(ours(
-        &[5; 32],
-        &tag(&[5; 32], day(midnight + 30)),
+        &crate::sync::key::key([5; 32]),
+        &advertised,
+        midnight + 30
+    )); // 00:00:30
+    assert!(ours(
+        &crate::sync::key::key([5; 32]),
+        &tag(&crate::sync::key::key([5; 32]), day(midnight + 30)),
         midnight - 10
     )); // its clock is ahead
     assert!(
-        !ours(&[5; 32], &advertised, midnight + 86_400 + 30),
+        !ours(
+            &crate::sync::key::key([5; 32]),
+            &advertised,
+            midnight + 86_400 + 30
+        ),
         "two days on, it's gone"
     );
     assert!(
-        !ours(&[6; 32], &advertised, midnight + 30),
+        !ours(&crate::sync::key::key([6; 32]), &advertised, midnight + 30),
         "another vault's"
     );
 }
@@ -48,8 +66,17 @@ fn shake(a: Key, b: Key) -> (Result<(), String>, Result<(), String>) {
 
 #[test]
 fn only_macs_holding_the_vault_key_get_past_the_handshake() {
-    assert_eq!(shake([1; 32], [1; 32]), (Ok(()), Ok(())));
-    let (d, l) = shake([1; 32], [2; 32]);
+    assert_eq!(
+        shake(
+            crate::sync::key::key([1; 32]),
+            crate::sync::key::key([1; 32])
+        ),
+        (Ok(()), Ok(()))
+    );
+    let (d, l) = shake(
+        crate::sync::key::key([1; 32]),
+        crate::sync::key::key([2; 32]),
+    );
     assert!(d.unwrap_err().contains("doesn't hold this vault's key"));
     assert!(l.is_err());
 }
@@ -70,7 +97,7 @@ fn a_peer_that_is_not_ozen_fails_the_handshake() {
     });
     let r = handshake(
         &mut TcpStream::connect(addr).unwrap(),
-        &[1; 32],
+        &crate::sync::key::key([1; 32]),
         true,
         HANDSHAKE,
     );
@@ -90,7 +117,7 @@ fn a_reflected_proof_fails() {
     });
     let r = handshake(
         &mut TcpStream::connect(addr).unwrap(),
-        &[1; 32],
+        &crate::sync::key::key([1; 32]),
         true,
         HANDSHAKE,
     );
@@ -110,7 +137,7 @@ fn a_peer_trickling_bytes_cannot_stretch_the_handshake() {
     let started = Instant::now();
     let r = handshake(
         &mut TcpStream::connect(addr).unwrap(),
-        &[1; 32],
+        &crate::sync::key::key([1; 32]),
         true,
         Duration::from_millis(400),
     );
@@ -135,7 +162,7 @@ fn frames_over_64_kib_are_refused_both_ways() {
 
 #[test]
 fn connections_past_the_cap_are_closed_and_drop_stops_listening() {
-    let local = start([3; 32], IfKind::LoopbackV4, |_| {}).unwrap();
+    let local = start(crate::sync::key::key([3; 32]), IfKind::LoopbackV4, |_| {}).unwrap();
     let addr = ("127.0.0.1", local.port());
     // each of these sits in its handshake, holding a slot
     let held: Vec<_> = (0..MAX_PEERS)
@@ -201,7 +228,11 @@ fn mac_at(
         if peers.fetch_add(1, Ordering::SeqCst) == 0 {
             return;
         }
-        let mut session = Session::with([9; 32], &v, crate::sync::apply::Coalesced::new(|| {}));
+        let mut session = Session::with(
+            crate::sync::key::key([9; 32]),
+            &v,
+            crate::sync::apply::Coalesced::new(|| {}),
+        );
         let _ = talk(s, Duration::from_secs(1), |i| {
             at(&dir, || match i {
                 Input::Hello => session.hello(),
@@ -238,12 +269,22 @@ fn two_macs_on_one_network_find_each_other_and_converge_with_no_relay() {
     // in this suite and in other checkouts, and Macs of one vault would connect across tests
     let (vault, key) = ("v".repeat(64), random().unwrap());
     let counts: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
-    let _ma = mac(a.path(), &vault, key, counts[0].clone());
-    let _mb = mac(b.path(), &vault, key, counts[1].clone());
+    let _ma = mac(
+        a.path(),
+        &vault,
+        crate::sync::key::key(key),
+        counts[0].clone(),
+    );
+    let _mb = mac(
+        b.path(),
+        &vault,
+        crate::sync::key::key(key),
+        counts[1].clone(),
+    );
     let _mo = mac(
         other.path(),
         &"o".repeat(64),
-        random().unwrap(),
+        crate::sync::key::key(random().unwrap()),
         counts[2].clone(),
     );
     // no relay is configured or reachable: OZEN_SYNC_URL is unset and nothing listens for one
@@ -284,8 +325,14 @@ fn two_macs_converge_over_the_real_network() {
     let b = folder(&[line("2@b", "from b")], json!({}));
     let (vault, key) = ("w".repeat(64), random().unwrap());
     let n = || Arc::new(AtomicUsize::new(1)); // no forced first hang-up here
-    let _ma = mac_on(on.clone(), a.path(), &vault, key, n());
-    let _mb = mac_on(on, b.path(), &vault, key, n());
+    let _ma = mac_on(
+        on.clone(),
+        a.path(),
+        &vault,
+        crate::sync::key::key(key),
+        n(),
+    );
+    let _mb = mac_on(on, b.path(), &vault, crate::sync::key::key(key), n());
     let started = Instant::now();
     while data(a.path()) != data(b.path()) || data(a.path()).0.len() < 2 {
         assert!(

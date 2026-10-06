@@ -66,7 +66,7 @@ pub fn serve(
 ) -> Result<Local, String> {
     let (seal, vault) = (key::seal_key(key), key::vault_id(key));
     local::start(key::lan_key(key), on, move |s| {
-        let mut session = Session::with(seal, &vault, after.clone());
+        let mut session = Session::with(seal.clone(), &vault, after.clone());
         let _ = talk(s, TICK, |i| {
             let mut out = Ok(vec![]);
             within(&mut || {
@@ -163,6 +163,13 @@ fn still_wanted() -> bool {
 /// `ozen sync run`: same-network sync until nobody asks for `IDLE` or sync is turned off. An error is
 /// kept in `ERROR` for `ozen health`.
 pub fn run() -> Result<(), String> {
+    // a crash of the process holding the vault key must not write it to a core file (OFE-60)
+    let none = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: setrlimit only reads `none`
+    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &none) };
     // a `status` or `health` poll may hold the lock for an instant: try for a second before deciding
     let lock = File::create(LOCK).map_err(|e| format!("{LOCK}: {e}"))?;
     if !(0..10).any(|_| {
@@ -197,6 +204,7 @@ fn serve_here() -> Result<(), String> {
     // and through the relay, when one is set: Macs elsewhere (link.rs)
     let _link =
         super::config::server()?.map(|url| super::link::start(&url, &key, after, |step| step()));
+    drop(key); // both sides hold only what they derived from it now (OFE-60)
     let _ = File::create(ASKED); // started by hand: counts as asked until `IDLE` passes
     let started = std::time::Instant::now();
     let mut stayed = false;

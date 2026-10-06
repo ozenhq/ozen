@@ -110,7 +110,10 @@ fn connect(url: &str, vault: &str, token: &str) -> Result<Ws, End> {
     let mut req = format!("{url}/v/{vault}") // vault-id: request path
         .into_client_request()
         .map_err(|e| retry(&e))?;
-    let auth = format!("Bearer {token}").parse().map_err(|e| retry(&e))?;
+    // ponytail: the header value tungstenite keeps isn't wiped; out of this crate's reach
+    let auth = zeroize::Zeroizing::new(format!("Bearer {token}"))
+        .parse()
+        .map_err(|e| retry(&e))?;
     req.headers_mut().insert("authorization", auth);
     let host = req
         .uri()
@@ -261,7 +264,7 @@ pub fn start(
             let error = match connect(&url, &vault, &token) {
                 Ok(mut ws) => {
                     wait = BACKOFF; // it worked: a later drop retries quickly
-                    let mut session = Session::with(seal, &vault, after.clone());
+                    let mut session = Session::with(seal.clone(), &vault, after.clone());
                     match talk(&mut ws, &mut session, &within, &stopped, &mut woken) {
                         Ok(()) => return,                            // stopped
                         Err(End::Retry(e)) if e == WOKE => continue, // reconnect at once

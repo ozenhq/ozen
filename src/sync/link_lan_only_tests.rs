@@ -33,8 +33,8 @@ fn lan_only_macs_converge_on_the_network_and_never_touch_the_relay() {
         std::fs::write(d.path().join(config::LAN_ONLY), "").unwrap(); // ...and LAN-only is on
     }
     let key = super::super::local::random().unwrap();
-    let (_ma, la) = mac(a.path(), &key);
-    let (_mb, lb) = mac(b.path(), &key);
+    let (_ma, la) = mac(a.path(), &crate::sync::key::key(key));
+    let (_mb, lb) = mac(b.path(), &crate::sync::key::key(key));
     assert!(
         la.is_none() && lb.is_none(),
         "no relay link in LAN-only mode"
@@ -52,7 +52,7 @@ fn lan_only_macs_converge_on_the_network_and_never_touch_the_relay() {
 
     // `ozen sync init --relay` on a: the saved relay is back, with the same key, no pairing
     std::fs::remove_file(a.path().join(config::LAN_ONLY)).unwrap();
-    let (_ma2, la2) = mac(a.path(), &key);
+    let (_ma2, la2) = mac(a.path(), &crate::sync::key::key(key));
     assert!(la2.is_some());
     wait_for(Duration::from_secs(10), "a on the relay", || {
         at(a.path(), status)["connected"] == json!(true)
