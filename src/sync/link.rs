@@ -307,6 +307,9 @@ mod lan_only_tests;
 #[path = "link_relay_tests.rs"]
 mod relay_tests;
 #[cfg(test)]
+#[path = "link_rotate_tests.rs"]
+mod rotate_tests;
+#[cfg(test)]
 #[path = "link_tests.rs"]
 mod tests;
 #[cfg(test)]
