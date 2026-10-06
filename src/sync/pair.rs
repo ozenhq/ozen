@@ -136,8 +136,8 @@ pub fn pair() -> Result<String, String> {
             );
         }
     };
-    let k: Key =
-        key::stored()?.ok_or("no vault key yet: run `ozen sync init --server URL` first")?;
+    let k: Key = key::stored()?
+        .ok_or_else(|| key::missing("no vault key yet: run `ozen sync init --server URL` first"))?;
     let count = put(&NSPasteboard::generalPasteboard(), &code(&k, &url))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     std::process::Command::new(exe)
@@ -186,6 +186,10 @@ pub fn join_prompt(force: bool) -> Result<String, String> {
         let _ = std::fs::remove_file(config::LAN_ONLY);
         config::save(u, std::path::Path::new(config::FILE))
     })?;
+    // the vault this Mac is in now, also when the key was already here (a retry after this failed)
+    if let Some(k) = key::stored()? {
+        key::remember(&k)?;
+    }
     // sync is on here now, as after `init`: Ozen.app starts `ozen sync run`
     super::turn_on()?;
     Ok(out)

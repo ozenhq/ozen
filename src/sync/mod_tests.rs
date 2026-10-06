@@ -49,3 +49,37 @@ fn the_short_id_is_at_most_8_chars_whatever_it_is_given() {
     assert_eq!(key::short("abc"), "abc");
     assert_eq!(key::short("aaaaaaaé…"), "aaaaaaaé");
 }
+
+/// Puts the working directory back when dropped, even if the test panics first.
+pub(super) struct Back(pub(super) std::path::PathBuf);
+impl Drop for Back {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+/// `init` notes the vault in `.sync-vault`; once the key is gone from the Keychain, `init` refuses a
+/// new one and says how to rejoin, and the other commands say so too (OFE-77).
+#[test]
+fn init_remembers_the_vault_and_refuses_a_new_key_once_it_is_lost() {
+    let _kc = key::tests::throwaway();
+    let d = tempfile::tempdir().unwrap();
+    let _cwd = crate::CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _back = Back(std::env::current_dir().unwrap());
+    std::env::set_current_dir(d.path()).unwrap();
+    assert!(init(None, Some(true)).is_ok(), "a first run makes the key");
+    let k = key::stored().unwrap().expect("made");
+    assert_eq!(
+        key::remembered().as_deref(),
+        Some(key::short(&key::vault_id(&k)))
+    );
+    key::forget().unwrap();
+    let e = init(None, Some(true)).unwrap_err();
+    assert!(e.contains("ozen sync join"), "{e}");
+    assert_eq!(key::stored().unwrap(), None, "no new key");
+    assert!(key::missing("first run").contains("ozen sync join"));
+    std::fs::remove_file(key::VAULT).unwrap();
+    assert_eq!(key::missing("first run"), "first run");
+}
