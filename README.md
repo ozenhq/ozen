@@ -196,9 +196,11 @@ syncs) so each ends up with the same transcripts and speakers.
 
 Set it up on the first Mac with `target/release/ozen sync preview` (what would be shared), then
 `target/release/ozen sync init --server wss://<your relay>` (or `--lan-only`). While Ozen.app runs it keeps
-`ozen sync run` going in the background; `ozen health` says if it stops. Giving a second Mac the same vault key
-(`ozen sync pair` / `join`) is still in review ([#127](https://github.com/ozenhq/ozen/pull/127)); until it lands
-there is no supported way to add a second Mac.
+`ozen sync run` going in the background; `ozen health` says if it stops. To add another Mac, run
+`target/release/ozen sync pair` on the first one (it puts a pairing code on the clipboard, hidden from clipboard
+managers and cleared after two minutes; send it to yourself privately), then `target/release/ozen sync join` on
+the new Mac and paste it at the prompt. The key goes Mac to Mac by your hand, never through the relay; a
+LAN-only Mac's code makes the new one LAN-only too.
 
 ## Use
 
@@ -226,6 +228,7 @@ there is no supported way to add a second Mac.
 | `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget "Ignored 2"` stops ignoring that voice. Retrains |
 | `target/release/ozen sync preview` | What turning sync on would share (counts, dates, places) and what it never sends; connects nowhere |
 | `target/release/ozen sync init [--server URL \| --lan-only \| --relay]` | Make this Mac's vault key (Keychain) and turn sync on; `--server` saves the relay, `--lan-only` never uses one, `--relay` goes back to the saved one. See [Sync](#sync) |
+| `target/release/ozen sync pair` / `sync join [--force]` | Copy a pairing code for another Mac to the clipboard (cleared after two minutes) / on the new Mac, paste it at the hidden prompt to join the vault; `--force` replaces a different vault key already there |
 | `target/release/ozen sync undo` | Put the synced files back as they were before the last big batch from another Mac, and pause sync until `sync init` |
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
