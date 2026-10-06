@@ -35,10 +35,12 @@ pub fn health() -> Vec<String> {
 
 const USAGE: &str = "\
 ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
-  init [--server URL]
+  init [--server URL | --lan-only | --relay]
                 make this Mac's vault key (kept in the login Keychain; running it again keeps it) and save
                 the relay URL (wss://) after checking it answers; OZEN_SYNC_URL overrides the saved one.
-                Turns sync on here: while Ozen.app runs, it keeps `ozen sync run` going
+                Turns sync on here: while Ozen.app runs, it keeps `ozen sync run` going.
+                --lan-only: never contact any relay, sync only with Macs on the same network;
+                --relay: back to the saved relay (no pairing again)
   preview       what turning sync on would share (counts, dates, places) and what it never sends; reads
                 files only, connects nowhere
   undo          put the synced files back as they were before the last big batch from another Mac
@@ -48,12 +50,26 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
   wake          tell a running `sync run` the Mac just woke, so it reconnects now (Ozen.app runs it on wake)";
 
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
-pub fn init(server: Option<&str>) -> Result<String, String> {
+pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, String> {
     let k = key::keychain()?;
     std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
     let _ = std::fs::remove_file(restore::PAUSED); // resumes after `ozen sync undo`
     if let Some(s) = server {
         config::save(s, Path::new(config::FILE))?;
+    }
+    match lan_only {
+        Some(true) => std::fs::write(config::LAN_ONLY, "")
+            .map_err(|e| format!("{}: {e}", config::LAN_ONLY))?,
+        Some(false) => {
+            let _ = std::fs::remove_file(config::LAN_ONLY);
+        }
+        None => {}
+    }
+    if Path::new(config::LAN_ONLY).exists() {
+        return Ok(format!(
+            "vault {}\nLAN only: syncs with this vault's Macs on the same network, never through a relay",
+            key::short(&key::vault_id(&k))
+        ));
     }
     let url = config::server()?; // OZEN_SYNC_URL still wins over what was just saved
     Ok(report(&key::vault_id(&k), url.as_deref()))
@@ -102,14 +118,16 @@ pub fn cli() {
             println!("{}", preview::preview());
             return;
         }
-        ["init"] => None,
-        ["init", "--server", url] => Some(url.to_string()),
+        ["init"] => (None, None),
+        ["init", "--server", url] => (Some(url.to_string()), Some(false)),
+        ["init", "--lan-only"] => (None, Some(true)),
+        ["init", "--relay"] => (None, Some(false)),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
         }
     };
-    match init(server.as_deref()) {
+    match init(server.0.as_deref(), server.1) {
         Ok(s) => println!("{s}"),
         Err(e) => {
             eprintln!("{e}");
