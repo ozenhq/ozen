@@ -245,3 +245,44 @@ fn a_deleted_keychain_key_is_not_replaced() {
     assert!(keychain(Some(&v)).unwrap_err().contains("ozen sync join"));
     assert_eq!(stored().unwrap(), None, "no new key was made");
 }
+
+/// OFE-64: the key is stored in a file-based keychain (the login one; here a throwaway), where an
+/// iCloud-synchronizable item can't even exist.
+#[test]
+fn the_stored_key_can_never_be_an_icloud_keychain_item() {
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+    let _kc = throwaway();
+    store(&key(BYTES)).unwrap();
+    let kc = test_keychain().unwrap();
+    let find = |synced: bool| {
+        ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .keychains(std::slice::from_ref(&kc))
+            .service(SERVICE)
+            .account(ACCOUNT)
+            .cloud_sync(Some(synced))
+            .search()
+    };
+    assert_eq!(find(false).unwrap().len(), 1, "stored, not synchronizable");
+    assert_eq!(
+        find(true).err().map(security_framework::base::Error::code),
+        Some(-50), // errSecParam
+        "a synchronizable item can't exist in a file-based keychain"
+    );
+}
+
+/// OFE-64: key storage never opts into the data protection keychain (where iCloud Keychain lives) nor
+/// asks for a synced item.
+#[test]
+fn key_storage_never_opts_into_icloud_keychain() {
+    let src = include_str!("key.rs");
+    for banned in [
+        "DataProtectionKeychain",
+        "use_protected_keychain",
+        "kSecAttrSynchronizable",
+        "set_access_synchronized",
+        "cloud_sync",
+    ] {
+        assert!(!src.contains(banned), "key.rs uses {banned}");
+    }
+}

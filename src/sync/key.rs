@@ -8,6 +8,12 @@ use security_framework::passwords::{get_generic_password, set_generic_password};
 use security_framework::random::SecRandom;
 use sha2::{Digest, Sha256};
 
+/// The vault key is a generic password in the login Keychain: a file-based keychain, which iCloud
+/// Keychain never syncs and where a synchronizable item can't exist at all (asking for one is errSecParam,
+/// key_tests). That keeps the one secret that reads the synced meetings off Apple's servers (OFE-64), so key
+/// storage must never move to the data protection keychain or ask for a synced item (guarded in
+/// key_tests). Its accessibility is the login Keychain's: unlocked while the user is logged in, so a
+/// background `ozen sync run` reads it with the screen locked.
 pub(super) const SERVICE: &str = "ozen-sync";
 const ACCOUNT: &str = "vault-key";
 
