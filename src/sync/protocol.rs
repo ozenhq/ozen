@@ -17,6 +17,7 @@ use super::records::records;
 #[cfg(test)]
 use super::seal;
 use super::seal::Sealed;
+use super::status::{self, HELLO_EVERY};
 use crate::merge::{self, Synced};
 use base64::Engine;
 use serde_json::Value;
@@ -136,7 +137,7 @@ impl Session {
         self.told = ours.clone();
         self.told_in = self.versions.speak();
         let max = self.versions.own();
-        let from = Some((crate::crdt::device().into(), super::status::name()));
+        let from = Some((crate::crdt::device().into(), status::name()));
         self.said_hello = Some(std::time::Instant::now());
         Ok(vec![self.frame_in(
             self.versions.oldest(),
@@ -199,10 +200,7 @@ impl Session {
     /// `changes`, but only once a synced file changed since the last tick (the connection ticks every
     /// few seconds). Who wrote it doesn't matter: a record merged from another Mac that ours beat goes out too.
     pub fn tick(&mut self) -> Result<Vec<Sealed>, String> {
-        let due = self
-            .said_hello
-            .is_some_and(|t| t.elapsed() >= super::status::HELLO_EVERY);
-        if due {
+        if self.said_hello.is_some_and(|t| t.elapsed() >= HELLO_EVERY) {
             return self.hello();
         }
         let now = super::marks::stamp();
@@ -252,7 +250,7 @@ impl Session {
             Msg::Buckets { h, max, from } => {
                 self.versions.heard(max);
                 if let Some((id, name)) = from {
-                    super::status::seen(&id, &name, super::status::now())?;
+                    status::seen(&id, &name, status::now())?;
                 }
                 let theirs = base64::engine::general_purpose::STANDARD
                     .decode(h)
