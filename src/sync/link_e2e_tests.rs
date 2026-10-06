@@ -183,7 +183,9 @@ fn three_macs_in_every_join_order_and_twenty_random_schedules_end_the_same() {
     }
     // twenty seeded schedules: a few random pairs, then every pair once in a random order
     for seed in 0..20u8 {
-        let mut r = u64::from(seed) * 6364136223846793005 + 1442695040888963407;
+        let mut r = u64::from(seed)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407); // wrapping: debug builds (the daily CI run) check overflow
         let mut next = |n: usize| {
             r = r
                 .wrapping_mul(6364136223846793005)
