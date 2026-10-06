@@ -164,9 +164,15 @@ pub fn forget_later(count: isize) {
 
 /// `ozen sync join [--force]`: reads the code without echoing it.
 pub fn join_prompt(force: bool) -> Result<String, String> {
-    let code =
+    use std::io::IsTerminal;
+    let code = if std::io::stdin().is_terminal() {
         rpassword::prompt_password("pairing code (from `ozen sync pair` on your other Mac): ")
-            .map_err(|e| format!("can't read the code: {e}"))?;
+    } else {
+        // Ozen.app's Join sends the code on stdin: still never in argv or shell history
+        let mut c = String::new();
+        std::io::stdin().read_line(&mut c).map(|_| c)
+    }
+    .map_err(|e| format!("can't read the code: {e}"))?;
     let out = join(&code, force, key::stored()?, key::store, |u| {
         if u.is_empty() {
             // the other Mac is LAN-only: so is this one

@@ -34,7 +34,7 @@ const LOCK: &str = ".sync.lock";
 /// When `status` last started it (modified time) and how many starts in a row didn't stay up (contents).
 const STARTED: &str = ".sync-started";
 /// Why the last `ozen sync run` stopped, for `ozen health`; removed once one stays up.
-const ERROR: &str = ".sync-error";
+pub(super) const ERROR: &str = ".sync-error";
 /// After a start, the next may follow this long later, doubling with each start in a row that didn't
 /// stay up, to `RETRY_MAX`. A runner that stays up `STAYED` resets the count, so a killed one comes back
 /// at the next poll.

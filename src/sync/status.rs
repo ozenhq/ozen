@@ -84,6 +84,16 @@ pub fn status_at(now: u64) -> Value {
         .filter(|r| r["connected"] == true)
         .and_then(|r| r["online"].as_u64())
         .map(|n| n.saturating_sub(1));
+    // why sync isn't working, while it should: the runner's last error, else the relay's
+    let error = (sync == "on")
+        .then(|| {
+            let ran = (!running).then(|| fs::read_to_string(super::run::ERROR).ok());
+            let relay_error = relay
+                .as_ref()
+                .and_then(|r| r["error"].as_str().map(String::from));
+            ran.flatten().map(|e| e.trim().to_string()).or(relay_error)
+        })
+        .flatten();
     let mut macs: Vec<_> = macs().into_iter().collect();
     macs.sort_by_key(|(_, (_, at))| std::cmp::Reverse(*at));
     let macs: Vec<Value> = macs
@@ -101,6 +111,8 @@ pub fn status_at(now: u64) -> Value {
     json!({
         "sync": sync,
         "running": running,
+        "lan_only": std::path::Path::new(super::config::LAN_ONLY).exists(),
+        "error": error,
         "relay": relay,
         "other_macs_online": online,
         "macs": macs,

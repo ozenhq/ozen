@@ -4,10 +4,10 @@ expression: v
 ---
 {
   "error": null,
-  "lan_only": false,
+  "lan_only": true,
   "macs": [],
   "other_macs_online": null,
   "relay": null,
-  "running": false,
-  "sync": "off"
+  "running": true,
+  "sync": "on"
 }

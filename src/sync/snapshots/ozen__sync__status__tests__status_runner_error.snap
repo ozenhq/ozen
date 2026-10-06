@@ -3,11 +3,11 @@ source: src/sync/status_tests.rs
 expression: v
 ---
 {
-  "error": null,
+  "error": "Local Network access is off",
   "lan_only": false,
   "macs": [],
   "other_macs_online": null,
   "relay": null,
   "running": false,
-  "sync": "off"
+  "sync": "on"
 }

@@ -1,8 +1,10 @@
 ---
 source: src/sync/status_tests.rs
-expression: "at(d.path(), || status_at(NOW))"
+expression: v
 ---
 {
+  "error": null,
+  "lan_only": false,
   "macs": [
     {
       "days_ago": 0,
