@@ -12,12 +12,12 @@ use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 /// The relay's contract (ozenhq/sync src/hub): `/v/<vault>` with `Bearer <token>` where vault =
 /// hex(SHA-256(token)); binary frames go to the vault's other connections; `{"online":N}` on every
 /// join and leave. In-process, since the relay's repo is private and CI can't build it.
-struct Relay {
-    addr: SocketAddr,
+pub(super) struct Relay {
+    pub(super) addr: SocketAddr,
     stop: Arc<AtomicBool>,
     /// Connections accepted (handshake passed) and refused.
-    accepted: Arc<AtomicUsize>,
-    refused: Arc<AtomicUsize>,
+    pub(super) accepted: Arc<AtomicUsize>,
+    pub(super) refused: Arc<AtomicUsize>,
 }
 
 type Vaults = Arc<Mutex<HashMap<String, Vec<(usize, mpsc::Sender<Message>)>>>>;
@@ -38,13 +38,13 @@ fn announce(vaults: &Vaults, vault: &str) {
 }
 
 impl Relay {
-    fn start() -> Relay {
+    pub(super) fn start() -> Relay {
         Relay::on("127.0.0.1:0".parse().unwrap())
     }
 
     /// On `addr` (a fixed port, to restart the "same" relay).
     #[allow(clippy::result_large_err)] // the handshake callback's signature is tungstenite's
-    fn on(addr: SocketAddr) -> Relay {
+    pub(super) fn on(addr: SocketAddr) -> Relay {
         let listener = TcpListener::bind(addr).unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -152,7 +152,7 @@ impl Relay {
         }
     }
 
-    fn url(&self) -> String {
+    pub(super) fn url(&self) -> String {
         format!("ws://{}", self.addr)
     }
 }
@@ -165,7 +165,7 @@ impl Drop for Relay {
 }
 
 /// Runs `f` with `dir` as the working directory, as ozen runs from its folder.
-fn at<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+pub(super) fn at<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
     let _cwd = crate::CWD.lock().unwrap_or_else(PoisonError::into_inner);
     let back = std::env::current_dir().unwrap();
     std::env::set_current_dir(dir).unwrap();
@@ -174,11 +174,11 @@ fn at<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
     r
 }
 
-fn line(id: &str) -> String {
+pub(super) fn line(id: &str) -> String {
     json!({"id": id, "t": 1.0, "text": format!("said {id}"), "v": 1}).to_string() + "\n"
 }
 
-fn folder(lines: &[&str]) -> tempfile::TempDir {
+pub(super) fn folder(lines: &[&str]) -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
         d.path().join("lines.jsonl"),
@@ -188,7 +188,7 @@ fn folder(lines: &[&str]) -> tempfile::TempDir {
     d
 }
 
-fn ids(dir: &Path) -> Vec<String> {
+pub(super) fn ids(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_to_string(dir.join("lines.jsonl"))
         .unwrap_or_default()
         .lines()
@@ -200,12 +200,12 @@ fn ids(dir: &Path) -> Vec<String> {
 }
 
 /// A Mac syncing `dir` through the relay at `url`.
-fn mac(url: &str, dir: &Path, key: &Key) -> Link {
+pub(super) fn mac(url: &str, dir: &Path, key: &Key) -> Link {
     let dir = PathBuf::from(dir);
     start(url, key, Coalesced::new(|| {}), move |step| at(&dir, step))
 }
 
-fn wait_for(limit: Duration, what: &str, mut ok: impl FnMut() -> bool) {
+pub(super) fn wait_for(limit: Duration, what: &str, mut ok: impl FnMut() -> bool) {
     let started = Instant::now();
     while !ok() {
         assert!(started.elapsed() < limit, "timed out: {what}");
