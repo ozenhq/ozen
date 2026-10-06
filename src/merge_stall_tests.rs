@@ -114,8 +114,10 @@ fn files_swapped_in_while_merging_lose_nothing() {
     let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop = done.clone();
     let rewriter = std::thread::spawn(move || {
+        // at most 20 rewrites (about a second): with no end, macOS file locks (not first-come first-served)
+        // could starve the merge's locked fallback, and the test hung
         let mut n = 0;
-        while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        while !stop.load(std::sync::atomic::Ordering::SeqCst) && n < 20 {
             let _lock = locked().unwrap();
             let mut rows = parse_jsonl(&fs::read_to_string(LINES).unwrap());
             rows.push(line(&format!("note-{n}"), 8e9 + n as f64));
