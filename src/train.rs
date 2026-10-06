@@ -384,7 +384,7 @@ pub fn retrain(retry: bool) {
     }
     for (sid, name) in &tags {
         // a retagged or cleared line leaves its old person
-        for (n, s) in samples.iter_mut() {
+        for (n, s) in &mut samples {
             if Some(n.as_str()) != name.as_str() {
                 s.shift_remove(sid);
             }
