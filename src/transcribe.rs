@@ -179,13 +179,18 @@ impl Transcriber {
 
     /// (Re)load named voiceprints; src/train.rs rewrites them after every tag, so pick up changes live.
     fn load_registry(&mut self) {
-        // with sync, tags made on other Macs arrive as synced records, never through the GitHub registry
+        // with sync, tags made on other Macs arrive as synced records, never through the GitHub registry;
+        // and only a registry that is its own repository: else git would pull into the ozen checkout
+        let registry = std::path::Path::new(REGISTRY).join(".git").exists();
         if !crate::sync::run::configured()
+            && registry
             && self.last_pull.is_none_or(|t| t.elapsed() > PULL_EVERY)
         {
             self.last_pull = Some(Instant::now());
             // ponytail: offline or diverged just keeps the local prints; src/train.rs reconciles on its next push
             if let Ok(mut c) = crate::cmd("git")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
                 .args(["-C", REGISTRY, "pull", "--ff-only", "-q"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
