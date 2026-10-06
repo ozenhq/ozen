@@ -38,7 +38,8 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   Each tag runs `ozen tag`, which retrains (`src/train.rs`): every person's voiceprint becomes the average of all lines tagged as them
   (stored in the registry, so tags accumulate across meetings), untagged lines are relabeled with the new
   prints, and the live transcriber reloads them.
-- **Shares voices across your Macs.** The registry is a git repo that every Mac clones into `~/ozen/voices`.
+- **Shares voices across your Macs** (without [sync](#sync); with it, each Mac rebuilds the same voiceprints
+  from the synced tags and nothing goes to the registry). The registry is a git repo that every Mac clones into `~/ozen/voices`.
   `ozen start` pulls it, the running transcriber pulls again every few minutes (`PULL_EVERY` in `src/transcribe.rs`),
   and every retrain starts from the newest registry and pushes when it's done. Tags made on two Macs at the same
   time both survive: a push that loses the race rebuilds on top of the other Mac's and pushes again. Offline, the
@@ -49,6 +50,7 @@ Everything runs on your Mac: no bot joins the meeting and no audio leaves the ma
   record has a version, deletes leave a tombstone, and new ids name the Mac that made them, so two Macs' folders
   merge without conflicts, whatever the order. Files from older versions load as they are. `ozen merge DIR`
   merges another ozen folder (another Mac's, a backup) into this one. What's synced and how: [src/crdt.rs](src/crdt.rs).
+- **Syncs between your Macs, with nothing kept on a server.** See [Sync](#sync).
 - **Ignores voices you don't want.** A video playing next to the Mac isn't part of the meeting: click its speaker
   name and pick **Ignore this voice**, or **Ignore all N lines by S3** to mark every nearby line of that speaker at once.
   Each ignore is its own voice (Ignored, Ignored 2…); pick **Same voice as Ignored 2** when it's that video again.
@@ -176,6 +178,31 @@ with a local self-signed certificate (created once in `~/Library/Keychains/ozen-
 permissions survive rebuilds. The Whisper and ECAPA models download on first use. The MossFormer2 separator (~640MB) downloads in the
 background on the first start; until it's ready, people talking at once stay merged in one line.
 
+## Sync
+
+Your Macs exchange lines, tags, fixes, places and vocabulary with each other ([src/crdt.rs](src/crdt.rs) lists what
+syncs) so each ends up with the same transcripts and speakers.
+
+- **Mac to Mac, encrypted, nothing stored.** Macs on the same network talk directly; Macs elsewhere meet through a
+  relay ([ozenhq/sync](https://github.com/ozenhq/sync)). Every frame is sealed with a key only your Macs hold
+  before it leaves ([src/sync/seal.rs](src/sync/seal.rs)), and the relay only forwards frames between Macs connected
+  at the same time and keeps nothing ([how the relay works](https://github.com/ozenhq/sync/blob/main/docs/architecture.md)).
+  No meeting data, and no way to read it, is on any server.
+- **Online together.** Because nothing is stored, two Macs catch up only while both are running: a laptop and a
+  desktop that are never on at the same time don't sync until they are.
+- **No relay at all**, if you'd rather: `ozen sync init --lan-only` syncs only between Macs on the same network.
+- **Undo a bad batch.** Before a big batch from another Mac is merged, ozen saves a restore point;
+  `ozen sync undo` goes back to it and pauses sync until `ozen sync init`.
+
+Set it up on the first Mac with `target/release/ozen sync preview` (what would be shared), then
+`target/release/ozen sync init --server wss://<your relay>` (or `--lan-only`). While Ozen.app runs it keeps
+`ozen sync run` going in the background; `ozen health` says if it stops. To add another Mac, run
+`target/release/ozen sync pair` on the first one (it puts a pairing code on the clipboard, hidden from clipboard
+managers and cleared after two minutes), then `target/release/ozen sync join` on the new Mac and paste it at the
+prompt if your Macs share a clipboard (Handoff's Universal Clipboard), or type it in: dashes, spaces and case
+don't matter, and a typo is caught. The key goes Mac to Mac by your hand, never through the relay; a
+LAN-only Mac's code makes the new one LAN-only too.
+
 ## Use
 
 | Command | What it does |
@@ -200,6 +227,10 @@ background on the first start; until it's ready, people talking at once stay mer
 | `target/release/ozen voices` | JSON list of people, this run's unnamed speakers and ignored voices (what **Voices…** shows) |
 | `target/release/ozen name "Dana Levi" <line-id>...` | Tag those lines as a person, e.g. an unnamed speaker's lines. Retrains |
 | `target/release/ozen rename <from> <to>` / `forget <name>` | Move a person's tags to another name (merging into an existing one) / clear them on this Mac. `forget "Ignored 2"` stops ignoring that voice. Retrains |
+| `target/release/ozen sync preview` | What turning sync on would share (counts, dates, places) and what it never sends; connects nowhere |
+| `target/release/ozen sync init [--server URL \| --lan-only \| --relay]` | Make this Mac's vault key (Keychain) and turn sync on; `--server` saves the relay, `--lan-only` never uses one, `--relay` goes back to the saved one. See [Sync](#sync) |
+| `target/release/ozen sync pair` / `sync join [--force]` | Copy a pairing code for another Mac to the clipboard (cleared after two minutes) / on the new Mac, paste it at the hidden prompt to join the vault; `--force` replaces a different vault key already there |
+| `target/release/ozen sync undo` | Put the synced files back as they were before the last big batch from another Mac, and pause sync until `sync init` |
 | `target/release/ozen retrain` | Rebuild voiceprints, relabels, ignored voices and accuracy from all tags |
 | `target/release/ozen eval [--vocab 0,10,30] [--repeat 0,1,2] [--real] [--fresh]` | Score learning settings (hint-word cap, repeats before an automatic correction) on fixed spoken lines, best first. See [Tuning how fixes teach](#tuning-how-fixes-teach) |
 | `target/release/ozen compare [N]` | Transcribe the last N real chunks (kept in `recent/`, 20 max, local only; the computer's own audio goes to `recent/local/` for replaying a missed echo) with stock vs Hebrew vs Hebrew+vocab, to judge changes on your own speech. Shows what the live filters keep, or `(dropped: …)` with Whisper's raw text. `OZEN_KEEP_AUDIO=0` keeps none |
@@ -236,6 +267,7 @@ In *Always* mode the mic records everything said near the Mac, not only meetings
 This records and transcribes other people. Tell participants, and follow your local recording laws.
 [If ozen recorded you](docs/privacy.md) explains it for them, in plain words; link it in your meeting invites.
 Voiceprints are biometric data: keep the registry private and enroll only people who agreed.
+With [sync](#sync), everything that leaves a Mac is encrypted for your other Macs only, and the relay keeps nothing.
 `places.json` holds where you live and work. It stays on the Mac and is gitignored; don't copy it into shared
 folders. Your location is never sent anywhere, but viewing the Places map fetches tiles for that area from
 OpenStreetMap's servers.
