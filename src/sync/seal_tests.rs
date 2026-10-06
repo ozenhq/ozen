@@ -105,3 +105,53 @@ fn every_socket_write_in_sync_is_a_sealed_frame_or_the_handshake() {
         ]
     );
 }
+
+/// The `compile_fail` proof a doc-test would give in a library crate: the real `Sealed` definition (cut
+/// from seal.rs) in a module, and a sender that takes `Sealed`, compiled with rustc. Wrapping bytes as
+/// `Sealed` outside its module, or handing the sender a `Vec<u8>`, must not compile; reading a frame's
+/// bytes must (the control, so a broken setup can't pass for a refusal).
+#[test]
+fn sending_anything_but_a_sealed_frame_does_not_compile() {
+    let src =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/seal.rs")).unwrap();
+    let start = src
+        .find("#[derive(Debug, Clone, PartialEq, Eq)]\npub struct Sealed")
+        .unwrap();
+    let end = src.find("/// `plaintext` encrypted").unwrap();
+    let module = format!(
+        "mod seal {{\n{}\npub fn seal(p: &[u8]) -> Sealed {{ Sealed(p.to_vec()) }}\n}}\n\
+         fn send(f: seal::Sealed) -> usize {{ f.len() + f.into_bytes().len() }}\n",
+        &src[start..end]
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let compiles = |name: &str, main: &str| {
+        let file = dir.path().join(format!("{name}.rs"));
+        std::fs::write(&file, format!("{module}fn main() {{ {main} }}\n")).unwrap();
+        let out =
+            std::process::Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
+                .args(["--edition", "2024", "--crate-type", "bin", "-o"])
+                .arg(dir.path().join(name))
+                .arg(&file)
+                .output()
+                .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (ok, err) = compiles("control", "let _ = send(seal::seal(b\"x\"));");
+    assert!(ok, "the control must compile:\n{err}");
+    let (ok, err) = compiles(
+        "wrap",
+        "let _ = send(seal::Sealed(b\"plaintext\".to_vec()));",
+    );
+    assert!(
+        !ok && err.contains("private"),
+        "wrapping plaintext as Sealed compiled:\n{err}"
+    );
+    let (ok, err) = compiles("raw", "let _ = send(b\"plaintext\".to_vec());");
+    assert!(
+        !ok && err.contains("mismatched types"),
+        "sending a Vec<u8> compiled:\n{err}"
+    );
+}
