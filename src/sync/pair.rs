@@ -26,7 +26,9 @@ fn checksum(payload: &[u8]) -> [u8; 4] {
 /// The pairing code for key `k` and relay `url` (empty for a LAN-only vault), in dash-separated groups of
 /// four.
 pub fn code(k: &Key, url: &str) -> String {
-    let mut p = zeroize::Zeroizing::new(vec![VERSION]); // holds the key: wiped when dropped
+    // holds the key: wiped when dropped, and sized up front so no reallocation leaves a copy behind
+    let mut p = zeroize::Zeroizing::new(Vec::with_capacity(1 + 32 + url.len() + 4));
+    p.push(VERSION);
     p.extend(k.iter());
     p.extend(url.as_bytes());
     let sum = checksum(&p);
@@ -48,7 +50,7 @@ pub fn parse(code: &str) -> Result<(Key, String), String> {
         .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_ascii_uppercase();
-    let p = BASE32_NOPAD.decode(c.as_bytes()).map_err(|_| bad)?;
+    let p = zeroize::Zeroizing::new(BASE32_NOPAD.decode(c.as_bytes()).map_err(|_| bad)?);
     if p.len() < 1 + 32 + 4 {
         return Err(bad.into());
     }

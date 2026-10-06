@@ -24,7 +24,7 @@ fn ids_are_pinned_for_a_fixed_key() {
         "96e30ee41d949acadae54cca5765bad30e12e1539cf36207ddfd359431628c69"
     );
     assert_eq!(
-        token(&KEY()),
+        *token(&KEY()),
         "e9511b0a65cafbf6f5deb78fece4c4d2327a14e5963f35a3be927922c5b970e3"
     );
     assert_eq!(
@@ -34,7 +34,7 @@ fn ids_are_pinned_for_a_fixed_key() {
     let hex64 =
         |s: &str| s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     assert!(hex64(&vault_id(&KEY())) && hex64(&token(&KEY())));
-    assert_ne!(token(&KEY()), hex(&seal_key(&KEY())[..]));
+    assert_ne!(*token(&KEY()), hex(&seal_key(&KEY())[..]));
     // what the relay recomputes from the bearer token alone
     assert_eq!(
         vault_id(&KEY()),
@@ -124,7 +124,8 @@ fn no_raw_key_arrays_in_sync_code() {
             continue;
         }
         for (i, l) in std::fs::read_to_string(&p).unwrap().lines().enumerate() {
-            if l.contains("[u8; 32]") && !l.contains("not a key") {
+            let bare: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+            if (bare.contains("[u8;32]") || bare.contains("[0u8;32]")) && !l.contains("not a key") {
                 found.push(format!("{name}:{}: {l}", i + 1));
             }
         }

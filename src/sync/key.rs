@@ -18,7 +18,12 @@ pub fn key(bytes: [u8; 32]) -> Key {
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    let mut s = String::with_capacity(b.len() * 2); // no reallocation leaves key hex behind
+    for x in b {
+        let _ = write!(s, "{x:02x}");
+    }
+    s
 }
 
 fn hkdf(key: &Key, info: &str) -> Key {
@@ -30,8 +35,8 @@ fn hkdf(key: &Key, info: &str) -> Key {
 }
 
 /// The bearer token the relay checks: an HKDF output separate from the encryption key.
-pub fn token(key: &Key) -> String {
-    hex(&hkdf(key, "ozen-sync token")[..])
+pub fn token(key: &Key) -> zeroize::Zeroizing<String> {
+    zeroize::Zeroizing::new(hex(&hkdf(key, "ozen-sync token")[..]))
 }
 
 /// The vault's name on the relay: hex(SHA-256(token)), 64 lowercase hex chars. The relay checks a

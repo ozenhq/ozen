@@ -204,6 +204,7 @@ fn serve_here() -> Result<(), String> {
     // and through the relay, when one is set: Macs elsewhere (link.rs)
     let _link =
         super::config::server()?.map(|url| super::link::start(&url, &key, after, |step| step()));
+    drop(key); // both sides hold only what they derived from it now (OFE-60)
     let _ = File::create(ASKED); // started by hand: counts as asked until `IDLE` passes
     let started = std::time::Instant::now();
     let mut stayed = false;

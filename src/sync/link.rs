@@ -110,7 +110,10 @@ fn connect(url: &str, vault: &str, token: &str) -> Result<Ws, End> {
     let mut req = format!("{url}/v/{vault}") // vault-id: request path
         .into_client_request()
         .map_err(|e| retry(&e))?;
-    let auth = format!("Bearer {token}").parse().map_err(|e| retry(&e))?;
+    // ponytail: the header value tungstenite keeps isn't wiped; out of this crate's reach
+    let auth = zeroize::Zeroizing::new(format!("Bearer {token}"))
+        .parse()
+        .map_err(|e| retry(&e))?;
     req.headers_mut().insert("authorization", auth);
     let host = req
         .uri()

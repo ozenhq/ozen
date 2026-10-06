@@ -123,7 +123,12 @@ fn nothing_key_derived_is_printed() {
     let (_, _, r) = run(&code(&K(), URL), false, None);
     let out = r.unwrap();
     let hex: String = K().iter().map(|b| format!("{b:02x}")).collect();
-    for secret in [code(&K(), URL), hex, key::token(&K()), key::vault_id(&K())] {
+    for secret in [
+        code(&K(), URL),
+        hex,
+        key::token(&K()).to_string(),
+        key::vault_id(&K()),
+    ] {
         assert!(!out.contains(&secret), "{out}");
     }
 }
@@ -191,7 +196,7 @@ fn errors_print_nothing_key_derived_either() {
         for secret in [
             c.clone(),
             hex.clone(),
-            key::token(&K()),
+            key::token(&K()).to_string(),
             key::vault_id(&K()),
         ] {
             assert!(!e.contains(&secret), "{e}");
