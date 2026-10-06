@@ -9,6 +9,7 @@ pub mod key;
 pub mod link;
 pub mod local;
 pub mod marks;
+pub mod off;
 pub mod pair;
 pub mod parts;
 pub mod preview;
@@ -44,6 +45,8 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
                 --relay: back to the saved relay (no pairing again)
   preview       what turning sync on would share (counts, dates, places) and what it never sends; reads
                 files only, connects nowhere
+  off           leave the vault on this Mac: remove its key from the Keychain and the relay URL, stop
+                syncing; meetings here stay, and no copy of them is on any server
   undo          put the synced files back as they were before the last big batch from another Mac
                 (saving the current ones first, so it can be undone too) and pause sync until `init`
   run           sync with this vault's Macs, on this network and through the relay, until the app stops asking
@@ -58,8 +61,7 @@ ozen sync: share lines, tags, fixes, places and vocabulary with your other Macs
 /// `ozen sync init [--server URL]`: makes the vault key on first run (kept after), saves the relay URL.
 pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, String> {
     let k = key::keychain()?;
-    std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
-    let _ = std::fs::remove_file(restore::PAUSED); // resumes after `ozen sync undo`
+    turn_on()?;
     if let Some(s) = server {
         config::save(s, Path::new(config::FILE))?;
     }
@@ -79,6 +81,17 @@ pub fn init(server: Option<&str>, lan_only: Option<bool>) -> Result<String, Stri
     }
     let url = config::server()?; // OZEN_SYNC_URL still wins over what was just saved
     Ok(report(&key::vault_id(&k), url.as_deref()))
+}
+
+/// Sync on here, and not paused (by `ozen sync undo` or `off`): what `init` and `join` both do.
+pub(super) fn turn_on() -> Result<(), String> {
+    std::fs::write(run::ON, "").map_err(|e| format!("{}: {e}", run::ON))?;
+    match std::fs::remove_file(restore::PAUSED) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("{}: {e}", restore::PAUSED))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// What `init` prints: the vault by its short id only (key::short), and the relay or that sync is off.
@@ -107,6 +120,16 @@ pub fn cli() {
             if let Err(e) = wake::touch() {
                 eprintln!("{e}");
                 std::process::exit(1);
+            }
+            return;
+        }
+        ["off"] => {
+            match off::off() {
+                Ok(s) => println!("{s}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
             return;
         }

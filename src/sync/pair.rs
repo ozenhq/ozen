@@ -178,7 +178,7 @@ pub fn join_prompt(force: bool) -> Result<String, String> {
         config::save(u, std::path::Path::new(config::FILE))
     })?;
     // sync is on here now, as after `init`: Ozen.app starts `ozen sync run`
-    std::fs::write(super::run::ON, "").map_err(|e| format!("{}: {e}", super::run::ON))?;
+    super::turn_on()?;
     Ok(out)
 }
 

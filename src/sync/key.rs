@@ -124,6 +124,19 @@ pub fn store_at(service: &str, k: &Key) -> Result<(), String> {
     set_generic_password(service, ACCOUNT, k).map_err(|e| format!("Keychain: {e}"))
 }
 
+/// Removes the key from the login Keychain (`ozen sync off`); fine if there was none.
+pub fn forget() -> Result<(), String> {
+    forget_at(SERVICE)
+}
+
+/// `forget`, under Keychain service `service`.
+pub fn forget_at(service: &str) -> Result<(), String> {
+    match security_framework::passwords::delete_generic_password(service, ACCOUNT) {
+        Err(e) if e.code() != -25300 => Err(format!("Keychain: {e}")), // -25300: errSecItemNotFound
+        _ => Ok(()),
+    }
+}
+
 /// The key in the login Keychain, made on first use.
 pub fn keychain() -> Result<Key, String> {
     load_or_create(read, store)

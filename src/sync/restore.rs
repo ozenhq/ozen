@@ -89,7 +89,7 @@ pub fn before(theirs: &Synced) -> Result<File, String> {
 }
 
 /// The merge lock (`MERGING`), waiting for whoever holds it.
-fn merging() -> Result<File, String> {
+pub(super) fn merging() -> Result<File, String> {
     let f = File::create(MERGING).map_err(|e| format!("{MERGING}: {e}"))?;
     f.lock().map_err(|e| format!("{MERGING}: {e}"))?;
     Ok(f)
