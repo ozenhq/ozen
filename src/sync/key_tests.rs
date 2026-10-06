@@ -56,3 +56,21 @@ fn a_wrong_sized_stored_key_is_an_error() {
     let r = load_or_create(|| Ok(Some(vec![1; 5])), |_| panic!("must not overwrite"));
     assert!(r.is_err());
 }
+
+/// Debug builds read a throwaway key from `OZEN_SYNC_KEY_FILE` (scripts/sync-dev.sh), never the
+/// Keychain; release builds ignore it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_debug_build_takes_the_key_from_ozen_sync_key_file() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("key");
+    std::fs::write(&f, [7u8; 32]).unwrap();
+    // SAFETY: nextest runs each test in its own process
+    unsafe { std::env::set_var("OZEN_SYNC_KEY_FILE", &f) };
+    assert_eq!(stored().unwrap(), Some([7u8; 32]));
+    assert_eq!(
+        keychain().unwrap(),
+        [7u8; 32],
+        "and never makes a Keychain one"
+    );
+}
