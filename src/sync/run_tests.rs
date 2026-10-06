@@ -66,7 +66,7 @@ fn converge_then_follow_an_edit(on: impl Fn() -> IfKind) {
         folder(&[line("1@a", "from a")]),
         folder(&[line("2@b", "from b")]),
     );
-    let key = [7; 32];
+    let key = super::local::random().unwrap();
     let (_ma, _mb) = (mac_on(on(), a.path(), &key), mac_on(on(), b.path(), &key));
     wait_for("first exchange", || {
         ids(a.path()).len() == 2 && ids(b.path()).len() == 2
@@ -107,7 +107,7 @@ fn two_runners_over_the_real_network_converge_and_follow_an_edit() {
 #[test]
 fn a_stopped_mac_stops_advertising() {
     let a = folder(&[]);
-    let local = mac(a.path(), &[8; 32]);
+    let local = mac(a.path(), &super::local::random().unwrap());
     let browser = ServiceDaemon::new().unwrap();
     browser.disable_interface(IfKind::All).unwrap();
     browser.enable_interface(IfKind::LoopbackV4).unwrap();
@@ -310,7 +310,7 @@ fn an_exchange_at_background_priority_completes_with_half_the_cores_busy() {
         folder(&[line("1@a", "from a")]),
         folder(&[line("2@b", "from b")]),
     );
-    let key = [9; 32];
+    let key = super::local::random().unwrap();
     let (_ma, _mb) = (mac(a.path(), &key), mac(b.path(), &key));
     // background priority may wait on a busy Mac; what matters is that it gets through
     wait_within(Duration::from_secs(120), "an exchange under load", || {

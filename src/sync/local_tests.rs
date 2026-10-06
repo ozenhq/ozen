@@ -234,11 +234,18 @@ fn two_macs_on_one_network_find_each_other_and_converge_with_no_relay() {
     );
     let b = folder(&[line("2@b", "from b")], json!({}));
     let other = folder(&[line("3@c", "another vault")], json!({}));
-    let (vault, key) = ("v".repeat(64), [5; 32]);
+    // a fresh vault key per run: loopback Bonjour is shared with every test running on this Mac,
+    // in this suite and in other checkouts, and Macs of one vault would connect across tests
+    let (vault, key) = ("v".repeat(64), random().unwrap());
     let counts: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
     let _ma = mac(a.path(), &vault, key, counts[0].clone());
     let _mb = mac(b.path(), &vault, key, counts[1].clone());
-    let _mo = mac(other.path(), &"o".repeat(64), [6; 32], counts[2].clone());
+    let _mo = mac(
+        other.path(),
+        &"o".repeat(64),
+        random().unwrap(),
+        counts[2].clone(),
+    );
     // no relay is configured or reachable: OZEN_SYNC_URL is unset and nothing listens for one
     let started = Instant::now();
     while data(a.path()) != data(b.path()) || data(a.path()).0.len() < 2 {
@@ -275,7 +282,7 @@ fn two_macs_converge_over_the_real_network() {
         json!({"1@a": {"v": 1, "val": "Dana"}}),
     );
     let b = folder(&[line("2@b", "from b")], json!({}));
-    let (vault, key) = ("w".repeat(64), [8; 32]);
+    let (vault, key) = ("w".repeat(64), random().unwrap());
     let n = || Arc::new(AtomicUsize::new(1)); // no forced first hang-up here
     let _ma = mac_on(on.clone(), a.path(), &vault, key, n());
     let _mb = mac_on(on, b.path(), &vault, key, n());
@@ -317,81 +324,5 @@ fn only_this_networks_addresses_reach_the_handshake() {
     }
 }
 
-#[test]
-fn macs_on_either_side_of_midnight_still_find_each_other() {
-    let line = |id: &str| json!({"id": id, "t": 1.0, "text": "x", "v": 1});
-    let a = folder(&[line("1@a")], json!({}));
-    let b = folder(&[line("2@b")], json!({}));
-    let (vault, key) = ("v".repeat(64), [5; 32]);
-    let peers = Arc::new(AtomicUsize::new(0));
-    // one Mac advertised at 23:59:50, the other looks at 00:00:30 the next day
-    let _ma = mac_at(
-        || 20_000 * 86_400 - 10,
-        IfKind::LoopbackV4,
-        a.path(),
-        &vault,
-        key,
-        peers.clone(),
-    );
-    let _mb = mac_at(
-        || 20_000 * 86_400 + 30,
-        IfKind::LoopbackV4,
-        b.path(),
-        &vault,
-        key,
-        peers.clone(),
-    );
-    let started = Instant::now();
-    while data(a.path()).0.len() < 2 || data(b.path()).0.len() < 2 {
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "they never met"
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(20_000 * 86_400);
-
-#[test]
-fn a_running_mac_advertises_a_new_tag_and_id_when_its_day_changes() {
-    let line = |id: &str| json!({"id": id, "t": 1.0, "text": "x", "v": 1});
-    let a = folder(&[line("1@a")], json!({}));
-    let b = folder(&[line("2@b")], json!({}));
-    let (vault, key) = ("v".repeat(64), [5; 32]);
-    let peers = Arc::new(AtomicUsize::new(0));
-    let clock = || CLOCK.load(Ordering::SeqCst);
-    let ma = mac_at(
-        clock,
-        IfKind::LoopbackV4,
-        a.path(),
-        &vault,
-        key,
-        peers.clone(),
-    );
-    let before = ma.fullname.lock().unwrap().clone();
-    CLOCK.store(20_002 * 86_400, Ordering::SeqCst); // two days on: a's first tag is too old to match
-    std::thread::sleep(Duration::from_secs(2)); // a notices within a second
-    assert_ne!(
-        *ma.fullname.lock().unwrap(),
-        before,
-        "a new day, a new instance id"
-    );
-    // a Mac on that day finds a only by the tag a advertises now
-    let _mb = mac_at(
-        || 20_002 * 86_400,
-        IfKind::LoopbackV4,
-        b.path(),
-        &vault,
-        key,
-        peers,
-    );
-    let started = Instant::now();
-    while data(a.path()).0.len() < 2 || data(b.path()).0.len() < 2 {
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "a never re-advertised"
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
+#[path = "local_day_tests.rs"]
+mod day;
