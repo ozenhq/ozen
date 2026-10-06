@@ -29,6 +29,15 @@ pub struct View {
     pub paused: bool,
 }
 
+/// What turning LAN only off runs for relay `url` (empty: the saved one).
+pub fn relay_args(url: &str) -> Vec<String> {
+    let args: &[&str] = match url {
+        "" => &["sync", "init", "--relay"],
+        u => &["sync", "init", "--server", u],
+    };
+    args.iter().map(ToString::to_string).collect()
+}
+
 /// What "Set up sync" runs for relay `url` (empty: none given).
 pub fn set_up_args(url: &str, paused: bool) -> Vec<String> {
     let args: &[&str] = match url {
@@ -139,14 +148,27 @@ define_class!(
 
         #[unsafe(method(syncLanOnly:))]
         fn lan_only(&self, sender: &NSSwitch) {
-            let lan = sender.state() == NSControlStateValueOn;
-            let arg = if lan { "--lan-only" } else { "--relay" };
-            cli::run(&["sync", "init", arg], |_, err, code| {
-                if code != 0 {
-                    crate::fail("Sync", &err);
-                }
-                refresh();
-            });
+            if sender.state() == NSControlStateValueOn {
+                cli::run(&["sync", "init", "--lan-only"], |_, err, code| {
+                    if code != 0 {
+                        crate::fail("Sync", &err);
+                    }
+                    refresh();
+                });
+                return;
+            }
+            // back to the relay: which one (init says when none is saved)
+            let Some(url) = ask_text(
+                "Sync through a relay",
+                "The relay URL (wss://…); leave it empty to use the one saved before.",
+                false,
+            ) else {
+                refresh(); // the switch goes back on
+                return;
+            };
+            let args = relay_args(&url);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            cli::run(&args, |out, err, code| done("Sync", &out, &err, code));
         }
     }
 );

@@ -1,4 +1,4 @@
-use super::{View, set_up_args, view};
+use super::{View, relay_args, set_up_args, view};
 use serde_json::json;
 
 /// `ozen sync status` with sync on and running, plus `extra`.
@@ -117,5 +117,14 @@ fn set_up_with_a_relay_without_one_or_again_after_undo() {
         set_up_args("", true),
         ["sync", "init"],
         "keeps the saved choice"
+    );
+}
+
+#[test]
+fn lan_only_off_uses_the_saved_relay_or_a_new_one() {
+    assert_eq!(relay_args(""), ["sync", "init", "--relay"]);
+    assert_eq!(
+        relay_args("wss://relay.example"),
+        ["sync", "init", "--server", "wss://relay.example"]
     );
 }
