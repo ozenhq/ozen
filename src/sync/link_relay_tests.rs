@@ -20,6 +20,8 @@ pub(super) struct Relay {
     pub(super) refused: Arc<AtomicUsize>,
     /// Every binary frame it forwarded, for checking that none carries plaintext (OFE-15).
     pub(super) frames: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Connections open now, and the most ever open at once.
+    pub(super) live: Arc<(AtomicUsize, AtomicUsize)>,
 }
 
 type Vaults = Arc<Mutex<HashMap<String, Vec<(usize, mpsc::Sender<Message>)>>>>;
@@ -57,11 +59,13 @@ impl Relay {
         );
         let vaults: Vaults = Arc::default();
         let frames: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
-        let (st, acc, refu, log) = (
+        let live: Arc<(AtomicUsize, AtomicUsize)> = Arc::default();
+        let (st, acc, refu, log, lv) = (
             stop.clone(),
             accepted.clone(),
             refused.clone(),
             frames.clone(),
+            live.clone(),
         );
         std::thread::spawn(move || {
             let mut next = 0;
@@ -72,13 +76,14 @@ impl Relay {
                 };
                 s.set_nonblocking(false).unwrap();
                 next += 1;
-                let (id, st, vaults, acc, refu, log) = (
+                let (id, st, vaults, acc, refu, log, lv) = (
                     next,
                     st.clone(),
                     vaults.clone(),
                     acc.clone(),
                     refu.clone(),
                     log.clone(),
+                    lv.clone(),
                 );
                 std::thread::spawn(move || {
                     let mut vault = String::new();
@@ -109,6 +114,8 @@ impl Relay {
                         return;
                     };
                     acc.fetch_add(1, Ordering::SeqCst);
+                    let open = lv.0.fetch_add(1, Ordering::SeqCst) + 1;
+                    lv.1.fetch_max(open, Ordering::SeqCst);
                     ws.get_mut()
                         .set_read_timeout(Some(Duration::from_millis(50)))
                         .unwrap();
@@ -157,6 +164,7 @@ impl Relay {
                         .entry(vault.clone())
                         .or_default()
                         .retain(|(o, _)| *o != id);
+                    lv.0.fetch_sub(1, Ordering::SeqCst);
                     announce(&vaults, &vault);
                 });
             }
@@ -167,6 +175,7 @@ impl Relay {
             accepted,
             refused,
             frames,
+            live,
         }
     }
 

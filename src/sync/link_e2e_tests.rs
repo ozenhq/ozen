@@ -5,6 +5,7 @@
 use super::tests::{Relay, at, folder, mac, wait_for};
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 /// What a Mac's folder syncs, order-independent: every record of every synced kind as canonical JSON.
@@ -90,24 +91,23 @@ fn meet(
     edit: bool,
 ) {
     let (dx, dy) = (macs[x].path(), macs[y].path());
-    let (_lx, _ly) = (mac(&relay.url(), dx, key), mac(&relay.url(), dy, key));
-    if !edit {
+    {
+        let (_lx, _ly) = (mac(&relay.url(), dx, key), mac(&relay.url(), dy, key));
+        let id = format!("{n}@m{x}");
+        if edit {
+            let line = json!({"id": id, "v": 1, "t": n, "text": format!("said {n}")});
+            append_line(dx, line);
+        }
         wait_for(
             Duration::from_secs(30),
             &format!("Macs {x} and {y} in sync"),
-            || state(dx) == state(dy),
+            || state(dx) == state(dy) && (!edit || state(dx).iter().any(|r| r.contains(&id))),
         );
-        return;
     }
-    append_line(
-        dx,
-        json!({"id": format!("{n}@m{x}"), "v": 1, "t": n, "text": format!("said {n}")}),
-    );
-    wait_for(
-        Duration::from_secs(30),
-        &format!("Macs {x} and {y} in sync"),
-        || state(dx) == state(dy) && state(dx).iter().any(|r| r.contains(&format!("{n}@m{x}"))),
-    );
+    // both offline before the next pair comes online: a stopping link ends on its next read
+    wait_for(Duration::from_secs(30), "both offline", || {
+        relay.live.0.load(Ordering::SeqCst) == 0
+    });
 }
 
 /// The plaintext the fixtures put in records: ids, names, words. None may cross the relay. All are
@@ -145,8 +145,10 @@ fn schedule(seed: u8, pairs: &[(usize, usize)]) {
             .any(|r| r.contains("\"del\":true") && r.contains("line-three@mac-c")),
         "the deleted line stays deleted"
     );
-    // stopped links finish their last step on their own threads: let them before the folders go
-    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        relay.live.1.load(Ordering::SeqCst) <= 2,
+        "three Macs were online at once"
+    );
     let frames = relay.frames.lock().unwrap().clone();
     assert!(!frames.is_empty());
     for f in &frames {
