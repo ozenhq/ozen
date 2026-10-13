@@ -1,5 +1,6 @@
 //! The vault key: 32 random bytes in the login Keychain (never in the ozen folder), and what the
 //! relay (ozenhq/sync src/auth) and the encryption derive from it.
+use data_encoding::HEXLOWER;
 use hkdf::Hkdf;
 #[cfg(test)]
 use security_framework::os::macos::keychain::SecKeychain;
@@ -26,15 +27,6 @@ pub fn key(bytes: [u8; 32]) -> Key {
     zeroize::Zeroizing::new(bytes)
 }
 
-fn hex(b: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(b.len() * 2); // no reallocation leaves key hex behind
-    for x in b {
-        let _ = write!(s, "{x:02x}");
-    }
-    s
-}
-
 fn hkdf(key: &Key, info: &str) -> Key {
     let mut out = self::key([0; 32]);
     Hkdf::<Sha256>::new(None, &key[..])
@@ -45,13 +37,14 @@ fn hkdf(key: &Key, info: &str) -> Key {
 
 /// The bearer token the relay checks: an HKDF output separate from the encryption key.
 pub fn token(key: &Key) -> zeroize::Zeroizing<String> {
-    zeroize::Zeroizing::new(hex(&hkdf(key, "ozen-sync token")[..]))
+    // HEXLOWER allocates the exact length once: no reallocation leaves key hex behind.
+    zeroize::Zeroizing::new(HEXLOWER.encode(&hkdf(key, "ozen-sync token")[..]))
 }
 
 /// The vault's name on the relay: hex(SHA-256(token)), 64 lowercase hex chars. The relay checks a
 /// Mac's token by hashing it, so it stores nothing (ozenhq/sync OFE-26).
 pub fn vault_id(key: &Key) -> String {
-    hex(&Sha256::digest(token(key).as_bytes()))
+    HEXLOWER.encode(&Sha256::digest(token(key).as_bytes()))
 }
 
 /// The vault id as shown to people: its first 8 hex chars, enough to tell vaults apart. The full id is

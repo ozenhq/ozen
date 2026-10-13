@@ -19,9 +19,11 @@ pub(super) fn day(secs: u64) -> u64 {
 /// each UTC day, so whoever records Bonjour on one network can't recognize the same Macs on another
 /// network on another day (OFE-83).
 pub fn tag(lan: &Key, day: u64) -> String {
-    hex(&hmac(lan, &[b"ozen-sync lan tag", &day.to_be_bytes()])
-        .finalize()
-        .into_bytes()[..8])
+    HEXLOWER.encode(
+        &hmac(lan, &[b"ozen-sync lan tag", &day.to_be_bytes()])
+            .finalize()
+            .into_bytes()[..8],
+    )
 }
 
 /// Whether `theirs` is this vault's tag at `secs`: yesterday's, today's or tomorrow's, so two Macs on
