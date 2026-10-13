@@ -2,6 +2,7 @@
 use super::protocol::{Id, Mark};
 use crate::crdt::{live_ids, v};
 use crate::merge::{Records, Synced};
+use data_encoding::HEXLOWER;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -39,5 +40,5 @@ pub(super) fn records(s: &Synced, version: u8) -> BTreeMap<Id, Value> {
 
 pub(super) fn mark(r: &Value) -> Mark {
     let h = Sha256::digest(crate::crdt::canonical(r).as_bytes());
-    (v(r), h[..8].iter().map(|b| format!("{b:02x}")).collect())
+    (v(r), HEXLOWER.encode(&h[..8]))
 }

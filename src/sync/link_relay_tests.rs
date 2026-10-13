@@ -1,6 +1,7 @@
 //! The relay, in-process (link_tests.rs and its neighbours use it): ozenhq/sync's contract, kept
 //! small. The relay's repo is private, so CI can't build the real one.
 use super::*;
+use data_encoding::HEXLOWER;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -25,10 +26,6 @@ pub(super) struct Relay {
 }
 
 type Vaults = Arc<Mutex<HashMap<String, Vec<(usize, mpsc::Sender<Message>)>>>>;
-
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
 
 /// Tells every connection in `vault` how many are online.
 fn announce(vaults: &Vaults, vault: &str) {
@@ -101,7 +98,7 @@ impl Relay {
                                 .and_then(|h| h.to_str().ok())
                                 .and_then(|h| h.strip_prefix("Bearer "))
                                 .unwrap_or("");
-                            if hex(&Sha256::digest(token.as_bytes())) != v {
+                            if HEXLOWER.encode(&Sha256::digest(token.as_bytes())) != v {
                                 let mut r = ErrorResponse::new(None);
                                 *r.status_mut() = tungstenite::http::StatusCode::UNAUTHORIZED;
                                 return Err(r);
