@@ -7,6 +7,7 @@
 use super::key::Key;
 #[cfg(test)]
 use super::talk::{Input, MAX_FRAME, read_frame, talk, write_raw};
+use data_encoding::HEXLOWER;
 use hmac::{Hmac, KeyInit, Mac};
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use security_framework::random::SecRandom;
@@ -33,10 +34,6 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Redial a vanished connection after this, doubling up to `REDIAL_MAX`, while the peer advertises.
 const REDIAL: Duration = Duration::from_secs(1);
 const REDIAL_MAX: Duration = Duration::from_secs(60);
-
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
 
 /// 32 random bytes: a handshake nonce, an instance id (tests make throwaway keys from them).
 type Nonce = [u8; 32]; // not a key
@@ -219,7 +216,7 @@ fn start_at(
     };
     let listener = TcpListener::bind((any, 0)).map_err(|e| err(&e))?;
     let addr = listener.local_addr().map_err(|e| err(&e))?;
-    let id = hex(&random()?[..8]);
+    let id = HEXLOWER.encode(&random()?[..8]);
     let daemon = ServiceDaemon::new().map_err(|e| err(&e))?;
     daemon.disable_interface(IfKind::All).map_err(|e| err(&e))?;
     daemon.enable_interface(interfaces).map_err(|e| err(&e))?;
@@ -253,7 +250,7 @@ fn start_at(
             std::thread::sleep(Duration::from_secs(1));
             let d = day(clock());
             if d != today
-                && let Ok(new) = random().map(|r| hex(&r[..8]))
+                && let Ok(new) = random().map(|r| HEXLOWER.encode(&r[..8]))
                 && let Ok(me) = advert(&lan, &new, port, d)
                 && let new_name = me.get_fullname().to_string()
                 && renew.register(me).is_ok()

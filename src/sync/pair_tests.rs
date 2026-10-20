@@ -1,4 +1,5 @@
 use super::*;
+use data_encoding::HEXLOWER;
 use std::cell::RefCell;
 
 /// Every byte different, so an order or offset bug shows.
@@ -122,7 +123,7 @@ fn join_keeps_a_different_key_unless_forced() {
 fn nothing_key_derived_is_printed() {
     let (_, _, r) = run(&code(&K(), URL), false, None);
     let out = r.unwrap();
-    let hex: String = K().iter().map(|b| format!("{b:02x}")).collect();
+    let hex = HEXLOWER.encode(&K()[..]);
     for secret in [
         code(&K(), URL),
         hex,
@@ -184,7 +185,7 @@ fn a_relay_that_is_down_leaves_the_key_as_it_was() {
 #[test]
 fn errors_print_nothing_key_derived_either() {
     let c = code(&K(), URL);
-    let hex: String = K().iter().map(|b| format!("{b:02x}")).collect();
+    let hex = HEXLOWER.encode(&K()[..]);
     let errors = [
         run(&c, false, Some(crate::sync::key::key([1; 32])))
             .2
