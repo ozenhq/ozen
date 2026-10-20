@@ -4,4 +4,8 @@
 # To accept an advisory, add its RUSTSEC id to `ignore` with a comment saying why.
 [advisories]
 unmaintained = "workspace"
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2026-0367", reason = "zip extract() only; candle-core 0.11 (pins zip ^8) reads .pth via ZipArchive::new + by_name and never extracts; drop once candle allows zip >= 9" },
+    { id = "RUSTSEC-2026-0368", reason = "zip extract() only; candle-core 0.11 (pins zip ^8) reads .pth via ZipArchive::new + by_name and never extracts; drop once candle allows zip >= 9" },
+    { id = "RUSTSEC-2026-0369", reason = "zip extract() only; candle-core 0.11 (pins zip ^8) reads .pth via ZipArchive::new + by_name and never extracts; drop once candle allows zip >= 9" },
+]
