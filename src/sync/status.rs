@@ -30,9 +30,10 @@ pub fn name() -> String {
     if unsafe { libc::gethostname(b.as_mut_ptr().cast(), b.len()) } != 0 {
         return "Mac".into();
     }
-    CStr::from_bytes_until_nul(&b)
-        .map(|c| c.to_string_lossy().trim_end_matches(".local").to_string())
-        .unwrap_or_else(|_| "Mac".into())
+    CStr::from_bytes_until_nul(&b).map_or_else(
+        |_| "Mac".into(),
+        |c| c.to_string_lossy().trim_end_matches(".local").to_string(),
+    )
 }
 
 /// Each other Mac's (name, last synced).
@@ -116,6 +117,8 @@ pub fn status_at(now: u64) -> Value {
         "relay": relay,
         "other_macs_online": online,
         "macs": macs,
+        // a big exchange in progress (progress.rs), while the runner that counts it runs
+        "progress": running.then(|| super::progress::read_at(now)).flatten(),
     })
 }
 

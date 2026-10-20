@@ -34,7 +34,7 @@ fn running(online: u64) -> (tempfile::TempDir, fs::File) {
 
 /// Keys sorted, as without serde_json's preserve_order (the pre-push hook runs both ways).
 fn snapshot(name: &str, v: Value) {
-    insta::with_settings!({sort_maps => true}, { insta::assert_json_snapshot!(name, v) });
+    insta::with_settings!({sort_maps => true}, { insta::assert_json_snapshot!(name, v); });
 }
 
 #[test]
