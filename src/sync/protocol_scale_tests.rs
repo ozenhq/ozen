@@ -136,3 +136,27 @@ fn garbled_bucket_hashes_get_a_full_summary_not_a_crash() {
         .sum();
     assert_eq!(covered, 102, "every record: 100 lines and 2 tags");
 }
+
+/// A Mac joining with nothing learns from the other's summary how many records are coming, notes the
+/// big exchange for the panel (progress.rs) and removes the note once the last record merged (OFE-78).
+#[test]
+fn a_big_first_exchange_is_noted_until_the_last_record_merges() {
+    let (da, _) = twins(500);
+    let db = tempfile::tempdir().unwrap();
+    let (mut a, mut b) = (Mac::new(da.path()), Mac::new(db.path()));
+    let note = db.path().join(crate::sync::progress::FILE);
+    let summary = a.receive(&b.hello()[0]); // A summarizes the buckets B lacks
+    let mut records = vec![];
+    for f in &summary {
+        records.extend(b.receive(f)); // B answers with nothing: it has nothing
+    }
+    assert!(records.is_empty());
+    let noted: Value = serde_json::from_slice(&std::fs::read(&note).unwrap()).unwrap();
+    assert_eq!(
+        (noted["done"].as_u64(), noted["total"].as_u64()),
+        (Some(0), Some(502))
+    );
+    exchange(&mut a, &mut b);
+    assert_eq!(b.synced().len(), 502, "500 lines and 2 tags arrived");
+    assert!(!note.exists(), "the note goes when the last record merged");
+}

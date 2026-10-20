@@ -369,7 +369,7 @@ pub fn transcript_json(pending: &str) -> Value {
         })
     })
     .collect();
-    transcript(
+    let mut v = transcript(
         &raw,
         &junk,
         &tags,
@@ -377,7 +377,13 @@ pub fn transcript_json(pending: &str) -> Value {
         &fixes,
         &unsure,
         &read(STATS),
-    )
+    );
+    // a big exchange with another Mac shows its progress instead, until it's done (OFE-78)
+    let progress = crate::sync::progress::read_at(crate::sync::status::now());
+    if let Some(s) = progress.as_ref().and_then(crate::sync::progress::line) {
+        v["footer"] = json!(format!("  {s}"));
+    }
+    v
 }
 
 #[cfg(test)]

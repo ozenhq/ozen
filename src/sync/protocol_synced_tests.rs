@@ -1,8 +1,10 @@
 //! Every place that names the synced kinds agrees with `crdt::SYNCED` (OFE-59): adding a kind to the
 //! table but not to merge.rs, the protocol or valid.rs, or a file to merge.rs but not the table, fails here.
+use super::apply::synced;
 use super::tests::at;
 use super::*;
 use crate::crdt::SYNCED;
+use crate::merge::Synced;
 use serde_json::json;
 
 /// A valid record of `kind` keyed `k`.

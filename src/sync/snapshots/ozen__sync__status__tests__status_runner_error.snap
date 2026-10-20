@@ -7,6 +7,7 @@ expression: v
   "lan_only": false,
   "macs": [],
   "other_macs_online": null,
+  "progress": null,
   "relay": null,
   "running": false,
   "sync": "on"
