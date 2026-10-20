@@ -186,7 +186,7 @@ impl App {
             return;
         };
         iv.rebuilding.set(true);
-        for v in stack.arrangedSubviews().iter() {
+        for v in &stack.arrangedSubviews() {
             v.removeFromSuperview();
         }
         iv.rebuilding.set(false);
@@ -308,7 +308,7 @@ impl App {
             .map(|v| v.fittingSize().width)
             .fold(f64::NAN, f64::max);
         let row_width = if row_width.is_nan() { 536.0 } else { row_width };
-        for c in map.constraints().iter() {
+        for c in &map.constraints() {
             if c.firstAttribute() == NSLayoutAttribute::Width {
                 map.removeConstraint(&c);
             }
