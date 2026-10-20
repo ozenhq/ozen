@@ -289,8 +289,9 @@ fn mode() -> String {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or("always".into())
+        .map_or("always".into(), |o| {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        })
 }
 
 fn status() -> Reply {
