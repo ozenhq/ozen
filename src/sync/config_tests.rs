@@ -120,10 +120,14 @@ fn a_wrong_body_says_what_came_back() {
 
 #[test]
 fn sync_runs_no_external_program() {
-    // ozen's own binary (apply.rs runs `ozen retrain`) is the only program sync starts
+    // ozen's own binary (apply.rs runs `ozen retrain`) is the only program sync starts; tests may start
+    // others (CPU load in run_tests.rs)
     let start = ["Command", "::new("].concat(); // spelled apart so this file doesn't match itself
     for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync")).unwrap() {
         let p = f.unwrap().path();
+        if p.to_string_lossy().ends_with("_tests.rs") {
+            continue;
+        }
         let Ok(src) = std::fs::read_to_string(&p) else {
             continue; // snapshots/
         };
@@ -152,4 +156,23 @@ fn a_redirect_to_something_that_answers_ok_is_not_a_relay() {
         );
     });
     assert!(healthy(&url).is_err());
+}
+
+#[test]
+fn lan_only_means_no_relay_whatever_is_saved_or_set() {
+    let d = tempfile::tempdir().unwrap();
+    let saved = d.path().join(FILE);
+    std::fs::write(&saved, "wss://relay.example").unwrap();
+    let env = Some("wss://other.example".to_string());
+    assert_eq!(pick(true, env.clone(), &saved), Ok(None));
+    assert_eq!(pick(true, None, &saved), Ok(None));
+    // off again: the saved URL (and the env override) come back as they were
+    assert_eq!(
+        pick(false, None, &saved),
+        Ok(Some("wss://relay.example".into()))
+    );
+    assert_eq!(
+        pick(false, env, &saved),
+        Ok(Some("wss://other.example".into()))
+    );
 }

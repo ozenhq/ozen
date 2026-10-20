@@ -18,6 +18,7 @@ mod install;
 mod map;
 mod meetings_tab;
 mod places;
+mod sync_section;
 mod timebar;
 mod timeline;
 mod transcript;
@@ -281,6 +282,7 @@ define_class!(
             // The Mac may have moved while asleep: restarting the watcher sends a fresh fix within seconds; the old
             // place holds until it lands, rather than dropping to the global mode.
             cli::run(&["place", "--restart"], |out, _, _| APP.with(|a| a.get().unwrap().apply_place(&out)));
+            cli::run(&["sync", "wake"], |_, _, _| {}); // the relay link reconnects now, not at its next retry
         }
 
         #[unsafe(method(showVoices:))]
@@ -1571,7 +1573,7 @@ impl App {
         row
     }
 
-    /// Advanced settings: live transcription on or off, and its priority.
+    /// Advanced settings: live transcription on or off, its priority, and sync (sync_section.rs).
     fn advanced(&self) {
         let mtm = self.mtm();
         if self.ivars().advanced_window.borrow().is_none() {
@@ -1580,7 +1582,7 @@ impl App {
             let w = unsafe {
                 NSWindow::initWithContentRect_styleMask_backing_defer(
                     NSWindow::alloc(mtm),
-                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 250.0)),
+                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 420.0)),
                     NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
                     NSBackingStoreType::Buffered,
                     false,
@@ -1617,7 +1619,8 @@ impl App {
             low_note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
             low_note.setTextColor(Some(&NSColor::secondaryLabelColor()));
             low_note.setPreferredMaxLayoutWidth(420.0);
-            let views: [&NSView; 5] = [&header, &bx, &note, &low, &low_note];
+            let sync = sync_section::section(mtm);
+            let views: [&NSView; 6] = [&header, &bx, &note, &low, &low_note, &sync];
             let stack = NSStackView::stackViewWithViews(
                 &objc2_foundation::NSArray::from_slice(&views),
                 mtm,
@@ -1635,6 +1638,7 @@ impl App {
             w.center();
             *self.ivars().advanced_window.borrow_mut() = Some(w);
         }
+        sync_section::refresh();
         NSApplication::sharedApplication(mtm).activate();
         if let Some(w) = self.ivars().advanced_window.borrow().as_ref() {
             w.makeKeyAndOrderFront(None);

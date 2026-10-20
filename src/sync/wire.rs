@@ -21,6 +21,10 @@ pub(super) enum Msg {
         h: String,
         #[serde(default = "one")]
         max: u8,
+        /// The sending Mac's id (`crdt::device`) and name, for `ozen sync status` (status.rs); older
+        /// ozens send none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<(String, String)>,
     },
     /// Part `part` (of `parts`) of summary `id`: (kind, key, v, hash) for the sender's records in buckets
     /// `b`.
@@ -42,7 +46,7 @@ fn one() -> u8 {
 }
 
 /// Message `m` as a frame of protocol `version`.
-pub(super) fn encode(key: &Key, vault: &str, version: u8, m: &Msg) -> Result<Vec<u8>, String> {
+pub(super) fn encode(key: &Key, vault: &str, version: u8, m: &Msg) -> Result<seal::Sealed, String> {
     let mut z = DeflateEncoder::new(vec![version], Compression::default());
     serde_json::to_writer(&mut z, m).map_err(|e| e.to_string())?;
     let plain = z.finish().map_err(|e| e.to_string())?;

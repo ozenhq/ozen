@@ -41,7 +41,24 @@ pub fn resolve(env: Option<String>, saved: &Path) -> Result<Option<String>, Stri
 
 /// The relay this Mac syncs with, or None when sync is off.
 pub fn server() -> Result<Option<String>, String> {
-    resolve(std::env::var("OZEN_SYNC_URL").ok(), Path::new(FILE))
+    pick(
+        Path::new(LAN_ONLY).exists(),
+        std::env::var("OZEN_SYNC_URL").ok(),
+        Path::new(FILE),
+    )
+}
+
+/// Written by `ozen sync init --lan-only`: never contact any relay, whatever URL is saved or set, and
+/// sync only with this vault's Macs on the same network (local.rs). `ozen sync init --relay` removes it;
+/// the saved URL and the key stay, so the relay comes back without pairing again.
+pub const LAN_ONLY: &str = ".sync-lan-only";
+
+/// The relay to use: none in LAN-only mode, else `resolve`'s.
+pub fn pick(lan_only: bool, env: Option<String>, saved: &Path) -> Result<Option<String>, String> {
+    if lan_only {
+        return Ok(None);
+    }
+    resolve(env, saved)
 }
 
 /// The relay's `/health` (plain HTTP on the same host and path) answers "ok", so a typo can't leave

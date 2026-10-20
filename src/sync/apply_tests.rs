@@ -130,3 +130,27 @@ fn a_panicking_run_does_not_stop_later_ones() {
         "it runs again"
     );
 }
+
+#[test]
+fn a_burst_of_requests_runs_the_job_once_after_it_stops() {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n = runs.clone();
+    let c = Coalesced::after_quiet(Duration::from_millis(300), move || {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    for _ in 0..10 {
+        c.request(); // batches of a first exchange, 50 ms apart
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "still arriving: not yet"
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "once, after the burst"
+    );
+}

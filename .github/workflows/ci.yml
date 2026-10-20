@@ -50,6 +50,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
+      # every sync test that can run here; the #[ignore]d ones need a real network, Local Network access or a
+      # real ozen folder, and their docs say how to run them by hand. .githooks/pre-push runs this set too.
       - run: cargo nextest run
       # OFE-70: sync's tie-breaks and hashes must not depend on serde_json's map type, which any dependency
       # could flip through Cargo feature unification; the CRDT, merge and sync tests run again with it flipped.

@@ -17,6 +17,7 @@ fn messages() -> [(&'static str, Msg); 4] {
             Msg::Buckets {
                 h: base64::engine::general_purpose::STANDARD.encode([0xab; 16 * 2]),
                 max: 1,
+                from: None,
             },
         ),
         (
@@ -68,15 +69,21 @@ fn frame(s: &Session, name: &str, msg: &Msg) -> Vec<u8> {
         // Rewriting in CI would make these tests compare today's code with itself.
         assert!(std::env::var_os("CI").is_none(), "OZEN_GOLDEN=write in CI");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(&p, s.frame(msg).unwrap()).unwrap();
+        std::fs::write(&p, s.frame_in(1, msg).unwrap()).unwrap(); // the v1 fixtures stay v1
     }
     std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
 #[test]
-fn golden_these_fixtures_are_protocol_v1() {
-    // Bumping VERSION means new golden frames; the v1 ones below stop being what this build sends.
-    assert_eq!(VERSION, 1);
+fn golden_these_fixtures_are_protocol_v1_which_this_build_still_reads() {
+    // v2 (OFE-56) changed which line fields a records message carries, not the messages: these v1
+    // frames are what a Mac on the previous ozen sends, and this build must keep opening them.
+    // A VERSION past 2 drops v1 (a build reads its own and the one before): write new frames then.
+    assert_eq!(VERSION, 2);
+    assert_eq!(
+        Versions::default().read(1),
+        super::super::version::Read::Yes
+    );
 }
 
 #[test]
@@ -88,7 +95,11 @@ fn golden_message_json_is_unchanged() {
 
 #[test]
 fn golden_v1_frames_still_open_and_parse_to_the_same_json() {
-    let s = Session::with([7; 32], "vault", Coalesced::new(|| {}));
+    let s = Session::with(
+        crate::sync::key::key([7; 32]),
+        "vault",
+        Coalesced::new(|| {}),
+    );
     for (name, msg) in messages() {
         let f = frame(&s, name, &msg);
         let got = s

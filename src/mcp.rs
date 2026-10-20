@@ -289,8 +289,9 @@ fn mode() -> String {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or("always".into())
+        .map_or("always".into(), |o| {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        })
 }
 
 fn status() -> Reply {
@@ -674,6 +675,14 @@ impl Ozen {
             return Err(format!("no place {:?}", p.label));
         }
         save_places(&all)
+    }
+
+    #[tool(
+        description = "Sync with the user's other Macs: whether it is on and running, the relay connection, other Macs online now, and when this Mac last synced with each (Macs sync only while online together).",
+        annotations(read_only_hint = true)
+    )]
+    async fn sync_status(&self) -> Reply {
+        ozen(&["sync", "status"])
     }
 
     #[tool(

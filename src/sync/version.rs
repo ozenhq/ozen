@@ -8,7 +8,10 @@
 //! one per pair. Hellos go out in the oldest version this Mac speaks: whoever can talk to it reads them.
 
 /// The newest protocol version, the first byte of every frame's plaintext.
-pub const VERSION: u8 = 1;
+/// - 1: the first (OFE-10).
+/// - 2: lines go without the fields only their Mac means, `crdt::LOCAL_LINE_FIELDS` (OFE-56); the
+///   messages are unchanged.
+pub const VERSION: u8 = 2;
 
 /// The versions one Mac speaks, and what the other Macs of the vault have said they speak.
 #[derive(Clone, Copy, Debug)]

@@ -6,20 +6,21 @@
 //! out as soon as `changes` is called. Messages are JSON, deflated, then sealed (seal.rs) into frames;
 //! carrying the frames is the connection's job. The protocol is specified, for other clients and for
 //! agreeing on changes, in https://github.com/ozenhq/sync/blob/main/docs/protocol.md.
-#![allow(dead_code)] // ponytail: driven by the connection (OFE-7)
 use super::apply::{self, Coalesced};
 use super::buckets;
 pub use super::dropped::Dropped;
 use super::key::Key;
 use super::marks::Marks;
 use super::parts;
+pub(super) use super::records::mark;
+use super::records::records;
 #[cfg(test)]
 use super::seal;
-use crate::crdt::{live_ids, v};
-use crate::merge::{self, Records, Synced};
+use super::seal::Sealed;
+use super::status::{self, HELLO_EVERY};
+use crate::merge::{self, Synced};
 use base64::Engine;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 /// A synced record: (kind, key). The kinds are the synced files: tags, fixes, vocab, places, lines.
@@ -34,40 +35,11 @@ use super::wire::{self, BUDGET, Msg, frame_version};
 #[cfg(test)]
 use {
     super::version::VERSION,
+    crate::crdt::v,
+    crate::merge::Records,
     flate2::{Compression, write::DeflateEncoder},
     std::io::Read,
 };
-
-/// Every synced record in `s` (every kind in `crdt::SYNCED`). Rows written before ids get theirs from
-/// `live_ids`, as `merge_rows` does.
-fn records(s: &Synced) -> BTreeMap<Id, Value> {
-    let mut out = BTreeMap::new();
-    for (kind, _) in crate::crdt::SYNCED {
-        match s.get(kind).expect("merge::Synced holds every synced kind") {
-            Records::Map(m) => {
-                for (k, e) in m {
-                    out.insert((kind.into(), k.clone()), e.clone());
-                }
-            }
-            Records::Rows(rows) => {
-                for r in live_ids(rows) {
-                    let k = r
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    out.insert((kind.into(), k), Value::Object(r));
-                }
-            }
-        }
-    }
-    out
-}
-
-pub(super) fn mark(r: &Value) -> Mark {
-    let h = Sha256::digest(crate::crdt::canonical(r).as_bytes());
-    (v(r), h[..8].iter().map(|b| format!("{b:02x}")).collect())
-}
 
 /// Received records as a folder's worth of synced data, for `merge::apply`. A kind this build doesn't
 /// know (from a newer ozen) is left out.
@@ -85,8 +57,10 @@ fn synced(recs: Vec<(String, String, Value)>) -> Synced {
 pub struct Session {
     seal_key: Key,
     vault: String,
-    /// What the other Macs last heard about each record here, so `changes` sends only what's new.
+    /// What the other Macs last heard about each record here, so `changes` sends only what's new; marks
+    /// in protocol version `told_in`.
     told: BTreeMap<Id, Mark>,
+    told_in: u8,
     /// Summaries still arriving, bounded (summaries.rs).
     partial: Partial,
     /// Records too big for one frame, still arriving in parts.
@@ -98,39 +72,42 @@ pub struct Session {
     /// The protocol versions this Mac and the others speak (version.rs).
     versions: Versions,
     pub dropped: Dropped,
+    /// The synced files' stamps at the last `tick`, so a tick with no edit reads nothing.
+    ticked: Option<super::marks::Stamp>,
+    /// When `hello` last went out (said again every `status::HELLO_EVERY`).
+    said_hello: Option<std::time::Instant>,
 }
 
 impl Session {
-    pub fn new(seal_key: Key, vault: &str) -> Self {
-        Session::with(seal_key, vault, Coalesced::retrain())
-    }
-
     /// A session that runs `after` (instead of relearn + `ozen retrain`) when received records change something.
     pub fn with(seal_key: Key, vault: &str, after: Coalesced) -> Self {
         Session {
             seal_key,
             vault: vault.into(),
             told: BTreeMap::new(),
+            told_in: super::version::VERSION,
             partial: Partial::default(),
             parts: parts::Pending::default(),
             after,
             dropped: Dropped::default(),
             versions: Versions::default(),
             marks: Marks::default(),
+            ticked: None,
+            said_hello: None,
         }
     }
 
-    fn frame(&self, m: &Msg) -> Result<Vec<u8>, String> {
+    fn frame(&self, m: &Msg) -> Result<Sealed, String> {
         self.frame_in(self.versions.speak(), m)
     }
 
-    fn frame_in(&self, version: u8, m: &Msg) -> Result<Vec<u8>, String> {
+    fn frame_in(&self, version: u8, m: &Msg) -> Result<Sealed, String> {
         wire::encode(&self.seal_key, &self.vault, version, m)
     }
 
     /// Frames carrying `recs`, and the ids that went out. A record too big for one frame goes in parts;
     /// one over `parts::CAP` stays here (reported on stderr): the rest still go.
-    fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<(Vec<Vec<u8>>, Vec<Id>), String> {
+    fn records_frames(&self, recs: Vec<(Id, Value)>) -> Result<(Vec<Sealed>, Vec<Id>), String> {
         let flat = recs.into_iter().map(|((k, key), r)| (k, key, r)).collect();
         let (groups, big) = parts::groups(flat, BUDGET);
         let (mut sent, mut frames) = (vec![], vec![]);
@@ -154,27 +131,30 @@ impl Session {
 
     /// The bucket hashes of everything here, one frame: sent on connecting and when another Mac comes
     /// online. The other Mac answers with summaries of the buckets that differ.
-    pub fn hello(&mut self) -> Result<Vec<Vec<u8>>, String> {
+    pub fn hello(&mut self) -> Result<Vec<Sealed>, String> {
         let (ours, hashes) = self.ours();
         let h = base64::engine::general_purpose::STANDARD.encode(hashes);
         self.told = ours.clone();
+        self.told_in = self.versions.speak();
         let max = self.versions.own();
+        let from = Some((crate::crdt::device().into(), status::name()));
+        self.said_hello = Some(std::time::Instant::now());
         Ok(vec![self.frame_in(
             self.versions.oldest(),
-            &Msg::Buckets { h, max },
+            &Msg::Buckets { h, max, from },
         )?])
     }
 
     /// The marks and bucket hashes of the records here, read from the files only when they changed.
     fn ours(&mut self) -> (&BTreeMap<Id, Mark>, &[u8]) {
-        self.marks.current(|| {
-            let all = records(&merge::read_synced(""));
+        self.marks.current(self.versions.speak(), || {
+            let all = records(&merge::read_synced(""), self.versions.speak());
             all.iter().map(|(id, r)| (id.clone(), mark(r))).collect()
         })
     }
 
     /// Summary frames of the records here in buckets `b` (at least one frame, even with none).
-    fn summary(&self, ours: &BTreeMap<Id, Mark>, b: Vec<u8>) -> Result<Vec<Vec<u8>>, String> {
+    fn summary(&self, ours: &BTreeMap<Id, Mark>, b: Vec<u8>) -> Result<Vec<Sealed>, String> {
         let wanted = buckets::set(&b);
         let s: Vec<Entry> = ours
             .iter()
@@ -202,8 +182,9 @@ impl Session {
     }
 
     /// Frames with every record that changed here since the other Macs last heard about it.
-    pub fn changes(&mut self) -> Result<Vec<Vec<u8>>, String> {
-        let ours = records(&merge::read_synced(""));
+    pub fn changes(&mut self) -> Result<Vec<Sealed>, String> {
+        self.retell();
+        let ours = records(&merge::read_synced(""), self.versions.speak());
         let changed: Vec<(Id, Value)> = ours
             .iter()
             .filter(|(id, r)| self.told.get(*id) != Some(&mark(r)))
@@ -216,6 +197,20 @@ impl Session {
         Ok(frames)
     }
 
+    /// `changes`, but only once a synced file changed since the last tick (the connection ticks every
+    /// few seconds). Who wrote it doesn't matter: a record merged from another Mac that ours beat goes out too.
+    pub fn tick(&mut self) -> Result<Vec<Sealed>, String> {
+        if self.said_hello.is_some_and(|t| t.elapsed() >= HELLO_EVERY) {
+            return self.hello();
+        }
+        let now = super::marks::stamp();
+        if self.ticked.as_ref() == Some(&now) {
+            return Ok(vec![]);
+        }
+        self.ticked = Some(now);
+        self.changes()
+    }
+
     /// The message in `frame`: Err for one that doesn't open or parse, Ok(None) for a newer version's.
     fn decode(&self, frame: &[u8]) -> Result<Option<Msg>, String> {
         wire::decode(&self.seal_key, &self.vault, &self.versions, frame)
@@ -226,14 +221,14 @@ impl Session {
     /// A frame this Mac can't use is dropped and counted in `dropped`, never merged, and the session
     /// goes on: the sender still has its records and resends them at the next summary exchange. Only
     /// failing to write here is an error. What was dropped is noted for `ozen health` (dropped.rs).
-    pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    pub fn receive(&mut self, frame: &[u8]) -> Result<Vec<Sealed>, String> {
         let before = self.dropped.clone();
         let out = self.take(frame);
         self.dropped.note_since(&before);
         out
     }
 
-    fn take(&mut self, frame: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    fn take(&mut self, frame: &[u8]) -> Result<Vec<Sealed>, String> {
         let msg = match self.decode(frame) {
             Ok(Some(m)) => m,
             Ok(None) => {
@@ -252,8 +247,11 @@ impl Session {
             }
         };
         match msg {
-            Msg::Buckets { h, max } => {
+            Msg::Buckets { h, max, from } => {
                 self.versions.heard(max);
+                if let Some((id, name)) = from {
+                    status::seen(&id, &name, status::now())?;
+                }
                 let theirs = base64::engine::general_purpose::STANDARD
                     .decode(h)
                     .unwrap_or_default();
@@ -285,7 +283,7 @@ impl Session {
                     }
                 };
                 let wanted = buckets::set(&b);
-                let lack = records(&merge::read_synced(""))
+                let lack = records(&merge::read_synced(""), self.versions.speak())
                     .into_iter()
                     .filter(|((k, key), _)| wanted[buckets::of(k, key) as usize])
                     .filter(|(id, r)| {
@@ -319,8 +317,27 @@ impl Session {
         }
     }
 
+    /// After this Mac starts speaking another version (it heard an older Mac), what it told the others
+    /// still holds: a record whose mark in the old version is what they heard gets its mark in the new
+    /// one, so `changes` doesn't resend every line in its other form.
+    fn retell(&mut self) {
+        let now = self.versions.speak();
+        if self.told_in == now {
+            return;
+        }
+        let s = merge::read_synced("");
+        let (old, new) = (records(&s, self.told_in), records(&s, now));
+        let told = std::mem::take(&mut self.told);
+        self.told = told
+            .into_iter()
+            .filter(|(id, m)| old.get(id).map(mark).as_ref() == Some(m))
+            .filter_map(|(id, _)| Some((id.clone(), mark(new.get(&id)?))))
+            .collect();
+        self.told_in = now;
+    }
+
     /// Merges received records (kind, key, record) into the files here.
-    fn merge(&mut self, r: Vec<(String, String, Value)>) -> Result<Vec<Vec<u8>>, String> {
+    fn merge(&mut self, r: Vec<(String, String, Value)>) -> Result<Vec<Sealed>, String> {
         let (r, errors) = super::valid::keep(r); // the rest of the frame still merges
         if let Some(e) = errors.last() {
             self.dropped.records += errors.len() as u64;
@@ -330,10 +347,11 @@ impl Session {
             .iter()
             .map(|(k, key, rec)| ((k.clone(), key.clone()), mark(rec)))
             .collect();
+        self.retell();
         apply::received(&synced(r), &self.after)?;
         // A record that merged to exactly what the sender has is known to them: not a change to
         // send back. One where ours won stays unmarked, so `changes` sends it.
-        let ours = records(&merge::read_synced(""));
+        let ours = records(&merge::read_synced(""), self.versions.speak());
         for (id, m) in got {
             if ours.get(&id).map(mark).as_ref() == Some(&m) {
                 self.told.insert(id, m);
@@ -367,6 +385,9 @@ mod prop_tests;
 #[cfg(test)]
 #[path = "protocol_scale_tests.rs"]
 mod scale_tests;
+#[cfg(test)]
+#[path = "protocol_sealed_tests.rs"]
+mod sealed_tests;
 #[cfg(test)]
 #[path = "protocol_synced_tests.rs"]
 mod synced_tests;

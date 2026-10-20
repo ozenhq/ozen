@@ -8,6 +8,7 @@ publish = false
 [lints.clippy]
 redundant_closure_for_method_calls = "warn"  # CI runs clippy with -D warnings
 explicit_iter_loop = "warn"  # `for x in &v` over `for x in v.iter()`
+map_unwrap_or = "warn"  # prefer `map_or`/`is_some_and` over `.map(f).unwrap_or(x)`
 
 [profile.release]
 strip = true
@@ -27,7 +28,7 @@ block2 = "0.6"
 candle-core = { version = "0.11.0", features = ["accelerate", "metal"] }
 candle-metal-kernels = "0.11.0"
 candle-nn = { version = "0.11.0", features = ["metal", "accelerate"] }
-chacha20poly1305 = "0.11.0"
+chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }  # cipher state wiped on drop (OFE-60)
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 crdts = "7.3.2"
 dispatch2 = "0.3"
@@ -37,6 +38,8 @@ hkdf = "0.13.0"
 hound = "3.5.1"
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = "0.2.37"
+zeroize = "1.9"  # the vault key and its derived keys are wiped when dropped (sync/key.rs)
+libc = "0.2"  # setpriority: `ozen sync run` at macOS background priority
 machine-uid = "0.6.0"
 objc2 = "0.6"
 objc2-app-kit = "0.3"  # AppKit, all of it: the menu bar app (src/bin/bar.rs) uses most classes
@@ -48,6 +51,8 @@ parquet = { version = "60.0.0", default-features = false, features = ["snap"] }
 plist = "1.10.1"
 regex = "1.13.1"
 rmcp = { version = "3.5.0", features = ["server", "transport-io", "macros"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }  # the relay link's TLS (sync/link.rs)
+rustls-platform-verifier = "0.7"  # trust the relay's certificate as macOS does, like ureq in sync init
 screencapturekit = { version = "11.0.0", features = ["macos_15_0"] }
 security-framework = "3.7.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -60,11 +65,14 @@ tempfile = "3.27.0"  # crash-safe writes of synced files (crdt::write_atomic)
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["rt", "macros", "io-std"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "__rustls-tls"] }  # relay WebSocket (sync/link.rs)
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
 url = "2.5.8"
-hmac = "0.13.0"
+hmac = { version = "0.13.0", features = ["zeroize"] }  # HMAC/HKDF state wiped on drop (OFE-60)
 mdns-sd = "0.21.4"
 socket2 = "0.6.5"
+data-encoding = "2.11.1"
+rpassword = "7.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

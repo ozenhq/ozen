@@ -1,10 +1,12 @@
 //! Sync with the vault's other Macs on this network, no relay: nothing leaves the network, not even
 //! sealed frames, and sync keeps working with the relay or the internet down. Each Mac advertises
-//! `_ozen-sync._tcp` over Bonjour with a tag derived from the LAN key; a Mac that finds a peer with its
-//! tag connects over TCP, both prove they hold the vault key (`handshake`), and the summary protocol
-//! (protocol.rs) runs over the connection with the same sealed frames the relay would carry.
-#![allow(dead_code)] // ponytail: started with the background connection (OFE-7)
+//! `_ozen-sync._tcp` over Bonjour with a tag derived from the LAN key and the UTC day (`tag`); a Mac
+//! that finds a peer with its tag connects over TCP, both prove they hold the vault key (`handshake`),
+//! and the summary protocol (protocol.rs) runs over the connection with the same sealed frames the
+//! relay would carry.
 use super::key::Key;
+#[cfg(test)]
+use super::talk::{Input, MAX_FRAME, read_frame, talk, write_raw};
 use hmac::{Hmac, KeyInit, Mac};
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use security_framework::random::SecRandom;
@@ -14,15 +16,13 @@ use std::collections::HashSet;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The Bonjour service type, as declared in Ozen.app's Info.plist (app_plist.rs).
 pub fn service_type() -> String {
     format!("{}.local.", crate::app_plist::BONJOUR)
 }
-/// The relay's frame cap too: a sealed frame is at most 60 KiB (seal.rs).
-const MAX_FRAME: usize = 64 << 10;
 /// The whole handshake must finish in this long, however slowly the peer trickles bytes.
 const HANDSHAKE: Duration = Duration::from_secs(10);
 /// Connections (handshaking or syncing) one Mac accepts at once; more are closed straight away.
@@ -38,7 +38,10 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn random() -> Result<[u8; 32], String> {
+/// 32 random bytes: a handshake nonce, an instance id (tests make throwaway keys from them).
+type Nonce = [u8; 32]; // not a key
+
+pub(super) fn random() -> Result<Nonce, String> {
     let mut b = [0; 32];
     SecRandom::default()
         .copy_bytes(&mut b)
@@ -47,18 +50,20 @@ fn random() -> Result<[u8; 32], String> {
 }
 
 fn hmac(lan: &Key, parts: &[&[u8]]) -> Hmac<Sha256> {
-    let mut m = Hmac::<Sha256>::new_from_slice(lan).expect("any key size");
+    let mut m = Hmac::<Sha256>::new_from_slice(&lan[..]).expect("any key size");
     for p in parts {
         m.update(p);
     }
     m
 }
 
-/// Advertised so Macs of one vault find each other. Keyed with the LAN key, so neither the relay
-/// (which knows the vault id and token) nor anyone else can compute it or link it to a vault.
-pub fn tag(lan: &Key) -> String {
-    hex(&hmac(lan, &[b"ozen-sync lan tag"]).finalize().into_bytes()[..8])
-}
+// The daily Bonjour tag (OFE-83): daily.rs.
+#[path = "local_daily.rs"]
+mod daily;
+pub use daily::now;
+#[cfg(test)]
+use daily::tag;
+use daily::{advert, day, ours};
 
 /// `read_exact` that gives up at `deadline`, not per read: a peer trickling a byte at a time can't
 /// stretch it.
@@ -121,86 +126,19 @@ pub fn handshake(
     SockRef::from(&*s).set_tcp_keepalive(&ka).map_err(err)
 }
 
-fn write_frame(s: &mut TcpStream, f: &[u8]) -> Result<(), String> {
-    if f.len() > MAX_FRAME {
-        return Err(format!("frame of {} bytes is over {MAX_FRAME}", f.len()));
-    }
-    s.write_all(&(f.len() as u32).to_be_bytes())
-        .and_then(|()| s.write_all(f))
-        .map_err(|e| e.to_string())
-}
-
-/// The next frame, or None when the peer hung up.
-fn read_frame(s: &mut TcpStream) -> Result<Option<Vec<u8>>, String> {
-    let mut n = [0; 4];
-    match s.read_exact(&mut n) {
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
-        r => r.map_err(|e| e.to_string())?,
-    }
-    let n = u32::from_be_bytes(n) as usize;
-    if n > MAX_FRAME {
-        return Err(format!("frame of {n} bytes is over {MAX_FRAME}"));
-    }
-    let mut f = vec![0; n];
-    s.read_exact(&mut f).map_err(|e| e.to_string())?;
-    Ok(Some(f))
-}
-
-/// Runs the summary protocol with one authenticated peer until it hangs up. `step(None)` makes our
-/// hello, `step(Some(frame))` handles one of theirs (protocol::Session); each returns frames to send.
-/// Frames are written from their own thread, so two Macs sending big hellos at once never wait on each
-/// other's reads.
-pub fn talk(
-    s: TcpStream,
-    mut step: impl FnMut(Option<&[u8]>) -> Result<Vec<Vec<u8>>, String>,
-) -> Result<(), String> {
-    let mut w = s.try_clone().map_err(|e| e.to_string())?;
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-    let writer = std::thread::spawn(move || {
-        for f in rx {
-            if let Err(e) = write_frame(&mut w, &f) {
-                let _ = w.shutdown(std::net::Shutdown::Both); // unblocks the reader too
-                return Err(e);
-            }
-        }
-        Ok::<(), String>(())
-    });
-    let mut r = s;
-    let send = |fs: Vec<Vec<u8>>| fs.into_iter().all(|f| tx.send(f).is_ok());
-    let mut out = Ok(());
-    if send(step(None)?) {
-        out = loop {
-            match read_frame(&mut r) {
-                Ok(Some(f)) => match step(Some(&f)) {
-                    Ok(fs) => {
-                        if !send(fs) {
-                            break Ok(()); // the writer stopped: its error is below
-                        }
-                    }
-                    Err(e) => break Err(e),
-                },
-                Ok(None) => break Ok(()),
-                Err(e) => break Err(e),
-            }
-        };
-    }
-    let _ = r.shutdown(std::net::Shutdown::Both); // ends the writer if it's blocked
-    drop(tx);
-    let wrote = writer.join().unwrap_or(Err("writer panicked".into()));
-    out.and(wrote)
-}
-
 /// Advertising, browsing and accepting; dropping it stops all three (open connections run until the
 /// peer hangs up).
 pub struct Local {
     daemon: ServiceDaemon,
-    fullname: String,
+    /// The name advertised now; a new one each UTC day.
+    fullname: Arc<Mutex<String>>,
     stop: Arc<AtomicBool>,
     addr: SocketAddr,
 }
 
 impl Local {
     /// The TCP port peers connect to.
+    #[cfg(test)]
     pub fn port(&self) -> u16 {
         self.addr.port()
     }
@@ -210,7 +148,8 @@ impl Drop for Local {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(("127.0.0.1", self.addr.port())); // wakes the accept loop to see `stop`
-        if let Ok(done) = self.daemon.unregister(&self.fullname) {
+        let name = self.fullname.lock().unwrap().clone();
+        if let Ok(done) = self.daemon.unregister(&name) {
             let _ = done.recv_timeout(Duration::from_secs(1)); // the goodbye went out
         }
         let _ = self.daemon.shutdown();
@@ -260,6 +199,17 @@ pub fn start(
     interfaces: IfKind,
     on_peer: impl Fn(TcpStream) + Send + Sync + 'static,
 ) -> Result<Local, String> {
+    start_at(lan, interfaces, now, on_peer)
+}
+
+/// `start` with `clock` (seconds since the epoch) choosing the day's tag.
+fn start_at(
+    lan: Key,
+    interfaces: IfKind,
+    clock: fn() -> u64,
+    on_peer: impl Fn(TcpStream) + Send + Sync + 'static,
+) -> Result<Local, String> {
+    let lan = Arc::new(lan); // one copy, shared by the threads below
     let err = |e: &dyn std::fmt::Display| format!("local sync: {e}");
     // loopback only (tests) listens on loopback only; otherwise every interface, filtered by source
     let any = if matches!(interfaces, IfKind::LoopbackV4) {
@@ -270,16 +220,12 @@ pub fn start(
     let listener = TcpListener::bind((any, 0)).map_err(|e| err(&e))?;
     let addr = listener.local_addr().map_err(|e| err(&e))?;
     let id = hex(&random()?[..8]);
-    let tag = tag(&lan);
     let daemon = ServiceDaemon::new().map_err(|e| err(&e))?;
     daemon.disable_interface(IfKind::All).map_err(|e| err(&e))?;
     daemon.enable_interface(interfaces).map_err(|e| err(&e))?;
-    let props = [("tag", tag.as_str()), ("id", id.as_str())];
-    let host = format!("{id}.local.");
-    let me = ServiceInfo::new(&service_type(), &id, &host, "", addr.port(), &props[..])
-        .map_err(|e| err(&e))?
-        .enable_addr_auto();
-    let fullname = me.get_fullname().to_string();
+    let mut today = day(clock());
+    let me = advert(&lan, &id, addr.port(), today).map_err(|e| err(&e))?;
+    let fullname = Arc::new(Mutex::new(me.get_fullname().to_string()));
     daemon.register(me).map_err(|e| err(&e))?;
     let found = daemon.browse(&service_type()).map_err(|e| err(&e))?;
 
@@ -288,8 +234,41 @@ pub fn start(
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
     );
-    let (on_accept, stopped, accept_slots) = (on_peer.clone(), stop.clone(), slots.clone());
+    // This Mac's instance ids, the current one first: it never dials one of its own.
+    let mine = Arc::new(Mutex::new(vec![id]));
+    // A new UTC day: advertise the new tag under a new random id too, so nothing in the advert links
+    // today's Mac to yesterday's. Connections already open stay open.
+    // ponytail: the listening port stays for the process's life; rebind daily if that ever matters
+    let (renew, stopped, ids, name, port) = (
+        daemon.clone(),
+        stop.clone(),
+        mine.clone(),
+        fullname.clone(),
+        addr.port(),
+    );
+    let lan1 = lan.clone();
     std::thread::spawn(move || {
+        let lan = lan1;
+        while !stopped.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_secs(1));
+            let d = day(clock());
+            if d != today
+                && let Ok(new) = random().map(|r| hex(&r[..8]))
+                && let Ok(me) = advert(&lan, &new, port, d)
+                && let new_name = me.get_fullname().to_string()
+                && renew.register(me).is_ok()
+            {
+                let old = std::mem::replace(&mut *name.lock().unwrap(), new_name);
+                let _ = renew.unregister(&old);
+                ids.lock().unwrap().insert(0, new);
+                today = d;
+            }
+        }
+    });
+    let (on_accept, stopped, accept_slots) = (on_peer.clone(), stop.clone(), slots.clone());
+    let lan2 = lan.clone();
+    std::thread::spawn(move || {
+        let lan = lan2;
         while !stopped.load(Ordering::SeqCst) {
             let mut s = match listener.accept() {
                 Ok((s, from)) if local_source(from.ip()) => s,
@@ -304,7 +283,9 @@ pub fn start(
                 continue; // dropping `s` closes it
             };
             let on_peer = on_accept.clone();
+            let lan3 = lan.clone();
             std::thread::spawn(move || {
+                let lan = lan3;
                 let _slot = slot;
                 if handshake(&mut s, &lan, false, HANDSHAKE).is_ok() {
                     on_peer(s);
@@ -316,7 +297,9 @@ pub fn start(
     // Instance ids advertising now; a dial loop runs while its peer's id is in here.
     let present = Arc::new(Mutex::new(HashSet::<String>::new()));
     let stopped = stop.clone();
+    let lan4 = lan.clone();
     std::thread::spawn(move || {
+        let lan = lan4;
         while let Ok(ev) = found.recv() {
             if stopped.load(Ordering::SeqCst) {
                 return;
@@ -331,7 +314,12 @@ pub fn start(
                 _ => continue,
             };
             let theirs = r.get_property_val_str("id").unwrap_or_default().to_string();
-            if r.get_property_val_str("tag") != Some(tag.as_str()) || theirs <= id {
+            let tag = r.get_property_val_str("tag").unwrap_or_default();
+            let (own, id) = {
+                let m = mine.lock().unwrap();
+                (m.contains(&theirs), m[0].clone())
+            };
+            if !ours(&lan, tag, clock()) || own || theirs <= id {
                 continue; // another vault, ourselves, or theirs to dial
             }
             if !present.lock().unwrap().insert(theirs.clone()) {
@@ -349,7 +337,9 @@ pub fn start(
                 stopped.clone(),
                 slots.clone(),
             );
+            let lan5 = lan.clone();
             std::thread::spawn(move || {
+                let lan = lan5;
                 let mut wait = REDIAL;
                 let here =
                     || present.lock().unwrap().contains(&theirs) && !stopped.load(Ordering::SeqCst);

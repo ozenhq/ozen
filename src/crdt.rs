@@ -19,7 +19,7 @@
 //! Local, never merged (each Mac rebuilds them): labels.json, stats.json, ignore.json and voices/ (retrain,
 //! from tags; voices/ has its own git sync), learned.json (`ozen fix` relearns from fixes), junk.json,
 //! transcript.txt, context/, pace.jsonl, here.json*, chunk audio (chunks/, recent/, fixes/), start.log,
-//! the record mode and switches (app defaults, dot files). After a merge, relearn and retrain.
+//! restore points (.sync-restore/), the record mode and switches (app defaults, dot files). After a merge, relearn and retrain.
 //!
 //! Merging is the `crdts` crate's last-writer-wins register. No `crate::` imports: the menu bar app includes
 //! this file too (src/bin/bar/main.rs).
@@ -100,6 +100,24 @@ pub fn sorted(r: &Value) -> Value {
     }
 }
 
+/// Line fields the transcribing Mac derives for itself (OFE-56): its first guess at the speaker from
+/// its own voiceprints (`spk`), how unsure that guess is (`doubt`) and its transcriber run (`run`).
+/// Another Mac guesses for itself when it retrains (labels.json) and numbers its own runs, so sync
+/// (protocol v2 on) neither sends nor hashes them. A line with no voiceprint keeps `spk`: a note's
+/// speaker is what the user typed, and no retrain could recompute it.
+pub const LOCAL_LINE_FIELDS: [&str; 3] = ["spk", "doubt", "run"];
+
+/// Line `r` as sync carries it: without `LOCAL_LINE_FIELDS`.
+pub fn synced_line(mut r: Row) -> Row {
+    let voiced = r.get("e").is_some_and(|e| !e.is_null());
+    for f in LOCAL_LINE_FIELDS {
+        if f != "spk" || voiced {
+            r.remove(f);
+        }
+    }
+    r
+}
+
 /// `r` as compact JSON with keys in sorted order: tie-breaks and sync hashes are taken over this
 /// text, so it is the same on every Mac. Equal to `r.to_string()` with the default map, so existing
 /// markers and hashes don't change.
@@ -178,11 +196,18 @@ pub fn write_map(path: &str, live: &Row) -> Result<(), String> {
 /// its temp file (`.<name>.<random>.tmp`) behind, never a half-written `path`; the next write of the same
 /// file removes such leftovers once they're a minute old (a younger one may be another writer's, mid-write).
 pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<(), String> {
-    write_atomic_then(path, bytes, || {})
+    write_atomic_then(path, bytes, |_| Ok(Some(()))).map(|_| ())
 }
 
-/// `write_atomic`, running `before_rename` once the temp file is on disk (tests kill the writer there).
-fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> Result<(), String> {
+/// `write_atomic` in two steps, for a big file others append to under a lock: `bytes` are written and
+/// synced first, then `last` gets the temp file (to take the lock and add what was appended meanwhile,
+/// synced here again). The temp file replaces `path` only when `last` returns Some, and that value is
+/// returned after the rename, so a lock it holds covers the swap; None leaves `path` as it was.
+pub fn write_atomic_then<T>(
+    path: &str,
+    bytes: &[u8],
+    last: impl FnOnce(&mut fs::File) -> Result<Option<T>, String>,
+) -> Result<Option<T>, String> {
     let err = |e: std::io::Error| format!("write {path}: {e}");
     let p = Path::new(path);
     let dir = p
@@ -205,9 +230,18 @@ fn write_atomic_then(path: &str, bytes: &[u8], before_rename: impl FnOnce()) -> 
         .map_err(err)?;
     f.write_all(bytes).map_err(err)?;
     f.as_file().sync_all().map_err(err)?;
-    before_rename();
+    let len = f.as_file().metadata().map_err(err)?.len();
+    let Some(held) = last(f.as_file_mut())? else {
+        return Ok(None); // dropping `f` removes the temp file
+    };
+    if f.as_file().metadata().map_err(err)?.len() != len {
+        f.as_file().sync_all().map_err(err)?; // what `last` added
+    }
     f.persist(p).map_err(|e| err(e.error))?;
-    fs::File::open(dir).and_then(|d| d.sync_all()).map_err(err) // the rename itself, durable too
+    fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(err)?; // the rename itself, durable too
+    Ok(Some(held))
 }
 
 /// Removes `write_atomic` temp files (`<prefix><random>.tmp`) a killed writer left in `dir` over a minute ago.

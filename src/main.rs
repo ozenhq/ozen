@@ -311,10 +311,7 @@ const TR_STARTED: &str = ".transcriber-started"; // when it was last launched, t
 fn start_transcriber() {
     // First: the pull below can take seconds, and a `status` poll in between would start a second transcriber.
     let _ = File::create(TR_STARTED);
-    if !ok(cmd("git")
-        .args(["-C", "voices", "pull", "-q", "--ff-only"])
-        .stderr(Stdio::null()))
-    {
+    if !train::pull_registry() {
         let _ = std::io::Write::write_all(
             &mut log(),
             b"voices registry pull failed; using local copy\n",
@@ -656,6 +653,7 @@ fn main() {
                 let _ = fs::remove_file(".stopping");
                 "stopped"
             };
+            sync::run::keep(log);
             println!("{state}");
         }
         "health" => {
@@ -672,7 +670,7 @@ fn main() {
                 println!("Place switching is off: {}", why.trim());
             }
             // Sync runs whether or not this Mac records.
-            sync::dropped::health().iter().for_each(|l| println!("{l}"));
+            sync::health().iter().for_each(|l| println!("{l}"));
             if !running(REC) {
                 if recorder_blocked(&String::from_utf8_lossy(
                     &fs::read("start.log").unwrap_or_default(),

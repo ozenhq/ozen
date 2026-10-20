@@ -1,0 +1,13 @@
+---
+source: src/sync/status_tests.rs
+expression: v
+---
+{
+  "error": null,
+  "lan_only": true,
+  "macs": [],
+  "other_macs_online": null,
+  "relay": null,
+  "running": true,
+  "sync": "on"
+}

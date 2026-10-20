@@ -19,8 +19,8 @@ fn settle(dir: &Path) {
 fn fresh(dir: &Path) -> (BTreeMap<Id, Mark>, Vec<u8>) {
     at(dir, || {
         let mut marks = Marks::default();
-        let (m, h) = marks.current(|| {
-            let all = records(&merge::read_synced(""));
+        let (m, h) = marks.current(VERSION, || {
+            let all = records(&merge::read_synced(""), VERSION);
             all.iter().map(|(id, r)| (id.clone(), mark(r))).collect()
         });
         (m.clone(), h.to_vec())
@@ -106,4 +106,28 @@ fn a_hello_on_fifty_thousand_lines_with_nothing_changed_is_fast() {
     if !cfg!(debug_assertions) {
         assert!(took < Duration::from_millis(25), "{took:?}");
     }
+}
+
+#[test]
+fn a_change_of_protocol_version_recomputes_the_marks() {
+    let d = folder(
+        json!([{"id": "1@a", "v": 1, "t": 1.0, "text": "hi"}]),
+        json!({}),
+    );
+    settle(d.path());
+    at(d.path(), || {
+        let mut marks = Marks::default();
+        let mut computed = vec![];
+        for v in [2, 2, 1] {
+            marks.current(v, || {
+                computed.push(v);
+                BTreeMap::new()
+            });
+        }
+        assert_eq!(
+            computed,
+            [2, 1],
+            "the same files at another version are hashed again"
+        );
+    });
 }

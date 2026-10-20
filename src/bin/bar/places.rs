@@ -39,18 +39,20 @@ pub fn load() -> Vec<Value> {
     from_file
         .or_else(legacy)
         .and_then(|b| serde_json::from_slice::<Vec<crdt::Row>>(&b).ok())
-        .map(|raw| {
-            crdt::live_rows(&raw)
-                .into_iter()
-                .map(Value::Object)
-                .collect()
-        })
-        .unwrap_or_else(|| {
-            vec![
-                json!({"label": "Home", "action": "off"}),
-                json!({"label": "Work", "action": "record"}),
-            ]
-        })
+        .map_or_else(
+            || {
+                vec![
+                    json!({"label": "Home", "action": "off"}),
+                    json!({"label": "Work", "action": "record"}),
+                ]
+            },
+            |raw| {
+                crdt::live_rows(&raw)
+                    .into_iter()
+                    .map(Value::Object)
+                    .collect()
+            },
+        )
 }
 
 /// Sorted keys, as src/places.rs writes it; versions and tombstones kept (src/crdt.rs).

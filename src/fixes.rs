@@ -12,6 +12,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 const LINES: &str = "lines.jsonl";
+
+#[path = "prints.rs"]
+pub(crate) mod prints_cache;
+pub(crate) use prints_cache::prints;
 const FIXES: &str = "fixes.json";
 const LEARNED: &str = "learned.json";
 const FIX_AUDIO: &str = "fixes";

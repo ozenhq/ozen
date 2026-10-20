@@ -1,30 +1,51 @@
 //! The vault key: 32 random bytes in the login Keychain (never in the ozen folder), and what the
 //! relay (ozenhq/sync src/auth) and the encryption derive from it.
 use hkdf::Hkdf;
+#[cfg(test)]
+use security_framework::os::macos::keychain::SecKeychain;
+#[cfg(not(test))]
 use security_framework::passwords::{get_generic_password, set_generic_password};
 use security_framework::random::SecRandom;
 use sha2::{Digest, Sha256};
 
-const SERVICE: &str = "ozen-sync";
+/// The vault key is a generic password in the login Keychain: a file-based keychain, which iCloud
+/// Keychain never syncs and where a synchronizable item can't exist at all (asking for one is errSecParam,
+/// key_tests). That keeps the one secret that reads the synced meetings off Apple's servers (OFE-64), so key
+/// storage must never move to the data protection keychain or ask for a synced item (guarded in
+/// key_tests). Its accessibility is the login Keychain's: unlocked while the user is logged in, so a
+/// background `ozen sync run` reads it with the screen locked.
+pub(super) const SERVICE: &str = "ozen-sync";
 const ACCOUNT: &str = "vault-key";
 
-pub type Key = [u8; 32];
+/// A 32-byte key: the vault key or one derived from it. Wiped from memory when dropped, and not `Copy`,
+/// so it isn't silently duplicated (OFE-60); clone it only where a second owner is needed.
+pub type Key = zeroize::Zeroizing<[u8; 32]>;
+
+/// `bytes` as a key.
+pub fn key(bytes: [u8; 32]) -> Key {
+    zeroize::Zeroizing::new(bytes)
+}
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    let mut s = String::with_capacity(b.len() * 2); // no reallocation leaves key hex behind
+    for x in b {
+        let _ = write!(s, "{x:02x}");
+    }
+    s
 }
 
 fn hkdf(key: &Key, info: &str) -> Key {
-    let mut out = [0; 32];
-    Hkdf::<Sha256>::new(None, key)
-        .expand(info.as_bytes(), &mut out)
+    let mut out = self::key([0; 32]);
+    Hkdf::<Sha256>::new(None, &key[..])
+        .expand(info.as_bytes(), &mut out[..])
         .expect("32 bytes is a valid HKDF-SHA256 length");
     out
 }
 
 /// The bearer token the relay checks: an HKDF output separate from the encryption key.
-pub fn token(key: &Key) -> String {
-    hex(&hkdf(key, "ozen-sync token"))
+pub fn token(key: &Key) -> zeroize::Zeroizing<String> {
+    zeroize::Zeroizing::new(hex(&hkdf(key, "ozen-sync token")[..]))
 }
 
 /// The vault's name on the relay: hex(SHA-256(token)), 64 lowercase hex chars. The relay checks a
@@ -43,48 +64,206 @@ pub fn short(vault_id: &str) -> &str {
 }
 
 /// The key ops are sealed with; never sent anywhere.
-#[allow(dead_code)] // ponytail: used by encrypting ops (OFE-12)
 pub fn seal_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync seal")
 }
 
 /// The key two Macs on one network prove they share before syncing directly (local.rs). The relay
 /// knows the token, so the LAN proof must not be derivable from it; this is a separate HKDF output.
-#[allow(dead_code)] // ponytail: started with the background connection (OFE-7)
 pub fn lan_key(key: &Key) -> Key {
     hkdf(key, "ozen-sync lan")
 }
 
-/// The stored key, or a new random one saved through `write`. Running it again keeps the key.
+/// The ozen-folder file naming the vault this Mac is in, by its short id (public: `short`). With it, a
+/// key missing from the Keychain reads as lost, not as a first run (OFE-77).
+pub const VAULT: &str = ".sync-vault";
+
+/// The short id in `VAULT`, if this Mac was in a vault.
+pub fn remembered() -> Option<String> {
+    std::fs::read_to_string(VAULT)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Notes in `VAULT` that this Mac is in `k`'s vault.
+pub fn remember(k: &Key) -> Result<(), String> {
+    std::fs::write(VAULT, short(&vault_id(k))).map_err(|e| format!("{VAULT}: {e}"))
+}
+
+/// What to do when this Mac was in vault `v` but its key is gone from the Keychain.
+fn lost(v: &str) -> String {
+    format!(
+        "this Mac was in vault {v}, but its key is gone from the Keychain; a new key would leave \
+that vault. Run `ozen sync pair` on another Mac in it, then `ozen sync join` here. To start a new \
+vault instead, run `ozen sync off`, then `ozen sync init`"
+    )
+}
+
+/// Why there's no key here: lost (`lost`) if this Mac was in a vault, else `first`, the first-run hint.
+pub fn missing(first: &str) -> String {
+    remembered().map_or_else(|| first.to_string(), |v| lost(&v))
+}
+
+/// The stored key, or a new random one saved through `write`. Running it again keeps the key. If none
+/// is stored but this Mac was in vault `remembered`, the key was lost (a Keychain reset, a migration):
+/// a new one would silently leave that vault, so it errors with how to get the key back instead.
 pub fn load_or_create(
+    remembered: Option<&str>,
     read: impl FnOnce() -> Result<Option<Vec<u8>>, String>,
     write: impl FnOnce(&Key) -> Result<(), String>,
 ) -> Result<Key, String> {
     if let Some(k) = read()? {
-        return k
-            .try_into()
-            .map_err(|_| "vault key in the Keychain is not 32 bytes".into());
+        return from_bytes(k);
     }
-    let mut k = [0; 32];
-    SecRandom::default()
-        .copy_bytes(&mut k)
-        .map_err(|e| format!("random key: {e}"))?;
+    if let Some(v) = remembered {
+        return Err(lost(v));
+    }
+    let k = random()?;
     write(&k)?;
     Ok(k)
 }
 
-/// The key in the login Keychain, made on first use.
-pub fn keychain() -> Result<Key, String> {
-    load_or_create(
-        || match get_generic_password(SERVICE, ACCOUNT) {
-            Ok(k) => Ok(Some(k)),
-            Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
-            Err(e) => Err(format!("Keychain: {e}")),
+/// A new random key.
+pub fn random() -> Result<Key, String> {
+    let mut k = key([0; 32]);
+    SecRandom::default()
+        .copy_bytes(&mut k[..])
+        .map_err(|e| format!("random key: {e}"))?;
+    Ok(k)
+}
+
+/// Stored bytes as a key; the bytes are wiped either way.
+fn from_bytes(bytes: Vec<u8>) -> Result<Key, String> {
+    let bytes = zeroize::Zeroizing::new(bytes);
+    if bytes.len() != 32 {
+        return Err("vault key in the Keychain is not 32 bytes".into());
+    }
+    let mut k = key([0; 32]);
+    k.copy_from_slice(&bytes);
+    Ok(k)
+}
+
+/// The vault key, from the login Keychain. Debug builds only: `OZEN_SYNC_KEY_FILE` names a file with a
+/// throwaway key instead (scripts/sync-dev.sh), so dev sandboxes never touch the Keychain or join the
+/// vault of the user's real Macs.
+fn read() -> Result<Option<Vec<u8>>, String> {
+    if let Some(f) = key_file() {
+        return std::fs::read(&f)
+            .map(Some)
+            .map_err(|e| format!("OZEN_SYNC_KEY_FILE {}: {e}", f.to_string_lossy()));
+    }
+    read_at(SERVICE)
+}
+
+/// The throwaway key file a debug build uses instead of the Keychain (`read`), for reading, storing and
+/// forgetting alike: a dev sandbox must never write the user's real key.
+fn key_file() -> Option<std::ffi::OsString> {
+    std::env::var_os("OZEN_SYNC_KEY_FILE").filter(|_| cfg!(debug_assertions))
+}
+
+/// Tests' keychain: a throwaway file named by `OZEN_TEST_KEYCHAIN` (key_tests::throwaway), never the
+/// login Keychain, with prompts off for the whole process, so a test can neither change the user's keys nor
+/// show a dialog that blocks every Keychain call on the Mac (OFE-55). Without one, tests fail.
+#[cfg(test)]
+pub(crate) fn test_keychain() -> Result<SecKeychain, String> {
+    static NO_PROMPTS: std::sync::Once = std::sync::Once::new();
+    NO_PROMPTS.call_once(|| {
+        if let Ok(l) = SecKeychain::disable_user_interaction() {
+            std::mem::forget(l); // for the rest of the process
+        }
+    });
+    let p = std::env::var_os("OZEN_TEST_KEYCHAIN")
+        .ok_or("tests never use the login Keychain: make a key_tests::throwaway() first")?;
+    let mut k = SecKeychain::open(p).map_err(|e| format!("test keychain: {e}"))?;
+    k.unlock(Some(TEST_PASSWORD))
+        .map_err(|e| format!("test keychain: {e}"))?;
+    Ok(k)
+}
+
+#[cfg(test)]
+pub(crate) const TEST_PASSWORD: &str = "ozen-test";
+
+/// The raw item under Keychain service `service` (tests use a throwaway one).
+fn read_at(service: &str) -> Result<Option<Vec<u8>>, String> {
+    #[cfg(test)]
+    let found = test_keychain()?
+        .find_generic_password(service, ACCOUNT)
+        .map(|(p, _)| p.to_vec());
+    #[cfg(not(test))]
+    let found = get_generic_password(service, ACCOUNT);
+    match found {
+        Ok(k) => Ok(Some(k)),
+        Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
+        Err(e) => Err(format!("Keychain: {e}")),
+    }
+}
+
+/// A stored key's bytes as a key.
+fn typed(k: Option<Vec<u8>>) -> Result<Option<Key>, String> {
+    k.map(from_bytes).transpose()
+}
+
+/// The key in the login Keychain if `ozen sync init` or `join` stored one; never makes one.
+pub fn stored() -> Result<Option<Key>, String> {
+    typed(read()?)
+}
+
+/// `stored`, under Keychain service `service`.
+#[cfg(test)]
+pub fn stored_at(service: &str) -> Result<Option<Key>, String> {
+    typed(read_at(service)?)
+}
+
+/// Saves `k` as the key in the login Keychain, replacing any other.
+pub fn store(k: &Key) -> Result<(), String> {
+    match key_file() {
+        Some(f) => std::fs::write(&f, &k[..]).map_err(|e| format!("OZEN_SYNC_KEY_FILE: {e}")),
+        None => store_at(SERVICE, k),
+    }
+}
+
+/// `store`, under Keychain service `service`.
+pub fn store_at(service: &str, k: &Key) -> Result<(), String> {
+    #[cfg(test)]
+    let r = test_keychain()?.set_generic_password(service, ACCOUNT, &k[..]);
+    #[cfg(not(test))]
+    let r = set_generic_password(service, ACCOUNT, &k[..]);
+    r.map_err(|e| format!("Keychain: {e}"))
+}
+
+/// Removes the key from the login Keychain (`ozen sync off`); fine if there was none.
+pub fn forget() -> Result<(), String> {
+    match key_file() {
+        Some(f) => match std::fs::remove_file(&f) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("OZEN_SYNC_KEY_FILE: {e}"))
+            }
+            _ => Ok(()),
         },
-        |k| set_generic_password(SERVICE, ACCOUNT, k).map_err(|e| format!("Keychain: {e}")),
-    )
+        None => forget_at(SERVICE),
+    }
+}
+
+/// `forget`, under Keychain service `service`.
+pub fn forget_at(service: &str) -> Result<(), String> {
+    #[cfg(test)]
+    let r = test_keychain()?
+        .find_generic_password(service, ACCOUNT)
+        .map(|(_, item)| item.delete());
+    #[cfg(not(test))]
+    let r = security_framework::passwords::delete_generic_password(service, ACCOUNT);
+    match r {
+        Err(e) if e.code() != -25300 => Err(format!("Keychain: {e}")), // -25300: errSecItemNotFound
+        _ => Ok(()),
+    }
+}
+
+/// The key in the login Keychain, made on first use, unless this Mac was in vault `remembered`.
+pub fn keychain(remembered: Option<&str>) -> Result<Key, String> {
+    load_or_create(remembered, read, store)
 }
 
 #[cfg(test)]
 #[path = "key_tests.rs"]
-mod tests;
+pub(super) mod tests;
