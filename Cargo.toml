@@ -7,6 +7,8 @@ publish = false
 
 [lints.clippy]
 redundant_closure_for_method_calls = "warn"  # CI runs clippy with -D warnings
+explicit_iter_loop = "warn"  # `for x in &v` over `for x in v.iter()`
+map_unwrap_or = "warn"  # prefer `map_or`/`is_some_and` over `.map(f).unwrap_or(x)`
 
 [profile.release]
 strip = true

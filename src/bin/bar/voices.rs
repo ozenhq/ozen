@@ -129,7 +129,7 @@ impl App {
         let Some(stack) = iv.voices_stack.get() else {
             return;
         };
-        for v in stack.arrangedSubviews().iter() {
+        for v in &stack.arrangedSubviews() {
             v.removeFromSuperview();
         }
         let intro = NSTextField::wrappingLabelWithString(
@@ -248,9 +248,9 @@ impl App {
     fn change_voices(&self, args: Vec<String>) {
         self.build_voices(Some("Retraining…".into()));
         if let Some(stack) = self.ivars().voices_stack.get() {
-            for row in stack.arrangedSubviews().iter() {
+            for row in &stack.arrangedSubviews() {
                 if let Ok(row) = row.downcast::<NSStackView>() {
-                    for b in row.views().iter() {
+                    for b in &row.views() {
                         if let Ok(b) = b.downcast::<NSButton>() {
                             b.setEnabled(false);
                         }
