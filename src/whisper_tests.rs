@@ -1,4 +1,4 @@
-use super::*;
+use super::mel::mel_filters;
 
 #[test]
 fn mel_filters_match_whispers_npz() {
