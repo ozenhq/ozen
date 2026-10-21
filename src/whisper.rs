@@ -645,7 +645,15 @@ impl Whisper {
                 .filter(|&i| is_ts[i - 1] && is_ts[i])
                 .collect();
             let mut current: Vec<(i64, i64, Vec<u32>)> = vec![]; // (start pos, end pos, tokens)
-            if !cuts.is_empty() {
+            if cuts.is_empty() {
+                let dur = toks
+                    .iter()
+                    .rfind(|&&x| x >= tok.ts_begin)
+                    .filter(|&&x| x != tok.ts_begin)
+                    .map_or(size as i64, |&x| (x - tok.ts_begin) as i64 * 2);
+                current.push((0, dur, toks.clone()));
+                seek += size;
+            } else {
                 if single_end {
                     cuts.push(toks.len());
                 }
@@ -661,14 +669,6 @@ impl Whisper {
                 } else {
                     (toks[last - 1] - tok.ts_begin) as usize * 2
                 };
-            } else {
-                let dur = toks
-                    .iter()
-                    .rfind(|&&x| x >= tok.ts_begin)
-                    .filter(|&&x| x != tok.ts_begin)
-                    .map_or(size as i64, |&x| (x - tok.ts_begin) as i64 * 2);
-                current.push((0, dur, toks.clone()));
-                seek += size;
             }
             for (start, end, mut t) in current {
                 let mut text = tok.decode(&t);

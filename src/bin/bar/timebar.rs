@@ -217,10 +217,10 @@ pub fn stats(d: &Data, a: f64, b: f64, clock: &dyn Clock) -> Vec<[String; 3]> {
         ),
         row(
             "speed",
-            if took != 0.0 {
-                format!("{}×", fixed1(audio / took))
-            } else {
+            if took == 0.0 {
                 "–".into()
+            } else {
+                format!("{}×", fixed1(audio / took))
             },
             if took == 0.0 {
                 "nothing timed in view"
@@ -234,10 +234,10 @@ pub fn stats(d: &Data, a: f64, b: f64, clock: &dyn Clock) -> Vec<[String; 3]> {
         ),
         row(
             "pace",
-            if rate != 0.0 {
-                format!("{}/min", fixed1(rate * 60.0 / CHUNK))
-            } else {
+            if rate == 0.0 {
                 "–".into()
+            } else {
+                format!("{}/min", fixed1(rate * 60.0 / CHUNK))
             },
             "done, last 10m".into(),
         ),
@@ -614,7 +614,7 @@ define_class!(
             if e.modifierFlags().contains(NSEventModifierFlags::Command) {
                 self.zoom((dy / 100.0).exp(), Some(self.time_at(e, w))); // pinch-less zoom, as the page did
             } else {
-                let d = if dx != 0.0 { dx } else { dy };
+                let d = if dx == 0.0 { dy } else { dx };
                 self.pan(d / (w - GUTTER));
             }
         }
