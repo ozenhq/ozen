@@ -8,6 +8,7 @@
 //! DIR is the ozen checkout (default ~/ozen). --open shows the panel at launch. --dump FILE shows the panel, writes
 //! what it drew (every text run with its attributes, the footer, Review queue, timeline, windows) to FILE and quits:
 //! a render check (it matched the Swift app it replaced).
+mod alerts;
 mod auto;
 mod cli;
 #[path = "../../crdt.rs"]
@@ -15,16 +16,23 @@ mod cli;
 mod crdt; // places.json and fixes.json are synced data
 mod dump_places;
 mod install;
+mod main_thread;
 mod map;
 mod meetings_tab;
+mod menu;
 mod places;
+mod prefs;
 mod sync_section;
 mod timebar;
 mod timeline;
+mod transcribe_switch;
 mod transcript;
 mod voices;
 
+use alerts::{ask, confirm, fail};
+use main_thread::{later, mtm, now};
 use meetings_tab::meeting_cell;
+use menu::{idle_status, menu_header, represented, small_button};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
@@ -41,10 +49,12 @@ use objc2_foundation::{
     MainThreadMarker, NSDictionary, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol,
     NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSTimer, ns_string,
 };
+use prefs::{mode, split};
 use serde_json::Value;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use transcribe_switch::{run_in_turn, transcribe_switched};
 
 #[derive(Default)]
 struct Ivars {
@@ -518,120 +528,8 @@ define_class!(
     }
 );
 
-/// A menu item's payload (JSON in its represented object).
-fn represented(item: &NSMenuItem) -> Option<Value> {
-    let o = item.representedObject()?;
-    serde_json::from_str(&o.downcast::<NSString>().ok()?.to_string()).ok()
-}
-
-/// The right-click menu's first line: the panel's status line, or the raw state before the first refresh.
-fn menu_header<'a>(status: &'a str, state: &'a str) -> &'a str {
-    if status.is_empty() { state } else { status }
-}
-
-/// The status line while not recording: what ozen is doing instead, and the place it's at.
-fn idle_status(state: &str, queued: i64, meetings_only: bool, place: &str) -> String {
-    match state {
-        "paused" => "Paused".into(),
-        "stopping" => "Finishing transcription…".into(),
-        "processing" => format!(
-            "Transcribing {queued} chunk{}…",
-            if queued == 1 { "" } else { "s" }
-        ),
-        _ if meetings_only => format!("Waiting for a meeting{place}"),
-        _ => format!("Not recording{place}"),
-    }
-}
-
-/// Ask before a change: `action` or Cancel.
-fn confirm(message: &str, info: &str, action: &str) -> bool {
-    let alert = objc2_app_kit::NSAlert::new(mtm());
-    alert.setMessageText(&NSString::from_str(message));
-    alert.setInformativeText(&NSString::from_str(info));
-    alert.addButtonWithTitle(&NSString::from_str(action));
-    alert.addButtonWithTitle(ns_string!("Cancel"));
-    alert.runModal() == 1000 // NSAlertFirstButtonReturn
-}
-
-/// A modal alert with `buttons`; returns the index of the one pressed.
-fn ask(title: &str, info: &str, buttons: &[&str]) -> usize {
-    let mtm = mtm();
-    let alert = objc2_app_kit::NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str(title));
-    alert.setInformativeText(&NSString::from_str(info));
-    for b in buttons {
-        alert.addButtonWithTitle(&NSString::from_str(b));
-    }
-    NSApplication::sharedApplication(mtm).activate();
-    (alert.runModal() - 1000).max(0) as usize // NSAlertFirstButtonReturn = 1000
-}
-
-fn fail(title: &str, detail: &str) {
-    ask(title, detail, &[]);
-}
-
-fn mode() -> String {
-    objc2_foundation::NSUserDefaults::standardUserDefaults()
-        .stringForKey(ns_string!("mode"))
-        .map_or("always".into(), |m| m.to_string()) // "always" | "meetings"
-}
-
-fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
-}
-
-/// The CLI commands, run in turn, that apply the Transcribe switch right away. Off stops the transcriber and the
-/// audio waits in chunks/ (the recording goes on); on transcribes what's waiting, then keeps going live if recording.
-fn transcribe_switched(on: bool, state: &str, queued: i64) -> &'static [&'static [&'static str]] {
-    match (on, state) {
-        (false, "recording") => &[&["record"], &["process", "stop"]],
-        (false, "paused" | "processing") => &[&["process", "stop"]],
-        (true, "recording") => &[&["start"]],
-        (true, _) if queued > 0 => &[&["process"]],
-        _ => &[],
-    }
-}
-
-fn run_in_turn(commands: &'static [&'static [&'static str]]) {
-    match commands.split_first() {
-        Some((first, rest)) => cli::run(first, move |_, _, _| run_in_turn(rest)),
-        None => APP.with(|a| a.get().unwrap().refresh_state()),
-    }
-}
-
-fn split() -> bool {
-    objc2_foundation::NSUserDefaults::standardUserDefaults().boolForKey(ns_string!("split"))
-}
-
-fn mtm() -> MainThreadMarker {
-    MainThreadMarker::new().expect("on the main thread")
-}
-
 thread_local! {
     static APP: OnceCell<Retained<App>> = const { OnceCell::new() };
-}
-
-/// Run `f` on the app, on the main thread, after `secs`.
-fn later(secs: f64, f: impl FnOnce(&App) + Send + 'static) {
-    let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_secs_f64(secs))
-        .unwrap_or(dispatch2::DispatchTime::NOW);
-    let _ = dispatch2::DispatchQueue::main().after(when, move || APP.with(|a| f(a.get().unwrap())));
-}
-
-fn small_button(
-    title: &NSString,
-    target: &App,
-    action: objc2::runtime::Sel,
-    mtm: MainThreadMarker,
-) -> Retained<NSButton> {
-    // SAFETY: target outlives the button (the app delegate lives for the whole process).
-    let b =
-        unsafe { NSButton::buttonWithTitle_target_action(title, Some(target), Some(action), mtm) };
-    b.setControlSize(NSControlSize::Small);
-    b
 }
 
 impl App {
