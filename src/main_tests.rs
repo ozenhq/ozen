@@ -1,11 +1,17 @@
 #[test]
 fn drops_only_idle_script_envs() {
     let ps = "/u/.cache/uv/environments-v2/transcribe-1b646a70201e1ec6/bin/python3 transcribe.py chunks\n";
-    assert!(super::stale_env("transcribe-04996fcebd6a04ca", ps));
-    assert!(super::stale_env("asr-2871e1033d644c4b", ps));
-    assert!(!super::stale_env("transcribe-1b646a70201e1ec6", ps)); // running
-    assert!(!super::stale_env("train-02cfad274e3027bf", ps)); // not one of our scripts
-    assert!(!super::stale_env("transcribe-notahash", ps));
+    assert!(crate::app_bundle::stale_env(
+        "transcribe-04996fcebd6a04ca",
+        ps
+    ));
+    assert!(crate::app_bundle::stale_env("asr-2871e1033d644c4b", ps));
+    assert!(!crate::app_bundle::stale_env(
+        "transcribe-1b646a70201e1ec6",
+        ps
+    )); // running
+    assert!(!crate::app_bundle::stale_env("train-02cfad274e3027bf", ps)); // not one of our scripts
+    assert!(!crate::app_bundle::stale_env("transcribe-notahash", ps));
 }
 
 #[test]
