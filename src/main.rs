@@ -26,6 +26,7 @@ mod text;
 mod timebar;
 mod train;
 mod transcribe;
+mod transcribe_io;
 mod voices;
 mod whisper;
 

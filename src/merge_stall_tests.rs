@@ -14,7 +14,7 @@ fn line(id: &str, t: f64) -> Row {
         .clone()
 }
 
-/// Appends one line the way the transcriber does (`transcribe::open_lines`: append, take the lock, and
+/// Appends one line the way the transcriber does (`transcribe_io::open_lines`: append, take the lock, and
 /// retry if the file was swapped meanwhile); returns how long it waited for the lock.
 fn append(n: usize) -> Duration {
     use std::os::unix::fs::MetadataExt;

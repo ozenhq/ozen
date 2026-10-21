@@ -7,13 +7,13 @@ use crate::ignore::{IGNORE, MARGIN as IGNORE_MARGIN};
 use crate::overlap::{self, SILENCE_RMS, SR, dot, frame_rms, percentile, rms};
 use crate::separate::Separator;
 use crate::text;
+use crate::transcribe_io::{free_bytes, load_audio, open_lines};
 use crate::whisper::Whisper;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -28,7 +28,6 @@ const REGISTRY: &str = "voices"; // clone of the voices registry, rebuilt by src
 const RECENT: &str = "recent"; // last KEEP_AUDIO transcribed chunks (computer audio in recent/local), local only
 const PACE: &str = "pace.jsonl"; // one row per chunk done: when, how long it took; `ozen timebar` reads it
 const PACE_DAYS: f64 = 14.0; // rows kept (~0.6 MB per 8h recording day); older history shows from lines.jsonl
-const LINES: &str = "lines.jsonl"; // every transcript line with its voiceprint; the panel tags these
 const IGNORES: &str = "ignore.json"; // prints of voices you ignored; `ozen retrain` (src/ignore.rs) writes them
 const PULL_EVERY: Duration = Duration::from_secs(300); // registry pulls, so tags made on other Macs arrive
 const LANG: &str = "he"; // until a source's first line picks one
@@ -89,66 +88,6 @@ fn hint_words() -> Vec<String> {
         .into_iter()
         .chain(learned().vocab)
         .collect()
-}
-
-/// 16 kHz mono f32 through ffmpeg (the chunks are 48 kHz float), as asr.py and mlx_whisper did.
-pub fn load_audio(path: &Path) -> Result<Vec<f32>, String> {
-    let out = crate::cmd("ffmpeg")
-        .args(["-nostdin", "-i"])
-        .arg(path)
-        .args([
-            "-threads",
-            "0",
-            "-f",
-            "s16le",
-            "-ac",
-            "1",
-            "-acodec",
-            "pcm_s16le",
-            "-ar",
-            "16000",
-            "-",
-        ])
-        .output()
-        .map_err(|e| format!("ffmpeg: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "Failed to load audio: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    Ok(out
-        .stdout
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
-        .collect())
-}
-
-/// lines.jsonl for appending, locked. `ozen mcp` deletes lines by swapping in a rewritten file while it holds this
-/// lock, so a lock won on the swapped-out file is retried on the current one.
-fn open_lines() -> std::io::Result<File> {
-    loop {
-        let f = OpenOptions::new().create(true).append(true).open(LINES)?;
-        f.lock()?;
-        if fs::metadata(LINES).is_ok_and(|m| m.ino() == f.metadata().map_or(0, |m| m.ino())) {
-            return Ok(f);
-        }
-    }
-}
-
-/// Free bytes on the disk holding `path`, from `df -k`.
-fn free_bytes(path: &Path) -> Option<u64> {
-    let out = crate::cmd("df").arg("-k").arg(path).output().ok()?;
-    let kb: u64 = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .nth(1)?
-        .split_whitespace()
-        .nth(3)?
-        .parse()
-        .ok()?;
-    Some(kb * 1024)
 }
 
 struct Transcriber {

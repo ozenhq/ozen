@@ -157,7 +157,7 @@ pub(crate) fn worker(rows: &[Value]) -> Result<Vec<Value>, String> {
     let mut out = vec![];
     for q in rows {
         let audio =
-            crate::transcribe::load_audio(Path::new(q["audio"].as_str().unwrap_or_default()))?;
+            crate::transcribe_io::load_audio(Path::new(q["audio"].as_str().unwrap_or_default()))?;
         let at = |k: &str| (q[k].as_f64().unwrap_or(0.0) * crate::overlap::SR as f64) as usize;
         let s = at("start").min(audio.len());
         let e = if q["duration"].as_f64().is_some_and(|d| d > 0.0) {
